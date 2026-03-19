@@ -1,4 +1,4 @@
-"""Test suite per il modulo hallucination_guard."""
+"""Test suite for the hallucination_guard module."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from modules.hallucination_guard import validate, _keyword_sentiment, Validation
 
 class TestNoFlagsOnConsistentData:
     def test_consistent_bullish_data(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica nessun flag quando LLM, keyword e tecnici concordano."""
+        """Verify no flags when LLM, keyword and technicals agree."""
         # Use only bullish news
         bullish_news = [n for n in mock_news_items if any(kw in n["title"].lower() for kw in ["rally", "jump", "surge"])]
         sentiment = make_sentiment(score=2.0, bias="BULLISH")
@@ -23,7 +23,7 @@ class TestNoFlagsOnConsistentData:
         assert result.flags == []
 
     def test_consistent_bearish_data(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica nessun flag con dati coerentemente bearish."""
+        """Verify no flags with consistently bearish data."""
         now = datetime.now(timezone.utc)
         bearish_news = [
             {"title": "Markets crash on recession fears", "summary": "Panic selling.", "source": "Test", "published_at": now},
@@ -40,7 +40,7 @@ class TestNoFlagsOnConsistentData:
 
 class TestSentimentMismatch:
     def test_bullish_llm_bearish_news(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica flag SENTIMENT_MISMATCH: LLM bullish ma news bearish."""
+        """Verify SENTIMENT_MISMATCH flag: LLM bullish but news bearish."""
         now = datetime.now(timezone.utc)
         bearish_news = [
             {"title": "Markets crash on recession fears", "summary": "", "source": "A", "published_at": now},
@@ -56,7 +56,7 @@ class TestSentimentMismatch:
         assert "SENTIMENT_MISMATCH" in result.flags
 
     def test_bearish_llm_bullish_news(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica flag SENTIMENT_MISMATCH: LLM bearish ma news bullish."""
+        """Verify SENTIMENT_MISMATCH flag: LLM bearish but news bullish."""
         now = datetime.now(timezone.utc)
         bullish_news = [
             {"title": "Stock market rally continues", "summary": "", "source": "A", "published_at": now},
@@ -74,7 +74,7 @@ class TestSentimentMismatch:
 
 class TestDirectionConflict:
     def test_long_bias_bearish_technicals(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica flag DIRECTION_CONFLICT: LLM BULLISH ma tecnici BEARISH."""
+        """Verify DIRECTION_CONFLICT flag: LLM BULLISH but technicals BEARISH."""
         sentiment = make_sentiment(score=1.0, bias="BULLISH")
         assets = [make_asset_analysis(composite_score="BEARISH")]
 
@@ -83,7 +83,7 @@ class TestDirectionConflict:
         assert "DIRECTION_CONFLICT" in result.flags
 
     def test_short_bias_bullish_technicals(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica flag DIRECTION_CONFLICT: LLM BEARISH ma tecnici BULLISH."""
+        """Verify DIRECTION_CONFLICT flag: LLM BEARISH but technicals BULLISH."""
         sentiment = make_sentiment(score=-1.0, bias="BEARISH")
         assets = [make_asset_analysis(composite_score="BULLISH")]
 
@@ -92,7 +92,7 @@ class TestDirectionConflict:
         assert "DIRECTION_CONFLICT" in result.flags
 
     def test_no_conflict_when_neutral(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica nessun flag DIRECTION_CONFLICT con tecnici neutri."""
+        """Verify no DIRECTION_CONFLICT flag with neutral technicals."""
         sentiment = make_sentiment(score=1.0, bias="BULLISH")
         assets = [make_asset_analysis(composite_score="NEUTRAL")]
 
@@ -103,12 +103,12 @@ class TestDirectionConflict:
 
 class TestPerAssetDirectionConflict:
     def test_per_asset_conflict_detected(self, make_asset_analysis, mock_news_items) -> None:
-        """Verifica DIRECTION_CONFLICT per-asset quando asset_biases divergono."""
+        """Verify per-asset DIRECTION_CONFLICT when asset_biases diverge."""
         from modules.sentiment import SentimentResult
 
         sentiment = SentimentResult(
             sentiment_score=1.0,
-            sentiment_label="Rialzista",
+            sentiment_label="Bullish",
             directional_bias="BULLISH",
             asset_biases={"NQ=F": "BULLISH", "GC=F": "BEARISH"},
             asset_scores={"NQ=F": 1.5, "GC=F": -1.0},
@@ -126,12 +126,12 @@ class TestPerAssetDirectionConflict:
         assert not any("DIRECTION_CONFLICT_GC=F" in f for f in result.flags)
 
     def test_no_per_asset_conflict_when_aligned(self, make_asset_analysis, mock_news_items) -> None:
-        """Nessun conflitto per-asset quando LLM e tecnici concordano."""
+        """No per-asset conflict when LLM and technicals agree."""
         from modules.sentiment import SentimentResult
 
         sentiment = SentimentResult(
             sentiment_score=1.0,
-            sentiment_label="Rialzista",
+            sentiment_label="Bullish",
             directional_bias="BULLISH",
             asset_biases={"NQ=F": "BULLISH"},
             asset_scores={"NQ=F": 1.5},
@@ -145,7 +145,7 @@ class TestPerAssetDirectionConflict:
 
 class TestExtremeScoreNeutralNews:
     def test_extreme_positive_neutral_news(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica flag su score estremo (+3) con notizie neutre."""
+        """Verify flag on extreme score (+3) with neutral news."""
         now = datetime.now(timezone.utc)
         neutral_news = [
             {"title": "Central bank meets next week", "summary": "", "source": "A", "published_at": now},
@@ -160,7 +160,7 @@ class TestExtremeScoreNeutralNews:
         assert "EXTREME_SCORE_NEUTRAL_NEWS" in result.flags
 
     def test_extreme_negative_neutral_news(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica flag su score estremo (-3) con notizie neutre."""
+        """Verify flag on extreme score (-3) with neutral news."""
         now = datetime.now(timezone.utc)
         neutral_news = [
             {"title": "Markets closed for holiday", "summary": "", "source": "A", "published_at": now},
@@ -176,7 +176,7 @@ class TestExtremeScoreNeutralNews:
 
 class TestMultipleFlags:
     def test_both_mismatch_and_conflict(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica che piu' flag possano apparire contemporaneamente."""
+        """Verify that multiple flags can appear simultaneously."""
         now = datetime.now(timezone.utc)
         bearish_news = [
             {"title": "Markets crash on recession fears", "summary": "", "source": "A", "published_at": now},
@@ -197,7 +197,7 @@ class TestMultipleFlags:
 
 class TestValidatedFalse:
     def test_any_flag_means_not_validated(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che qualsiasi flag renda validated=False."""
+        """Verify that any flag makes validated=False."""
         sentiment = make_sentiment(score=1.0, bias="BEARISH")
         assets = [make_asset_analysis(composite_score="BULLISH")]
 
@@ -207,7 +207,7 @@ class TestValidatedFalse:
             assert result.validated is False
 
     def test_no_flags_means_validated(self, make_sentiment, make_asset_analysis) -> None:
-        """Verifica che nessun flag renda validated=True."""
+        """Verify that no flags makes validated=True."""
         now = datetime.now(timezone.utc)
         bullish_news = [
             {"title": "Markets rally on strong data", "summary": "", "source": "A", "published_at": now},
@@ -224,7 +224,7 @@ class TestValidatedFalse:
 
 class TestKeywordSentiment:
     def test_bullish_keywords_positive_score(self) -> None:
-        """Verifica che keyword bullish producano score positivo."""
+        """Verify that bullish keywords produce positive score."""
         now = datetime.now(timezone.utc)
         news = [
             {"title": "Stock market rally continues", "summary": "", "source": "A", "published_at": now},
@@ -234,7 +234,7 @@ class TestKeywordSentiment:
         assert score > 0
 
     def test_bearish_keywords_negative_score(self) -> None:
-        """Verifica che keyword bearish producano score negativo."""
+        """Verify that bearish keywords produce negative score."""
         now = datetime.now(timezone.utc)
         news = [
             {"title": "Markets crash on fear", "summary": "", "source": "A", "published_at": now},
@@ -244,11 +244,11 @@ class TestKeywordSentiment:
         assert score < 0
 
     def test_empty_news_returns_zero(self) -> None:
-        """Verifica che nessuna notizia restituisca score zero."""
+        """Verify that no news returns zero score."""
         assert _keyword_sentiment([]) == 0.0
 
     def test_validation_result_to_dict(self) -> None:
-        """Verifica la serializzazione di ValidationResult."""
+        """Verify serialization of ValidationResult."""
         result = ValidationResult(validated=False, flags=["SENTIMENT_MISMATCH"])
         d = result.to_dict()
         assert d["validated"] is False

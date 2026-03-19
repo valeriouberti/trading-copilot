@@ -1,4 +1,4 @@
-"""Test suite per il modulo news_fetcher."""
+"""Test suite for the news_fetcher module."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ from modules.news_fetcher import _deduplicate, _fetch_single_feed, _parse_entry_
 
 class TestParseValidRSS:
     def test_parse_valid_rss(self, mock_rss_feed_xml: str) -> None:
-        """Verifica che feedparser parsi correttamente un XML RSS valido."""
+        """Verify that feedparser correctly parses a valid RSS XML."""
         feed = feedparser.parse(mock_rss_feed_xml)
         assert len(feed.entries) == 3
         assert feed.entries[0].title == "S&P 500 closes at record high on strong earnings"
         assert "description" in feed.entries[0] or "summary" in feed.entries[0]
 
     def test_parsed_entries_have_required_keys(self, mock_rss_feed_xml: str) -> None:
-        """Verifica che ogni entry abbia le chiavi richieste dopo il parsing."""
+        """Verify that each entry has the required keys after parsing."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=16)).timestamp()
         with patch("modules.news_fetcher.feedparser.parse") as mock_parse:
             mock_parse.return_value = feedparser.parse(mock_rss_feed_xml)
@@ -35,7 +35,7 @@ class TestParseValidRSS:
 
 class TestFilterByHours:
     def test_recent_articles_kept(self) -> None:
-        """Verifica che gli articoli recenti vengano mantenuti."""
+        """Verify that recent articles are kept."""
         now = datetime.now(timezone.utc)
         feeds = [{"url": "http://test.com/rss", "name": "Test"}]
 
@@ -67,7 +67,7 @@ class TestFilterByHours:
         assert "Old article" not in titles
 
     def test_old_articles_excluded(self) -> None:
-        """Verifica che articoli oltre il lookback vengano esclusi."""
+        """Verify that articles beyond lookback are excluded."""
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(hours=4)).timestamp()
 
@@ -90,7 +90,7 @@ class TestFilterByHours:
 
 class TestDeduplication:
     def test_similar_titles_deduplicated(self) -> None:
-        """Verifica che titoli simili al 90% vengano deduplicati."""
+        """Verify that 90% similar titles are deduplicated."""
         now = datetime.now(timezone.utc)
         articles = [
             {"title": "S&P 500 closes at record high on strong tech earnings", "summary": "", "source": "A", "published_at": now},
@@ -100,7 +100,7 @@ class TestDeduplication:
         assert len(result) == 1
 
     def test_different_titles_kept(self) -> None:
-        """Verifica che titoli diversi non vengano deduplicati."""
+        """Verify that different titles are not deduplicated."""
         now = datetime.now(timezone.utc)
         articles = [
             {"title": "Tech stocks rally on earnings", "summary": "", "source": "A", "published_at": now},
@@ -112,7 +112,7 @@ class TestDeduplication:
 
 class TestNetworkRetry:
     def test_retry_on_failure_then_success(self) -> None:
-        """Verifica che il retry funzioni dopo errori di rete."""
+        """Verify that retry works after network errors."""
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(hours=16)).timestamp()
 
@@ -148,7 +148,7 @@ class TestNetworkRetry:
         assert call_count == 3
 
     def test_total_failure_returns_empty(self) -> None:
-        """Verifica che 3 tentativi falliti restituiscano lista vuota senza eccezioni."""
+        """Verify that 3 failed attempts return empty list without exceptions."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=16)).timestamp()
 
         bad_feed = MagicMock()
@@ -165,7 +165,7 @@ class TestNetworkRetry:
 
 class TestEdgeCases:
     def test_empty_feed(self) -> None:
-        """Verifica che un feed senza entry restituisca lista vuota."""
+        """Verify that a feed without entries returns empty list."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=16)).timestamp()
         empty_feed = MagicMock()
         empty_feed.bozo = False
@@ -177,7 +177,7 @@ class TestEdgeCases:
         assert articles == []
 
     def test_missing_summary_field(self) -> None:
-        """Verifica che un entry senza summary non causi crash."""
+        """Verify that an entry without summary does not crash."""
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(hours=16)).timestamp()
 
@@ -198,7 +198,7 @@ class TestEdgeCases:
         assert articles[0]["summary"] == ""
 
     def test_parse_entry_date_missing(self) -> None:
-        """Verifica che una entry senza data restituisca None."""
+        """Verify that an entry without date returns None."""
         entry = MagicMock()
         entry.get = lambda k, d=None: None
         assert _parse_entry_date(entry) is None

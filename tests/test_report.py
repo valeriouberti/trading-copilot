@@ -1,4 +1,4 @@
-"""Test suite per il modulo report."""
+"""Test suite for the report module."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from modules.report import (
 
 
 class _HTMLValidator(HTMLParser):
-    """Validatore HTML semplice che raccoglie errori di parsing."""
+    """Simple HTML validator that collects parsing errors."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -41,7 +41,7 @@ class _HTMLValidator(HTMLParser):
 
 class TestReportCreatesFile:
     def test_file_created(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che il report HTML venga creato nel percorso corretto."""
+        """Verify that the HTML report is created at the correct path."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -51,7 +51,7 @@ class TestReportCreatesFile:
             assert path.endswith(".html")
 
     def test_filename_format(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che il nome file segua il formato report_YYYYMMDD_HHMM.html."""
+        """Verify that the filename follows the format report_YYYYMMDD_HHMM.html."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -63,7 +63,7 @@ class TestReportCreatesFile:
 
 class TestReportHTMLValid:
     def test_html_parses_without_errors(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che l'HTML generato sia valido e parsabile."""
+        """Verify that the generated HTML is valid and parseable."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -77,7 +77,7 @@ class TestReportHTMLValid:
         assert len(validator.errors) == 0
 
     def test_html_has_doctype(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica la presenza del DOCTYPE HTML."""
+        """Verify the presence of DOCTYPE HTML."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -91,8 +91,8 @@ class TestReportHTMLValid:
 
 class TestReportContainsSections:
     def test_all_sections_present(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che tutte e 7 le sezioni siano presenti nel report."""
-        sentiment = make_sentiment(risk_events=["Fed meeting domani"])
+        """Verify that all 7 sections are present in the report."""
+        sentiment = make_sentiment(risk_events=["Fed meeting tomorrow"])
         assets = [make_asset_analysis()]
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -103,21 +103,21 @@ class TestReportContainsSections:
         # 1. Header
         assert "Trading Assistant Report" in html
         # 2. Sentiment card
-        assert "Sentiment Macro" in html
+        assert "Macro Sentiment" in html
         # 3. Key drivers
         assert "Key Drivers" in html
         # 4. Risk events
-        assert "RISK EVENTS" in html or "Nessun evento di rischio" in html
+        assert "RISK EVENTS" in html or "No particular risk events" in html
         # 5. Assets table
-        assert "Analisi Assets" in html
+        assert "Asset Analysis" in html
         # 6. Raw news
-        assert "Notizie Raw" in html
+        assert "Raw News" in html
         # 7. Footer
-        assert "Nessun consiglio finanziario" in html
+        assert "Not financial advice" in html
 
     def test_risk_events_shown_when_present(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che i risk events vengano mostrati quando presenti."""
-        sentiment = make_sentiment(risk_events=["Fed meeting domani", "CPI release"])
+        """Verify that risk events are displayed when present."""
+        sentiment = make_sentiment(risk_events=["Fed meeting tomorrow", "CPI release"])
         assets = [make_asset_analysis()]
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -125,28 +125,28 @@ class TestReportContainsSections:
             with open(path, encoding="utf-8") as f:
                 html = f.read()
 
-        assert "Fed meeting domani" in html
+        assert "Fed meeting tomorrow" in html
         assert "CPI release" in html
 
 
 class TestSentimentColors:
     def test_positive_score_green(self) -> None:
-        """Verifica che score +2 produca un colore verde."""
+        """Verify that +2 score produces green color."""
         color = _sentiment_color(2.0)
         assert color == "#22c55e"
 
     def test_negative_score_red(self) -> None:
-        """Verifica che score -2 produca un colore rosso."""
+        """Verify that -2 score produces red color."""
         color = _sentiment_color(-2.0)
         assert color == "#ef4444"
 
     def test_neutral_score_grey(self) -> None:
-        """Verifica che score 0 produca un colore grigio."""
+        """Verify that 0 score produces grey color."""
         color = _sentiment_color(0.0)
         assert color == "#9ca3af"
 
     def test_color_in_html(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che il colore del sentiment appaia nell'HTML."""
+        """Verify that the sentiment color appears in HTML."""
         sentiment = make_sentiment(score=2.0)
         assets = [make_asset_analysis()]
 
@@ -160,21 +160,21 @@ class TestSentimentColors:
 
 class TestSignalColors:
     def test_bullish_green(self) -> None:
-        """Verifica colore verde per segnale BULLISH."""
+        """Verify green color for BULLISH signal."""
         assert _signal_color("BULLISH") == "#22c55e"
 
     def test_bearish_red(self) -> None:
-        """Verifica colore rosso per segnale BEARISH."""
+        """Verify red color for BEARISH signal."""
         assert _signal_color("BEARISH") == "#ef4444"
 
     def test_neutral_yellow(self) -> None:
-        """Verifica colore giallo per segnale NEUTRAL."""
+        """Verify yellow color for NEUTRAL signal."""
         assert _signal_color("NEUTRAL") == "#eab308"
 
 
 class TestDisclaimer:
     def test_disclaimer_present(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che il disclaimer legale sia presente nel footer."""
+        """Verify that the legal disclaimer is present in the footer."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -183,12 +183,12 @@ class TestDisclaimer:
             with open(path, encoding="utf-8") as f:
                 html = f.read()
 
-        assert "Nessun consiglio finanziario" in html
+        assert "Not financial advice" in html
 
 
 class TestTerminalSummary:
     def test_summary_contains_asset_info(self, make_sentiment, make_asset_analysis, capsys) -> None:
-        """Verifica che il summary terminale contenga le info sugli asset."""
+        """Verify that the terminal summary contains asset info."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
@@ -199,7 +199,7 @@ class TestTerminalSummary:
         assert "TRADING ASSISTANT" in captured.out
 
     def test_summary_contains_sentiment(self, make_sentiment, make_asset_analysis, capsys) -> None:
-        """Verifica che il summary contenga il sentiment score e bias."""
+        """Verify that the summary contains sentiment score and bias."""
         sentiment = make_sentiment(score=1.5, bias="BULLISH")
         assets = [make_asset_analysis()]
 
@@ -210,38 +210,38 @@ class TestTerminalSummary:
         assert "BULLISH" in captured.out
 
     def test_summary_contains_disclaimer(self, make_sentiment, make_asset_analysis, capsys) -> None:
-        """Verifica che il summary contenga il disclaimer."""
+        """Verify that the summary contains the disclaimer."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
 
         print_terminal_summary(sentiment, assets, 5)
 
         captured = capsys.readouterr()
-        assert "Nessun consiglio finanziario" in captured.out
+        assert "Not financial advice" in captured.out
 
 
 class TestActionHint:
     def test_bullish_long(self) -> None:
-        """Verifica hint LONG quando tecnici e bias concordano bullish."""
-        assert _action_hint("BULLISH", "BULLISH") == "Cercare LONG"
+        """Verify LONG hint when technicals and bias agree bullish."""
+        assert _action_hint("BULLISH", "BULLISH") == "Look for LONG"
 
     def test_bearish_short(self) -> None:
-        """Verifica hint SHORT quando tecnici e bias concordano bearish."""
-        assert _action_hint("BEARISH", "BEARISH") == "Cercare SHORT"
+        """Verify SHORT hint when technicals and bias agree bearish."""
+        assert _action_hint("BEARISH", "BEARISH") == "Look for SHORT"
 
     def test_conflict(self) -> None:
-        """Verifica hint cautela quando tecnici e bias sono in conflitto."""
-        assert "Conflitto" in _action_hint("BULLISH", "BEARISH")
-        assert "Conflitto" in _action_hint("BEARISH", "BULLISH")
+        """Verify caution hint when technicals and bias conflict."""
+        assert "Conflict" in _action_hint("BULLISH", "BEARISH")
+        assert "Conflict" in _action_hint("BEARISH", "BULLISH")
 
     def test_neutral(self) -> None:
-        """Verifica hint attesa per segnale neutro."""
-        assert _action_hint("NEUTRAL", "NEUTRAL") == "Attendere"
+        """Verify wait hint for neutral signal."""
+        assert _action_hint("NEUTRAL", "NEUTRAL") == "Wait"
 
 
 class TestMarketSession:
     def test_returns_string(self) -> None:
-        """Verifica che get_market_session restituisca una stringa."""
+        """Verify that get_market_session returns a string."""
         session = get_market_session()
         assert isinstance(session, str)
         assert len(session) > 0
@@ -249,7 +249,7 @@ class TestMarketSession:
 
 class TestAssetWithError:
     def test_error_asset_rendered(self, make_sentiment, make_asset_analysis, mock_news_items) -> None:
-        """Verifica che un asset con errore venga mostrato nel report."""
+        """Verify that an asset with error is displayed in the report."""
         sentiment = make_sentiment()
         assets = [
             make_asset_analysis(),

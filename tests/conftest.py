@@ -1,4 +1,4 @@
-"""Fixture condivise e dati mock per la test suite."""
+"""Shared fixtures and mock data for the test suite."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import pytest
 
 @pytest.fixture
 def mock_news_items() -> list[dict[str, Any]]:
-    """5 notizie realistiche: 2 bullish, 2 bearish, 1 neutrale."""
+    """5 realistic news items: 2 bullish, 2 bearish, 1 neutral."""
     now = datetime.now(timezone.utc)
     return [
         {
@@ -56,17 +56,17 @@ def mock_news_items() -> list[dict[str, Any]]:
 
 @pytest.fixture
 def mock_price_data() -> dict[str, Any]:
-    """Dati tecnici realistici per NAS100."""
+    """Realistic technical data for NAS100."""
     return {
         "symbol": "NQ=F",
         "display_name": "NASDAQ 100 Futures",
         "price": 21450.75,
         "change_pct": 1.23,
         "signals": {
-            "RSI": {"value": 58.3, "label": "BULLISH", "detail": "RSI 58.3 — momentum rialzista"},
-            "MACD": {"value": 12.5, "label": "BULLISH", "detail": "MACD crossover rialzista"},
-            "VWAP": {"value": 21380.0, "label": "BULLISH", "detail": "Prezzo sopra VWAP (+0.33%)"},
-            "ATR": {"value": 45.2, "label": "NEUTRAL", "detail": "ATR 45.2 (0.21%) — volatilita' normale"},
+            "RSI": {"value": 58.3, "label": "BULLISH", "detail": "RSI 58.3 — bullish momentum"},
+            "MACD": {"value": 12.5, "label": "BULLISH", "detail": "MACD bullish crossover"},
+            "VWAP": {"value": 21380.0, "label": "BULLISH", "detail": "Price above VWAP (+0.33%)"},
+            "ATR": {"value": 45.2, "label": "NEUTRAL", "detail": "ATR 45.2 (0.21%) — normal volatility"},
             "EMA_TREND": {"value": 21200.0, "label": "BULLISH", "detail": "EMA20 > EMA50"},
         },
         "composite_score": "BULLISH",
@@ -81,14 +81,14 @@ def mock_price_data() -> dict[str, Any]:
 
 @pytest.fixture
 def mock_llm_response() -> dict[str, Any]:
-    """Risposta JSON valida simulata da Groq."""
+    """Valid mock JSON response from Groq."""
     return {
         "sentiment_score": 1.0,
-        "sentiment_label": "moderatamente rialzista",
+        "sentiment_label": "moderately bullish",
         "key_drivers": [
-            "Fed in pausa sui tassi",
-            "Tech earnings sopra attese",
-            "Dollaro debole favorisce risk-on",
+            "Fed rate pause",
+            "Tech earnings above expectations",
+            "Weak dollar favors risk-on",
         ],
         "directional_bias": "BULLISH",
         "risk_events": [],
@@ -102,7 +102,7 @@ def mock_llm_response() -> dict[str, Any]:
 
 @pytest.fixture
 def mock_rss_feed_xml() -> str:
-    """XML RSS valido con 3 entry per feedparser."""
+    """Valid RSS XML with 3 entries for feedparser."""
     now = datetime.now(timezone.utc)
     dates = [
         (now - timedelta(hours=1)).strftime("%a, %d %b %Y %H:%M:%S +0000"),
@@ -143,7 +143,7 @@ def mock_rss_feed_xml() -> str:
 
 @pytest.fixture
 def make_asset_analysis():
-    """Factory fixture per creare AssetAnalysis mock."""
+    """Factory fixture to create mock AssetAnalysis."""
     from modules.price_data import AssetAnalysis, TechnicalSignal
 
     def _make(
@@ -180,12 +180,12 @@ def make_asset_analysis():
 
 @pytest.fixture
 def make_sentiment():
-    """Factory fixture per creare SentimentResult mock."""
+    """Factory fixture to create mock SentimentResult."""
     from modules.sentiment import SentimentResult
 
     def _make(
         score: float = 1.0,
-        label: str = "Moderatamente Rialzista",
+        label: str = "Moderately Bullish",
         bias: str = "BULLISH",
         drivers: list[str] | None = None,
         risk_events: list[str] | None = None,
@@ -211,7 +211,7 @@ def make_sentiment():
 
 @pytest.fixture
 def mock_polymarket_data() -> dict:
-    """Dati mock Polymarket per i test."""
+    """Mock Polymarket data for tests."""
     return {
         "signal": "BEARISH",
         "confidence": 67.5,

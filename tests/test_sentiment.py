@@ -1,4 +1,4 @@
-"""Test suite per il modulo sentiment."""
+"""Test suite for the sentiment module."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ SAMPLE_ASSETS = [{"symbol": "NQ=F", "display_name": "NASDAQ 100 Futures"}]
 
 
 def _make_groq_response(content: str) -> MagicMock:
-    """Crea un mock della risposta Groq."""
+    """Create a mock Groq response."""
     choice = MagicMock()
     choice.message.content = content
     response = MagicMock()
@@ -32,7 +32,7 @@ def _make_groq_response(content: str) -> MagicMock:
 
 class TestValidGroqResponse:
     def test_valid_response_parsed(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verifica che una risposta Groq valida venga parsata correttamente."""
+        """Verify that a valid Groq response is parsed correctly."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             json.dumps(mock_llm_response)
@@ -42,11 +42,11 @@ class TestValidGroqResponse:
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.sentiment_score == 1.0
-        assert result.sentiment_label == "moderatamente rialzista"
+        assert result.sentiment_label == "moderately bullish"
         assert result.source in ("groq", "groq-2pass")
 
     def test_response_has_all_keys(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verifica che l'output contenga tutte le chiavi richieste."""
+        """Verify that the output contains all required keys."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             json.dumps(mock_llm_response)
@@ -62,10 +62,10 @@ class TestValidGroqResponse:
 
 class TestSentimentScoreRange:
     def test_score_within_range(self, mock_news_items: list) -> None:
-        """Verifica che il sentiment score sia tra -3 e +3."""
+        """Verify that the sentiment score is between -3 and +3."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps({"sentiment_score": 2.5, "sentiment_label": "rialzista", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
+            json.dumps({"sentiment_score": 2.5, "sentiment_label": "bullish", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
         )
 
         with patch("modules.sentiment.Groq", return_value=mock_client):
@@ -74,7 +74,7 @@ class TestSentimentScoreRange:
         assert -3 <= result.sentiment_score <= 3
 
     def test_out_of_range_score_accepted_as_float(self, mock_news_items: list) -> None:
-        """Verifica che uno score out-of-range venga comunque parsato come float."""
+        """Verify that an out-of-range score is still parsed as float."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             json.dumps({"sentiment_score": 5, "sentiment_label": "test", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
@@ -88,7 +88,7 @@ class TestSentimentScoreRange:
 
 class TestKeyDriversCount:
     def test_exactly_three_drivers(self, mock_news_items: list) -> None:
-        """Verifica che key_drivers contenga esattamente 3 elementi."""
+        """Verify that key_drivers contains exactly 3 elements."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
@@ -100,7 +100,7 @@ class TestKeyDriversCount:
         assert len(result.key_drivers) == 3
 
     def test_five_drivers_truncated_to_three(self, mock_news_items: list) -> None:
-        """Verifica che 5 drivers vengano troncati a 3."""
+        """Verify that 5 drivers are truncated to 3."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c", "d", "e"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
@@ -114,7 +114,7 @@ class TestKeyDriversCount:
 
 class TestMalformedResponse:
     def test_plain_text_response_raises(self, mock_news_items: list) -> None:
-        """Verifica che una risposta non-JSON causi fallback dopo i retry."""
+        """Verify that a non-JSON response causes fallback after retries."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response(
             "This is not JSON at all, just plain text analysis."
@@ -126,7 +126,7 @@ class TestMalformedResponse:
                     _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
     def test_malformed_json_full_pipeline_fallback(self, mock_news_items: list) -> None:
-        """Verifica che il pipeline completo faccia fallback se Groq restituisce testo."""
+        """Verify that the full pipeline falls back if Groq returns text."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response("not json")
 
@@ -136,7 +136,7 @@ class TestMalformedResponse:
                     with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                         mock_finbert.return_value = SentimentResult(
                             sentiment_score=0.0,
-                            sentiment_label="Neutro",
+                            sentiment_label="Neutral",
                             key_drivers=["Fallback"],
                             directional_bias="NEUTRAL",
                             confidence=0.0,
@@ -149,7 +149,7 @@ class TestMalformedResponse:
 
 class TestGroqRateLimit:
     def test_retry_on_rate_limit(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verifica il retry con backoff esponenziale su rate limit."""
+        """Verify retry with exponential backoff on rate limit."""
         mock_client = MagicMock()
         call_count = 0
 
@@ -172,15 +172,15 @@ class TestGroqRateLimit:
 
 class TestGroqTotalFailure:
     def test_fallback_on_total_groq_failure(self, mock_news_items: list) -> None:
-        """Verifica che il fallback a FinBERT funzioni se Groq fallisce completamente."""
+        """Verify that fallback to FinBERT works if Groq fails completely."""
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
             with patch("modules.sentiment.Groq") as mock_groq_class:
                 mock_groq_class.return_value.chat.completions.create.side_effect = Exception("Service down")
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
-                        sentiment_label="Neutro",
-                        key_drivers=["Fallback attivo"],
+                        sentiment_label="Neutral",
+                        key_drivers=["Fallback active"],
                         directional_bias="NEUTRAL",
                         confidence=0.0,
                         source="finbert",
@@ -193,7 +193,7 @@ class TestGroqTotalFailure:
 
 class TestNoApiKey:
     def test_no_api_key_uses_finbert(self, mock_news_items: list) -> None:
-        """Verifica che senza GROQ_API_KEY si usi il fallback FinBERT."""
+        """Verify that without GROQ_API_KEY the FinBERT fallback is used."""
         with patch.dict(os.environ, {}, clear=True):
             # Remove GROQ_API_KEY entirely
             env = os.environ.copy()
@@ -202,7 +202,7 @@ class TestNoApiKey:
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
-                        sentiment_label="Neutro",
+                        sentiment_label="Neutral",
                         key_drivers=["No API key"],
                         directional_bias="NEUTRAL",
                         confidence=0.0,
@@ -215,7 +215,7 @@ class TestNoApiKey:
 
 class TestEmptyNews:
     def test_empty_news_returns_neutral(self) -> None:
-        """Verifica che senza notizie il risultato sia neutro."""
+        """Verify that without news the result is neutral."""
         result = analyze_sentiment([], SAMPLE_ASSETS)
         assert result.sentiment_score == 0.0
         assert result.directional_bias == "NEUTRAL"
@@ -223,24 +223,24 @@ class TestEmptyNews:
 
 class TestBuildPrompt:
     def test_prompt_contains_asset_names(self, mock_news_items: list) -> None:
-        """Verifica che il prompt contenga i nomi degli asset."""
+        """Verify that the prompt contains the asset names."""
         prompt = _build_prompt(mock_news_items, SAMPLE_ASSETS)
         assert "NASDAQ 100 Futures" in prompt
 
     def test_prompt_contains_news(self, mock_news_items: list) -> None:
-        """Verifica che il prompt contenga i titoli delle notizie."""
+        """Verify that the prompt contains the news titles."""
         prompt = _build_prompt(mock_news_items, SAMPLE_ASSETS)
         assert "Tech stocks rally" in prompt
 
     def test_prompt_requests_json(self, mock_news_items: list) -> None:
-        """Verifica che il prompt richieda output JSON."""
+        """Verify that the prompt requests JSON output."""
         prompt = _build_prompt(mock_news_items, SAMPLE_ASSETS)
         assert "JSON" in prompt
 
 
 class TestFinBERTFallback:
     def test_finbert_with_positive_news(self, mock_news_items: list) -> None:
-        """Verifica che FinBERT produca un risultato con notizie positive."""
+        """Verify that FinBERT produces a result with positive news."""
         mock_classifier = MagicMock()
         mock_classifier.return_value = [
             {"label": "positive", "score": 0.85},
@@ -264,7 +264,7 @@ class TestFinBERTFallback:
         assert len(result.key_drivers) <= 3
 
     def test_finbert_with_negative_news(self) -> None:
-        """Verifica che FinBERT gestisca notizie negative."""
+        """Verify that FinBERT handles negative news."""
         news = [
             {"title": "Markets crash", "summary": "", "source": "A", "published_at": "now"},
             {"title": "Stocks plunge", "summary": "", "source": "B", "published_at": "now"},
@@ -282,7 +282,7 @@ class TestFinBERTFallback:
         assert result.source == "finbert"
 
     def test_finbert_import_error(self) -> None:
-        """Verifica gestione errore se transformers non installato."""
+        """Verify error handling if transformers is not installed."""
         news = [{"title": "Test", "summary": "", "source": "A", "published_at": "now"}]
 
         with patch.dict("sys.modules", {"transformers": None}):
@@ -294,7 +294,7 @@ class TestFinBERTFallback:
                 assert result.source == "finbert"
 
     def test_finbert_model_load_error(self) -> None:
-        """Verifica gestione errore nel caricamento del modello FinBERT."""
+        """Verify error handling on FinBERT model loading."""
         news = [{"title": "Test", "summary": "", "source": "A", "published_at": "now"}]
 
         with patch("transformers.pipeline", side_effect=Exception("Model download failed")):
@@ -306,10 +306,10 @@ class TestFinBERTFallback:
 
 class TestSentimentResultSerialization:
     def test_to_dict(self) -> None:
-        """Verifica la serializzazione di SentimentResult."""
+        """Verify serialization of SentimentResult."""
         result = SentimentResult(
             sentiment_score=1.5,
-            sentiment_label="Rialzista",
+            sentiment_label="Bullish",
             key_drivers=["a", "b", "c"],
             directional_bias="BULLISH",
             risk_events=["CPI release"],
@@ -323,10 +323,10 @@ class TestSentimentResultSerialization:
         assert "CPI release" in d["risk_events"]
 
     def test_to_dict_with_error(self) -> None:
-        """Verifica serializzazione con errore."""
+        """Verify serialization with error."""
         result = SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="Errore",
+            sentiment_label="Error",
             error="API timeout",
         )
         d = result.to_dict()
@@ -335,7 +335,7 @@ class TestSentimentResultSerialization:
 
 class TestGroqMarkdownCleanup:
     def test_markdown_fenced_json_cleaned(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verifica che il JSON avvolto in markdown fences venga pulito."""
+        """Verify that JSON wrapped in markdown fences is cleaned."""
         mock_client = MagicMock()
         fenced_json = f"```json\n{json.dumps(mock_llm_response)}\n```"
         mock_client.chat.completions.create.return_value = _make_groq_response(fenced_json)
@@ -351,10 +351,10 @@ class TestPerAssetScoring:
     """Test per-asset scoring (v2)."""
 
     def test_per_asset_scores_populated(self, mock_news_items: list) -> None:
-        """Verifica che i punteggi per-asset vengano estratti dal JSON."""
+        """Verify that per-asset scores are extracted from JSON."""
         response_data = {
             "sentiment_score": 1.0,
-            "sentiment_label": "rialzista",
+            "sentiment_label": "bullish",
             "key_drivers": ["a", "b", "c"],
             "directional_bias": "BULLISH",
             "risk_events": [],
@@ -379,10 +379,10 @@ class TestPerAssetScoring:
         assert result.asset_biases["GC=F"] == "BEARISH"
 
     def test_asset_scores_fallback_to_global(self, mock_news_items: list) -> None:
-        """Se un asset non ha score specifico, usa il globale."""
+        """If an asset has no specific score, use the global one."""
         response_data = {
             "sentiment_score": 1.0,
-            "sentiment_label": "rialzista",
+            "sentiment_label": "bullish",
             "key_drivers": ["a", "b", "c"],
             "directional_bias": "BULLISH",
             "risk_events": [],
@@ -406,16 +406,16 @@ class TestTemporalTagging:
     """Test temporal recency tagging."""
 
     def test_news_tagged_with_recency(self, mock_news_items: list) -> None:
-        """Verifica che le notizie vengano taggate con recency."""
+        """Verify that news are tagged with recency."""
         from modules.sentiment import _tag_news_with_recency
 
         tagged = _tag_news_with_recency(mock_news_items)
         assert len(tagged) == len(mock_news_items)
         # First article was 2h ago
-        assert "h fa" in tagged[0]["_time_tag"]
+        assert "h ago" in tagged[0]["_time_tag"]
 
     def test_news_without_datetime_gets_no_tag(self) -> None:
-        """Notizie senza datetime valida ricevono tag vuoto."""
+        """News without valid datetime receive an empty tag."""
         from modules.sentiment import _tag_news_with_recency
 
         news = [{"title": "Test", "published_at": "not-a-date", "source": "X"}]
@@ -427,7 +427,7 @@ class TestFinBERTEnsemble:
     """Test FinBERT cross-validation ensemble."""
 
     def test_agree_boosts_confidence(self) -> None:
-        """Scores entro 1.0 → AGREE, boost +5%."""
+        """Scores within 1.0 → AGREE, boost +5%."""
         from modules.sentiment import _compute_finbert_agreement
 
         label, mod = _compute_finbert_agreement(1.0, 1.5)
@@ -435,7 +435,7 @@ class TestFinBERTEnsemble:
         assert mod == 5.0
 
     def test_disagree_reduces_confidence(self) -> None:
-        """Divergenza > 2.0 → DISAGREE, -15%."""
+        """Divergence > 2.0 → DISAGREE, -15%."""
         from modules.sentiment import _compute_finbert_agreement
 
         label, mod = _compute_finbert_agreement(2.0, -1.0)
@@ -443,7 +443,7 @@ class TestFinBERTEnsemble:
         assert mod == -15.0
 
     def test_partial_no_change(self) -> None:
-        """Divergenza 1-2 → PARTIAL, nessuna modifica."""
+        """Divergence 1-2 → PARTIAL, no change."""
         from modules.sentiment import _compute_finbert_agreement
 
         label, mod = _compute_finbert_agreement(1.0, -0.5)
@@ -451,7 +451,7 @@ class TestFinBERTEnsemble:
         assert mod == 0.0
 
     def test_none_finbert_returns_empty(self) -> None:
-        """FinBERT None → label vuoto."""
+        """FinBERT None → empty label."""
         from modules.sentiment import _compute_finbert_agreement
 
         label, mod = _compute_finbert_agreement(1.0, None)
@@ -459,10 +459,10 @@ class TestFinBERTEnsemble:
         assert mod == 0.0
 
     def test_to_dict_includes_v2_fields(self) -> None:
-        """Verifica che to_dict includa i campi v2."""
+        """Verify that to_dict includes v2 fields."""
         result = SentimentResult(
             sentiment_score=1.0,
-            sentiment_label="Rialzista",
+            sentiment_label="Bullish",
             asset_scores={"NQ=F": 1.5},
             asset_biases={"NQ=F": "BULLISH"},
             finbert_score=1.2,

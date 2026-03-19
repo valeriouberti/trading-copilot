@@ -1,8 +1,8 @@
-"""Modulo Polymarket — segnale da mercati predittivi (v2).
+"""Polymarket module — prediction market signal (v2).
 
-Interroga l'API pubblica di Polymarket per ottenere probabilità
-di eventi macro, Fed, geopolitici e crypto, e calcola un segnale
-direzionale da usare come terza conferma nel pipeline di trading.
+Queries the public Polymarket API to obtain probabilities of macro,
+Fed, geopolitical, and crypto events, and computes a directional
+signal to use as a third confirmation in the trading pipeline.
 
 v2 improvements:
 - Fixed probability inversion: accounts for BOTH sides of each market
@@ -62,7 +62,7 @@ _CATEGORY_RULES: list[tuple[str, list[str]]] = [
 
 
 def _classify_category(question: str) -> str:
-    """Classifica la domanda del mercato in una categoria tematica."""
+    """Classify the market question into a thematic category."""
     q_lower = question.lower()
     for category, keywords in _CATEGORY_RULES:
         for kw in keywords:
@@ -130,14 +130,14 @@ def _fetch_page(params: dict[str, Any]) -> list[dict[str, Any]]:
             return resp.json()
         except Exception as exc:
             logger.warning(
-                "Polymarket API errore (tentativo %d/%d): %s",
+                "Polymarket API error (attempt %d/%d): %s",
                 attempt, MAX_RETRIES, exc,
             )
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY)
             else:
                 logger.warning(
-                    "Polymarket API non raggiungibile dopo %d tentativi",
+                    "Polymarket API unreachable after %d attempts",
                     MAX_RETRIES,
                 )
                 return []
@@ -149,15 +149,15 @@ def fetch_markets(
     min_volume_usd: float = 10_000,
     tags: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Recupera mercati Polymarket con paginazione, filtro per tag e keyword.
+    """Fetch Polymarket markets with pagination, tag and keyword filtering.
 
     Args:
-        keywords: Parole chiave per filtrare i mercati (client-side).
-        min_volume_usd: Volume minimo in USD per considerare un mercato.
-        tags: Tag API per filtrare server-side (es. "economics", "politics").
+        keywords: Keywords to filter markets (client-side).
+        min_volume_usd: Minimum USD volume to consider a market.
+        tags: API tags for server-side filtering (e.g. "economics", "politics").
 
     Returns:
-        Lista di mercati filtrati, ordinati per volume decrescente (max 20).
+        List of filtered markets, sorted by descending volume (max 20).
     """
     all_raw_markets: list[dict[str, Any]] = []
     tag_list = tags if tags else [None]
@@ -326,39 +326,39 @@ def classify_markets_with_llm(
 
     batch = markets[:15]
     questions_block = "\n".join(
-        f"{i + 1}. {m['question']} (prob SI': {m['prob_yes']:.0f}%)"
+        f"{i + 1}. {m['question']} (prob YES: {m['prob_yes']:.0f}%)"
         for i, m in enumerate(batch)
     )
 
-    prompt = f"""Classifica ogni mercato predittivo con DUE criteri:
-1. impact: se l'evento SI' si verifica, e' BULLISH o BEARISH per i mercati?
-2. magnitude: quanto e' market-moving questo evento? (1-5)
+    prompt = f"""Classify each prediction market with TWO criteria:
+1. impact: if the YES event occurs, is it BULLISH or BEARISH for markets?
+2. magnitude: how market-moving is this event? (1-5)
 
-SCALA MAGNITUDE:
-1 = marginale (politica minore, evento locale)
-2 = minore (bill legislativo, nomina)
-3 = moderato (dati economici, tensioni commerciali)
-4 = significativo (decisioni Fed, dati occupazione, CPI)
-5 = market-moving (crisi bancaria, guerra, taglio/rialzo tassi a sorpresa)
+MAGNITUDE SCALE:
+1 = marginal (minor politics, local event)
+2 = minor (legislative bill, appointment)
+3 = moderate (economic data, trade tensions)
+4 = significant (Fed decisions, employment data, CPI)
+5 = market-moving (banking crisis, war, surprise rate cut/hike)
 
-MERCATI:
+MARKETS:
 {questions_block}
 
-Rispondi ESCLUSIVAMENTE con un array JSON (senza markdown, senza ```):
+Respond EXCLUSIVELY with a JSON array (no markdown, no ```):
 [
   {{"index": 1, "impact": "BULLISH_IF_YES", "magnitude": 4}},
   {{"index": 2, "impact": "BEARISH_IF_YES", "magnitude": 3}},
   ...
 ]
 
-Regole:
-- impact: "BULLISH_IF_YES" o "BEARISH_IF_YES"
-- magnitude: intero da 1 a 5
-- "Fed taglia tassi" -> BULLISH_IF_YES, magnitude 5
-- "Recessione USA" -> BEARISH_IF_YES, magnitude 5
-- "USA evita recessione" -> BULLISH_IF_YES, magnitude 4
-- "Nuovo tariff su semiconduttori" -> BEARISH_IF_YES, magnitude 3
-- Rispondi SOLO con il JSON"""
+Rules:
+- impact: "BULLISH_IF_YES" or "BEARISH_IF_YES"
+- magnitude: integer from 1 to 5
+- "Fed cuts rates" -> BULLISH_IF_YES, magnitude 5
+- "US recession" -> BEARISH_IF_YES, magnitude 5
+- "US avoids recession" -> BULLISH_IF_YES, magnitude 4
+- "New semiconductor tariff" -> BEARISH_IF_YES, magnitude 3
+- Respond ONLY with the JSON"""
 
     try:
         client = Groq(api_key=api_key)
@@ -367,8 +367,8 @@ Regole:
             messages=[
                 {
                     "role": "system",
-                    "content": "Classifica eventi come bullish/bearish per i mercati "
-                               "e assegna un punteggio di impatto 1-5. Rispondi solo in JSON.",
+                    "content": "Classify events as bullish/bearish for markets "
+                               "and assign an impact score 1-5. Respond only in JSON.",
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -404,7 +404,7 @@ Regole:
 # ---------------------------------------------------------------------------
 
 def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
-    """Calcola il segnale direzionale aggregato (v2).
+    """Compute the aggregate directional signal (v2).
 
     v2 fixes:
     - Accounts for BOTH sides of each market (YES and NO probabilities)
@@ -419,10 +419,10 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
         weighted_score = score × volume_weight × time_weight × magnitude
 
     Args:
-        markets: Lista di mercati con campi 'impact' e 'impact_magnitude'.
+        markets: List of markets with fields 'impact' and 'impact_magnitude'.
 
     Returns:
-        Dizionario con segnale, confidenza, punteggi e top mercati.
+        Dict with signal, confidence, scores and top markets.
     """
     if not markets:
         return {
@@ -524,16 +524,16 @@ def get_polymarket_context(
     groq_model: str = "llama-3.3-70b-versatile",
     groq_api_key: str | None = None,
 ) -> dict[str, Any]:
-    """Funzione di alto livello chiamata da main.py.
+    """High-level function called from main.py.
 
-    Costruisce tag e keyword in base agli asset configurati, recupera
-    i mercati Polymarket con paginazione, classifica con LLM (o keyword),
-    e calcola il segnale aggregato pesato per volume, tempo e magnitude.
+    Builds tags and keywords based on configured assets, fetches
+    Polymarket markets with pagination, classifies with LLM (or keywords),
+    and computes the aggregate signal weighted by volume, time and magnitude.
     """
     tags = _get_tags_for_assets(assets)
     keywords = _get_keywords_for_assets(assets)
 
-    logger.info("Polymarket: ricerca con tag %s, keyword %s", tags, keywords)
+    logger.info("Polymarket: searching with tags %s, keywords %s", tags, keywords)
     markets = fetch_markets(keywords, tags=tags)
 
     # Classify with LLM (falls back to keywords if unavailable)
@@ -544,7 +544,7 @@ def get_polymarket_context(
     signal_data = compute_signal(markets)
 
     logger.info(
-        "Polymarket: %d mercati analizzati, signal=%s (net=%.1f)",
+        "Polymarket: %d markets analyzed, signal=%s (net=%.1f)",
         signal_data["market_count"],
         signal_data["signal"],
         signal_data["net_score"],

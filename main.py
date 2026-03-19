@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Trading Assistant — analisi pre-market per trader CFD retail"
+        description="Trading Assistant — pre-market analysis for retail CFD traders"
     )
     parser.add_argument(
         "--assets",
@@ -117,39 +117,39 @@ def load_config(path: str) -> dict:
     """Load and validate the YAML config file."""
     config_path = Path(path)
     if not config_path.exists():
-        print(f"ERRORE: File di configurazione '{path}' non trovato.")
-        print("Crea il file config.yaml o specifica un percorso con --config.")
+        print(f"ERROR: Configuration file '{path}' not found.")
+        print("Create the file config.yaml or specify a path with --config.")
         sys.exit(1)
 
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if not config:
-        print(f"ERRORE: Il file '{path}' e' vuoto o non valido.")
+        print(f"ERROR: File '{path}' is empty or invalid.")
         sys.exit(1)
 
     # Validate required keys
     errors: list[str] = []
     if not config.get("assets"):
-        errors.append("'assets' mancante o vuoto")
+        errors.append("'assets' missing or empty")
     else:
         for i, asset in enumerate(config["assets"]):
             if not asset.get("symbol"):
-                errors.append(f"assets[{i}]: 'symbol' mancante")
+                errors.append(f"assets[{i}]: 'symbol' missing")
 
     if not config.get("rss_feeds"):
-        errors.append("'rss_feeds' mancante o vuoto")
+        errors.append("'rss_feeds' missing or empty")
     else:
         for i, feed in enumerate(config["rss_feeds"]):
             if not feed.get("url"):
-                errors.append(f"rss_feeds[{i}]: 'url' mancante")
+                errors.append(f"rss_feeds[{i}]: 'url' missing")
 
     hours = config.get("lookback_hours", 16)
     if not isinstance(hours, (int, float)) or hours <= 0 or hours > 168:
-        errors.append(f"'lookback_hours' deve essere tra 1 e 168 (trovato: {hours})")
+        errors.append(f"'lookback_hours' must be between 1 and 168 (found: {hours})")
 
     if errors:
-        print("ERRORE nella configurazione:")
+        print("ERROR in configuration:")
         for e in errors:
             print(f"  - {e}")
         sys.exit(1)
@@ -160,7 +160,7 @@ def load_config(path: str) -> dict:
 def main() -> None:
     args = parse_args()
     setup_logging()
-    logger.info("Trading Assistant avviato")
+    logger.info("Trading Assistant started")
 
     # Handle --review-trades (print and exit)
     if args.review_trades:
@@ -179,11 +179,11 @@ def main() -> None:
         assets = [{"symbol": s, "display_name": s} for s in args.assets]
 
     if not assets:
-        print("ERRORE: Nessun asset configurato. Controlla config.yaml.")
+        print("ERROR: No assets configured. Check config.yaml.")
         sys.exit(1)
 
     # 2. Parallel I/O: fetch news, price data, and Polymarket simultaneously
-    print("[1/5] Recupero dati in parallelo (news + tecnici + Polymarket)...")
+    print("[1/5] Fetching data in parallel (news + technicals + Polymarket)...")
     news: list = []
     asset_analyses: list = []
     poly_data: dict | None = None
@@ -205,7 +205,7 @@ def main() -> None:
         "polymarket": _fetch_polymarket_task,
     }
 
-    progress = tqdm(total=len(tasks), desc="  Dati", unit="src", leave=False)
+    progress = tqdm(total=len(tasks), desc="  Data", unit="src", leave=False)
     results: dict = {}
 
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -215,8 +215,8 @@ def main() -> None:
             try:
                 results[name] = future.result()
             except Exception as exc:
-                logger.error("Errore nel task '%s': %s", name, exc)
-                print(f"      ATTENZIONE: Errore in {name}: {exc}")
+                logger.error("Error in task '%s': %s", name, exc)
+                print(f"      WARNING: Error in {name}: {exc}")
                 results[name] = [] if name != "polymarket" else None
             progress.update(1)
     progress.close()
@@ -226,54 +226,54 @@ def main() -> None:
     poly_data = results.get("polymarket")
 
     ok_count = sum(1 for a in asset_analyses if not getattr(a, "error", True))
-    print(f"      News: {len(news)} articoli | Tecnici: {ok_count}/{len(assets)} assets", end="")
+    print(f"      News: {len(news)} articles | Technicals: {ok_count}/{len(assets)} assets", end="")
     if poly_data and poly_data.get("market_count", 0) > 0:
-        print(f" | Polymarket: {poly_data['market_count']} mercati ({poly_data.get('signal', 'N/A')})")
+        print(f" | Polymarket: {poly_data['market_count']} markets ({poly_data.get('signal', 'N/A')})")
     elif args.no_polymarket:
-        print(" | Polymarket: SALTATO")
+        print(" | Polymarket: SKIPPED")
     else:
         print(" | Polymarket: N/A")
 
     # 3. Sentiment analysis
     if args.no_llm:
-        print("[2/5] Analisi sentiment SALTATA (--no-llm)")
+        print("[2/5] Sentiment analysis SKIPPED (--no-llm)")
         from modules.sentiment import SentimentResult
 
         sentiment = SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="N/A — LLM disabilitato",
-            key_drivers=["Analisi LLM disabilitata dall'utente"],
+            sentiment_label="N/A — LLM disabled",
+            key_drivers=["LLM analysis disabled by user"],
             directional_bias="NEUTRAL",
             confidence=0.0,
             source="none",
         )
     else:
-        print("[2/5] Analisi sentiment con LLM...")
+        print("[2/5] Sentiment analysis with LLM...")
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
-            print("      ATTENZIONE: GROQ_API_KEY non impostata. Uso FinBERT fallback.")
+            print("      WARNING: GROQ_API_KEY not set. Using FinBERT fallback.")
         try:
             sentiment = analyze_sentiment(news, assets, groq_model, poly_data=poly_data)
             print(
                 f"      Sentiment: {sentiment.sentiment_score:+.1f} — {sentiment.sentiment_label}"
             )
-            print(f"      Fonte: {sentiment.source}")
+            print(f"      Source: {sentiment.source}")
         except Exception as exc:
-            logger.error("Errore nell'analisi sentiment: %s", exc)
-            print(f"      ERRORE: Analisi sentiment fallita: {exc}")
+            logger.error("Error in sentiment analysis: %s", exc)
+            print(f"      ERROR: Sentiment analysis failed: {exc}")
             from modules.sentiment import SentimentResult
 
             sentiment = SentimentResult(
                 sentiment_score=0.0,
-                sentiment_label="Errore",
-                key_drivers=["Errore nell'analisi del sentiment"],
+                sentiment_label="Error",
+                key_drivers=["Error in sentiment analysis"],
                 directional_bias="NEUTRAL",
                 confidence=0.0,
                 error=str(exc),
             )
 
     # 4. Validation (including Polymarket consistency)
-    print("[3/5] Validazione segnali...")
+    print("[3/5] Signal validation...")
     validation = validate(sentiment, news, asset_analyses)
     validation_flags = list(validation.flags)
 
@@ -285,14 +285,14 @@ def main() -> None:
         for flag in validation_flags:
             print(f"      FLAG: {flag}")
     else:
-        print("      Nessun flag di validazione")
+        print("      No validation flags")
 
     # 4b. Determine daily regime
     regime, regime_reason = determine_regime(sentiment, asset_analyses, validation_flags)
     print(f"      REGIME: {regime} — {regime_reason}")
 
     # 5. Generate report
-    print("[4/5] Generazione report...")
+    print("[4/5] Generating report...")
     try:
         report_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
         report_path = generate_report(
@@ -305,15 +305,15 @@ def main() -> None:
             regime=regime,
             regime_reason=regime_reason,
         )
-        print(f"      Report salvato: {report_path}")
+        print(f"      Report saved: {report_path}")
     except Exception as exc:
-        logger.error("Errore nella generazione del report: %s", exc)
-        print(f"      ERRORE: Generazione report fallita: {exc}")
+        logger.error("Error in report generation: %s", exc)
+        print(f"      ERROR: Report generation failed: {exc}")
         report_path = None
 
     # 5b. Trade log (if --log-trade)
     if args.log_trade:
-        print("[5/5] Registrazione trade log...")
+        print("[5/5] Recording trade log...")
         try:
             tech_signal = "N/A"
             if asset_analyses:
@@ -337,12 +337,12 @@ def main() -> None:
                     direction=direction,
                     notes=regime_reason,
                 )
-            print(f"      Trade log salvato: {path}")
+            print(f"      Trade log saved: {path}")
         except Exception as exc:
-            logger.error("Errore nel trade log: %s", exc)
-            print(f"      ERRORE: Trade log fallito: {exc}")
+            logger.error("Error in trade log: %s", exc)
+            print(f"      ERROR: Trade log failed: {exc}")
     else:
-        print("[5/5] Trade log non richiesto (usa --log-trade)")
+        print("[5/5] Trade log not requested (use --log-trade)")
 
     # 6. Terminal summary
     print_terminal_summary(
@@ -358,7 +358,7 @@ def main() -> None:
         except Exception:
             pass  # Non-critical
 
-    logger.info("Trading Assistant completato")
+    logger.info("Trading Assistant completed")
 
 
 if __name__ == "__main__":

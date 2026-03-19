@@ -98,18 +98,18 @@ def validate_polymarket_consistency(
     poly_signal: dict[str, Any] | None,
     asset_analyses: list[Any] | None = None,
 ) -> list[str]:
-    """Valida la coerenza tra segnale LLM e segnale Polymarket.
+    """Validate consistency between LLM signal and Polymarket signal.
 
-    Controlla conflitti tra bias direzionale LLM e segnale Polymarket,
-    e rileva confluenza tripla quando tutti i segnali concordano.
+    Checks for conflicts between LLM directional bias and Polymarket signal,
+    and detects triple confluence when all signals agree.
 
     Args:
-        sentiment: SentimentResult dell'analisi LLM.
-        poly_signal: Dizionario con segnale Polymarket da compute_signal().
-        asset_analyses: Lista di AssetAnalysis per la confluenza tripla.
+        sentiment: SentimentResult from LLM analysis.
+        poly_signal: Dict with Polymarket signal from compute_signal().
+        asset_analyses: List of AssetAnalysis for triple confluence.
 
     Returns:
-        Lista di flag di validazione (stringhe).
+        List of validation flags (strings).
     """
     flags: list[str] = []
 
@@ -240,13 +240,13 @@ def determine_regime(
         if any(x in f for x in ["SENTIMENT_MISMATCH", "DIRECTION_CONFLICT"])
     ]
     if red_flags:
-        return "NEUTRAL", "Flag rossi presenti"
+        return "NEUTRAL", "Red flags present"
 
     tech_direction = _aggregate_technical_direction(asset_analyses) if asset_analyses else "NEUTRAL"
 
     if score >= 0.9 and tech_direction in ("BULLISH", "NEUTRAL"):
-        return "LONG", "LLM bullish + tecnici favorevoli"
+        return "LONG", "LLM bullish + favorable technicals"
     elif score <= -0.9 and tech_direction in ("BEARISH", "NEUTRAL"):
-        return "SHORT", "LLM bearish + tecnici favorevoli"
+        return "SHORT", "LLM bearish + favorable technicals"
     else:
-        return "NEUTRAL", "Segnali non direzionali o in conflitto"
+        return "NEUTRAL", "Non-directional or conflicting signals"

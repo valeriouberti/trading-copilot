@@ -1,4 +1,4 @@
-# Trading Assistant — Manuale Operativo Completo
+# Trading Copilot — Manuale Operativo Completo
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
@@ -154,12 +154,12 @@ N ore (configurabile, default 16 ore).
 
 Il sistema aggrega news da queste fonti gratuite:
 
-| Fonte                      | Tipo di contenuto                              | Affidabilità |
-| -------------------------- | ---------------------------------------------- | ------------ |
-| **Yahoo Finance RSS**      | Notizie societarie e macro per asset specifici | Alta         |
-| **CNBC Top News**          | Notizie finanziarie e macro USA                | Molto alta   |
-| **Investing.com**          | Analisi mercati, dati economici                | Media-Alta   |
-| **MarketWatch Top Stories**| Notizie mercati, macro, earnings               | Alta         |
+| Fonte                       | Tipo di contenuto                              | Affidabilità |
+| --------------------------- | ---------------------------------------------- | ------------ |
+| **Yahoo Finance RSS**       | Notizie societarie e macro per asset specifici | Alta         |
+| **CNBC Top News**           | Notizie finanziarie e macro USA                | Molto alta   |
+| **Investing.com**           | Analisi mercati, dati economici                | Media-Alta   |
+| **MarketWatch Top Stories** | Notizie mercati, macro, earnings               | Alta         |
 
 ### Il Processo di Pulizia
 
@@ -241,9 +241,10 @@ che notizie recenti pesano 3x rispetto a quelle più vecchie.
 ### Few-Shot Calibration
 
 Il prompt di estrazione include esempi calibrati per ancorare i punteggi:
+
 - +3.0 = Fed taglia tassi a sorpresa + occupazione record + CPI sotto attese
 - +1.0 = Dati mixed ma leggermente positivi
--  0.0 = Nessuna notizia rilevante
+- 0.0 = Nessuna notizia rilevante
 - -1.0 = Dati occupazione deboli, tensioni commerciali
 - -3.0 = Crisi bancaria + recessione confermata + panic selling
 
@@ -512,6 +513,7 @@ Il modulo Polymarket del sistema opera in 5 fasi:
    è un segnale fortemente bullish.
 
    **La formula v2**: per ogni mercato:
+
    ```
    Se BEARISH_IF_YES:
      bearish_score += prob_yes × weight

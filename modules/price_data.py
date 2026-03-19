@@ -130,15 +130,15 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     if rsi_series is not None and not rsi_series.empty:
         rsi_val = float(rsi_series.iloc[-1])
         if rsi_val > 70:
-            rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — ipercomprato"
+            rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — overbought"
         elif rsi_val < 30:
-            rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — ipervenduto"
+            rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — oversold"
         elif rsi_val > 60:
-            rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — momentum rialzista"
+            rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — bullish momentum"
         elif rsi_val < 40:
-            rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — momentum ribassista"
+            rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — bearish momentum"
         else:
-            rsi_label, rsi_detail = "NEUTRAL", f"RSI {rsi_val:.1f} — neutro"
+            rsi_label, rsi_detail = "NEUTRAL", f"RSI {rsi_val:.1f} — neutral"
         signals.append(TechnicalSignal("RSI", rsi_val, rsi_label, rsi_detail))
 
     # MACD(12, 26, 9)
@@ -149,15 +149,15 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         prev_hist = float(macd_df.iloc[-2, 1]) if len(macd_df) >= 2 else 0
 
         if macd_hist > 0 and prev_hist <= 0:
-            label, detail = "BULLISH", "MACD crossover rialzista"
+            label, detail = "BULLISH", "MACD bullish crossover"
         elif macd_hist < 0 and prev_hist >= 0:
-            label, detail = "BEARISH", "MACD crossover ribassista"
+            label, detail = "BEARISH", "MACD bearish crossover"
         elif macd_hist > 0:
-            label, detail = "BULLISH", f"MACD positivo ({macd_hist:.2f})"
+            label, detail = "BULLISH", f"MACD positive ({macd_hist:.2f})"
         elif macd_hist < 0:
-            label, detail = "BEARISH", f"MACD negativo ({macd_hist:.2f})"
+            label, detail = "BEARISH", f"MACD negative ({macd_hist:.2f})"
         else:
-            label, detail = "NEUTRAL", "MACD neutro"
+            label, detail = "NEUTRAL", "MACD neutral"
         signals.append(TechnicalSignal("MACD", macd_hist, label, detail))
 
     # VWAP (using intraday data)
@@ -170,17 +170,17 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             # Only signal directional if distance > 0.1% from VWAP
             if abs(pct_diff) < 0.1:
                 label = "NEUTRAL"
-                detail = f"Prezzo ≈ VWAP ({pct_diff:+.2f}%) — troppo vicino"
+                detail = f"Price ≈ VWAP ({pct_diff:+.2f}%) — too close"
             elif current_5m > vwap_val:
                 label = "BULLISH"
-                detail = f"Prezzo sopra VWAP ({pct_diff:+.2f}%)"
+                detail = f"Price above VWAP ({pct_diff:+.2f}%)"
             else:
                 label = "BEARISH"
-                detail = f"Prezzo sotto VWAP ({pct_diff:+.2f}%)"
+                detail = f"Price below VWAP ({pct_diff:+.2f}%)"
             signals.append(TechnicalSignal("VWAP", vwap_val, label, detail))
     else:
         # For FX pairs and instruments without volume, skip VWAP
-        signals.append(TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP non disponibile (no volume)"))
+        signals.append(TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP not available (no volume)"))
 
     # ATR(14)
     atr_series = ta.atr(df_daily["High"], df_daily["Low"], df_daily["Close"], length=14)
@@ -188,9 +188,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         atr_val = float(atr_series.iloc[-1])
         atr_pct = (atr_val / current_price) * 100
         if atr_pct > 2.0:
-            label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — alta volatilita'"
+            label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — high volatility"
         else:
-            label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — volatilita' normale"
+            label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — normal volatility"
         signals.append(TechnicalSignal("ATR", atr_val, label, detail))
 
     # EMA(20) vs EMA(50)
@@ -201,13 +201,13 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         ema50_val = float(ema50.iloc[-1])
         if ema20_val > ema50_val and current_price > ema20_val:
             label = "BULLISH"
-            detail = f"EMA20 ({ema20_val:.2f}) > EMA50 ({ema50_val:.2f}), prezzo sopra entrambe"
+            detail = f"EMA20 ({ema20_val:.2f}) > EMA50 ({ema50_val:.2f}), price above both"
         elif ema20_val > ema50_val:
             label = "BULLISH"
             detail = f"EMA20 ({ema20_val:.2f}) > EMA50 ({ema50_val:.2f})"
         elif ema20_val < ema50_val and current_price < ema20_val:
             label = "BEARISH"
-            detail = f"EMA20 ({ema20_val:.2f}) < EMA50 ({ema50_val:.2f}), prezzo sotto entrambe"
+            detail = f"EMA20 ({ema20_val:.2f}) < EMA50 ({ema50_val:.2f}), price below both"
         elif ema20_val < ema50_val:
             label = "BEARISH"
             detail = f"EMA20 ({ema20_val:.2f}) < EMA50 ({ema50_val:.2f})"

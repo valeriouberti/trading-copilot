@@ -37,7 +37,7 @@ class SentimentResult:
     """Structured sentiment analysis output."""
 
     sentiment_score: float  # -3 to +3 (global macro)
-    sentiment_label: str  # e.g., "Moderatamente Ribassista"
+    sentiment_label: str  # e.g., "Moderately Bearish"
     key_drivers: list[str] = field(default_factory=list)
     directional_bias: str = ""  # "BULLISH", "BEARISH", "NEUTRAL"
     risk_events: list[str] = field(default_factory=list)
@@ -86,9 +86,9 @@ def _tag_news_with_recency(
             try:
                 hours_ago = (now - pub).total_seconds() / 3600
                 if hours_ago < 1:
-                    tag = f"[{max(1, int(hours_ago * 60))}m fa]"
+                    tag = f"[{max(1, int(hours_ago * 60))}m ago]"
                 else:
-                    tag = f"[{int(hours_ago)}h fa]"
+                    tag = f"[{int(hours_ago)}h ago]"
             except (TypeError, ValueError):
                 pass
         tagged.append({**article, "_time_tag": tag, "_hours_ago": hours_ago})
@@ -125,34 +125,34 @@ def _build_reasoning_prompt(
         top = poly_data.get("top_markets", [])[:5]
         if top:
             lines = "\n".join(
-                f"- {m['question']}: {m['prob_yes']:.0f}% SI'"
+                f"- {m['question']}: {m['prob_yes']:.0f}% YES"
                 for m in top
             )
             poly_block = f"""
-DATI MERCATI PREDITTIVI (Polymarket — soldi reali in gioco):
+PREDICTION MARKET DATA (Polymarket — real money at stake):
 {lines}
 """
 
-    return f"""Sei un senior quant analyst specializzato in analisi macro per trading CFD.
-Analizza queste notizie step-by-step.
+    return f"""You are a senior quant analyst specializing in macro analysis for CFD trading.
+Analyze these news articles step-by-step.
 
-REGOLA FONDAMENTALE: Le notizie recenti ([1h fa], [2h fa]) pesano MOLTO di più
-delle notizie vecchie ([10h fa], [15h fa]). Una notizia di 1 ora fa conta 3x
-rispetto a una di 8 ore fa.
+FUNDAMENTAL RULE: Recent news ([1h ago], [2h ago]) weighs MUCH more heavily
+than older news ([10h ago], [15h ago]). A news item from 1 hour ago counts 3x
+compared to one from 8 hours ago.
 
-NOTIZIE (ordinate per recenza):
+NEWS (sorted by recency):
 {news_block}
 {poly_block}
-ASSET DA ANALIZZARE: {asset_names}
+ASSETS TO ANALYZE: {asset_names}
 
-Ragiona su questi punti:
-1. NOTIZIE CHIAVE: Quali sono le 3 notizie più market-moving e PERCHÉ?
-2. ANALISI PER ASSET: Per OGNI asset, qual è l'impatto specifico?
-   (es: "Fed hawkish" è bearish per NQ ma può essere bullish per USD)
-3. RISK EVENTS: Ci sono eventi ad alto impatto nelle prossime 24h?
-4. CONTESTO MACRO: Risk-on, risk-off, o indeterminato?
+Reason through these points:
+1. KEY NEWS: What are the 3 most market-moving news items and WHY?
+2. PER-ASSET ANALYSIS: For EACH asset, what is the specific impact?
+   (e.g.: "Fed hawkish" is bearish for NQ but can be bullish for USD)
+3. RISK EVENTS: Are there high-impact events in the next 24h?
+4. MACRO CONTEXT: Risk-on, risk-off, or indeterminate?
 
-Rispondi in modo strutturato, ragionando step-by-step."""
+Respond in a structured way, reasoning step-by-step."""
 
 
 def _build_extraction_prompt(
@@ -162,47 +162,47 @@ def _build_extraction_prompt(
     """Pass 2: JSON extraction from reasoning, with few-shot calibration."""
     asset_symbols = [a["symbol"] for a in assets]
     asset_score_lines = ",\n    ".join(
-        f'"{s}": <-3.0 a +3.0>' for s in asset_symbols
+        f'"{s}": <-3.0 to +3.0>' for s in asset_symbols
     )
 
-    return f"""Data la tua analisi precedente, produci ESCLUSIVAMENTE un JSON valido.
+    return f"""Given your previous analysis, produce EXCLUSIVELY a valid JSON.
 
-ANALISI:
+ANALYSIS:
 {reasoning}
 
-CALIBRAZIONE PUNTEGGI — usa questi esempi come riferimento:
-+3.0 = Estremamente rialzista (es: Fed taglia tassi a sorpresa + occupazione record + CPI sotto attese)
-+2.0 = Molto rialzista (es: CPI sotto attese + guidance aziendali positive diffuse)
-+1.5 = Rialzista (es: dati occupazione solidi, mercato in trend positivo)
-+1.0 = Moderatamente rialzista (es: dati mixed ma leggermente positivi)
-+0.5 = Leggermente rialzista (es: nessuna notizia negativa, momentum continua)
- 0.0 = Neutro (nessuna notizia rilevante o segnali perfettamente contrastanti)
--0.5 = Leggermente ribassista (es: incertezza crescente, dati misti)
--1.0 = Moderatamente ribassista (es: dati occupazione deboli, tensioni commerciali)
--1.5 = Ribassista (es: Fed hawkish + dati sotto attese)
--2.0 = Molto ribassista (es: escalation geopolitica + GDP negativo)
--3.0 = Estremamente ribassista (es: crisi bancaria + recessione confermata + panic selling)
+SCORE CALIBRATION — use these examples as reference:
++3.0 = Extremely bullish (e.g.: Fed surprise rate cut + record employment + CPI below expectations)
++2.0 = Very bullish (e.g.: CPI below expectations + widespread positive corporate guidance)
++1.5 = Bullish (e.g.: solid employment data, market in positive trend)
++1.0 = Moderately bullish (e.g.: mixed data but slightly positive)
++0.5 = Slightly bullish (e.g.: no negative news, momentum continues)
+ 0.0 = Neutral (no relevant news or perfectly contrasting signals)
+-0.5 = Slightly bearish (e.g.: growing uncertainty, mixed data)
+-1.0 = Moderately bearish (e.g.: weak employment data, trade tensions)
+-1.5 = Bearish (e.g.: Fed hawkish + data below expectations)
+-2.0 = Very bearish (e.g.: geopolitical escalation + negative GDP)
+-3.0 = Extremely bearish (e.g.: banking crisis + confirmed recession + panic selling)
 
-FORMATO — rispondi SOLO con questo JSON (NO markdown, NO ```):
+FORMAT — respond ONLY with this JSON (NO markdown, NO ```):
 {{
-  "sentiment_score": <-3.0 a +3.0>,
-  "sentiment_label": "<etichetta descrittiva in italiano>",
+  "sentiment_score": <-3.0 to +3.0>,
+  "sentiment_label": "<descriptive label in English>",
   "key_drivers": ["<driver 1>", "<driver 2>", "<driver 3>"],
   "directional_bias": "<BULLISH|BEARISH|NEUTRAL>",
-  "risk_events": ["<evento rischio 1>"],
+  "risk_events": ["<risk event 1>"],
   "confidence": <0-100>,
   "asset_scores": {{
     {asset_score_lines}
   }}
 }}
 
-Regole:
-- sentiment_score: media pesata, notizie recenti contano 3x
-- asset_scores: punteggio SPECIFICO per ogni asset (POSSONO divergere)
-- key_drivers: esattamente 3 elementi
-- risk_events: può essere vuoto [] se non ci sono rischi
-- confidence: certezza dell'analisi (0-100)
-- Rispondi SOLO JSON"""
+Rules:
+- sentiment_score: weighted average, recent news counts 3x
+- asset_scores: SPECIFIC score for each asset (CAN diverge)
+- key_drivers: exactly 3 elements
+- risk_events: can be empty [] if there are no risks
+- confidence: analysis certainty (0-100)
+- Respond ONLY with JSON"""
 
 
 # Backward-compatible single-pass prompt
@@ -226,50 +226,50 @@ def _build_prompt(
         top_markets = poly_data.get("top_markets", [])[:3]
         if top_markets:
             market_lines = "\n".join(
-                f"- {m['question']}: {m['prob_yes']:.0f}% probabilita' SI'"
+                f"- {m['question']}: {m['prob_yes']:.0f}% probability YES"
                 for m in top_markets
             )
             poly_block = f"""
 
-DATI AGGIUNTIVI — MERCATI PREDITTIVI (Polymarket):
+ADDITIONAL DATA — PREDICTION MARKETS (Polymarket):
 {market_lines}
 
-Tieni conto di questi dati nella tua analisi del sentiment.
+Take this data into account in your sentiment analysis.
 """
 
     asset_symbols = [a["symbol"] for a in assets]
     asset_score_lines = ",\n    ".join(
-        f'"{s}": <-3.0 a +3.0>' for s in asset_symbols
+        f'"{s}": <-3.0 to +3.0>' for s in asset_symbols
     )
 
-    return f"""Sei un analista finanziario esperto. Analizza le seguenti notizie di mercato
-e fornisci un'analisi del sentiment macro per un trader CFD retail che opera su: {asset_names}.
+    return f"""You are an expert financial analyst. Analyze the following market news
+and provide a macro sentiment analysis for a retail CFD trader operating on: {asset_names}.
 
-IMPORTANTE: Le notizie piu' recenti (tag temporale basso) pesano di piu'.
+IMPORTANT: More recent news (lower time tag) weighs more heavily.
 
-NOTIZIE RECENTI:
+RECENT NEWS:
 {news_block}
 {poly_block}
-Rispondi ESCLUSIVAMENTE con un oggetto JSON valido (senza markdown, senza ```), con questa struttura esatta:
+Respond EXCLUSIVELY with a valid JSON object (no markdown, no ```), with this exact structure:
 {{
-  "sentiment_score": <numero da -3 a +3, dove -3 = estremamente ribassista, +3 = estremamente rialzista>,
-  "sentiment_label": "<etichetta descrittiva in italiano>",
+  "sentiment_score": <number from -3 to +3, where -3 = extremely bearish, +3 = extremely bullish>,
+  "sentiment_label": "<descriptive label in English>",
   "key_drivers": ["<driver 1>", "<driver 2>", "<driver 3>"],
   "directional_bias": "<BULLISH|BEARISH|NEUTRAL>",
-  "risk_events": ["<evento rischio 1>", "<evento rischio 2>"],
-  "confidence": <numero da 0 a 100>,
+  "risk_events": ["<risk event 1>", "<risk event 2>"],
+  "confidence": <number from 0 to 100>,
   "asset_scores": {{
     {asset_score_lines}
   }}
 }}
 
-Regole:
-- sentiment_score deve essere un numero con 1 decimale
-- asset_scores: punteggio specifico PER asset (possono divergere!)
-- key_drivers deve avere esattamente 3 elementi, brevi e incisivi
-- risk_events puo' essere vuoto [] se non ci sono rischi particolari oggi
-- confidence riflette quanto sei sicuro dell'analisi (0-100)
-- Rispondi SOLO con il JSON, nessun testo aggiuntivo"""
+Rules:
+- sentiment_score must be a number with 1 decimal
+- asset_scores: SPECIFIC score per asset (can diverge!)
+- key_drivers must have exactly 3 elements, brief and impactful
+- risk_events can be empty [] if there are no particular risks today
+- confidence reflects how certain you are of the analysis (0-100)
+- Respond ONLY with the JSON, no additional text"""
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +312,7 @@ def _parse_sentiment_json(
 
     return SentimentResult(
         sentiment_score=float(data.get("sentiment_score", 0)),
-        sentiment_label=str(data.get("sentiment_label", "Neutro")),
+        sentiment_label=str(data.get("sentiment_label", "Neutral")),
         key_drivers=list(data.get("key_drivers", []))[:3],
         directional_bias=str(data.get("directional_bias", "NEUTRAL")),
         risk_events=list(data.get("risk_events", [])),
@@ -384,8 +384,8 @@ def _analyze_with_groq_two_pass(
     logger.info("Groq Pass 1: chain-of-thought reasoning...")
     reasoning = _groq_call(
         client, model,
-        system_msg="Sei un senior quant analyst. Ragiona step-by-step sull'impatto "
-                   "delle notizie sui mercati finanziari.",
+        system_msg="You are a senior quant analyst. Reason step-by-step about the impact "
+                   "of news on financial markets.",
         user_msg=reasoning_prompt,
         max_tokens=1000,
         temperature=0.4,
@@ -397,8 +397,8 @@ def _analyze_with_groq_two_pass(
     logger.info("Groq Pass 2: structured extraction...")
     raw_json = _groq_call(
         client, model,
-        system_msg="Sei un data extraction engine. Converti l'analisi in JSON valido. "
-                   "Rispondi SOLO con JSON.",
+        system_msg="You are a data extraction engine. Convert the analysis to valid JSON. "
+                   "Respond ONLY with JSON.",
         user_msg=extraction_prompt,
         max_tokens=600,
         temperature=0.1,
@@ -429,7 +429,7 @@ def _analyze_with_groq_single_pass(
 
     raw = _groq_call(
         client, model,
-        system_msg="Sei un analista finanziario. Rispondi solo in JSON valido.",
+        system_msg="You are a financial analyst. Respond only in valid JSON.",
         user_msg=prompt,
         max_tokens=600,
         temperature=0.3,
@@ -534,8 +534,8 @@ def _analyze_with_finbert(news: list[dict[str, Any]]) -> SentimentResult:
         logger.error("transformers library not installed for FinBERT fallback")
         return SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="Non disponibile",
-            key_drivers=["Analisi non disponibile — installa transformers e torch"],
+            sentiment_label="Not available",
+            key_drivers=["Analysis not available — install transformers and torch"],
             directional_bias="NEUTRAL",
             confidence=0.0,
             source="finbert",
@@ -553,8 +553,8 @@ def _analyze_with_finbert(news: list[dict[str, Any]]) -> SentimentResult:
         logger.error("Failed to load FinBERT model: %s", exc)
         return SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="Errore modello",
-            key_drivers=["Errore nel caricamento del modello FinBERT"],
+            sentiment_label="Model error",
+            key_drivers=["Error loading FinBERT model"],
             directional_bias="NEUTRAL",
             confidence=0.0,
             source="finbert",
@@ -584,19 +584,19 @@ def _analyze_with_finbert(news: list[dict[str, Any]]) -> SentimentResult:
     sentiment_score = round(max(-3.0, min(3.0, avg_score * 3)), 1)
 
     if sentiment_score > 1:
-        label = "Rialzista"
+        label = "Bullish"
         bias = "BULLISH"
     elif sentiment_score > 0.3:
-        label = "Moderatamente Rialzista"
+        label = "Moderately Bullish"
         bias = "BULLISH"
     elif sentiment_score < -1:
-        label = "Ribassista"
+        label = "Bearish"
         bias = "BEARISH"
     elif sentiment_score < -0.3:
-        label = "Moderatamente Ribassista"
+        label = "Moderately Bearish"
         bias = "BEARISH"
     else:
-        label = "Neutro"
+        label = "Neutral"
         bias = "NEUTRAL"
 
     confidence = (max(positive_count, negative_count) / n * 100) if n > 0 else 0
@@ -622,7 +622,7 @@ def analyze_sentiment(
     groq_model: str = "llama-3.3-70b-versatile",
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
-    """Analizza il sentiment di mercato dalle notizie.
+    """Analyze market sentiment from news.
 
     Pipeline:
     1. Tag news with temporal recency
@@ -631,20 +631,20 @@ def analyze_sentiment(
     4. If Groq fails, use FinBERT as fallback
 
     Args:
-        news: Lista di articoli dal news_fetcher.
-        assets: Lista di dizionari asset.
-        groq_model: Identificativo modello Groq.
-        poly_data: Dati opzionali da Polymarket per arricchire il prompt.
+        news: List of articles from news_fetcher.
+        assets: List of asset dicts.
+        groq_model: Groq model identifier.
+        poly_data: Optional Polymarket data to enrich the prompt.
 
     Returns:
-        SentimentResult con punteggi e analisi.
+        SentimentResult with scores and analysis.
     """
     if not news:
         logger.warning("No news articles to analyze")
         return SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="Neutro",
-            key_drivers=["Nessuna notizia disponibile"],
+            sentiment_label="Neutral",
+            key_drivers=["No news available"],
             directional_bias="NEUTRAL",
             confidence=0.0,
         )

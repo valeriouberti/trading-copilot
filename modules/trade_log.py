@@ -113,7 +113,7 @@ def compute_accuracy(log_path: str = TRADE_LOG_FILE) -> dict[str, Any] | None:
             "directional_trades": len(directional),
             "flat_days": flat_days,
             "sufficient_data": False,
-            "message": f"Servono almeno 30 trade direzionali per le statistiche "
+            "message": f"At least 30 directional trades needed for statistics "
                        f"({len(directional)}/30)",
         }
 
@@ -125,13 +125,13 @@ def compute_accuracy(log_path: str = TRADE_LOG_FILE) -> dict[str, Any] | None:
     win_rate = (wins / len(directional)) * 100
 
     if accuracy < 50:
-        rating = "Scarso — considera di disabilitare LLM (--no-llm)"
+        rating = "Poor — consider disabling LLM (--no-llm)"
     elif accuracy < 55:
-        rating = "Marginale — ottimizza prompt e parametri"
+        rating = "Marginal — optimize prompt and parameters"
     elif accuracy < 60:
-        rating = "Accettabile — il sistema funziona come filtro"
+        rating = "Acceptable — the system works as a filter"
     else:
-        rating = "Buono — il sistema aggiunge valore"
+        rating = "Good — the system adds value"
 
     return {
         "total_trades": total,
@@ -149,24 +149,24 @@ def print_accuracy_report(log_path: str = TRADE_LOG_FILE) -> None:
     """Print a formatted accuracy report to the terminal."""
     stats = compute_accuracy(log_path)
     if stats is None:
-        print("  Nessun trade log trovato.")
+        print("  No trade log found.")
         return
 
     print()
     print("=" * 60)
-    print("  TRADE LOG — Statistiche Performance")
+    print("  TRADE LOG — Performance Statistics")
     print("=" * 60)
-    print(f"  Trade totali:       {stats['total_trades']}")
-    print(f"  Trade direzionali:  {stats['directional_trades']}")
-    print(f"  Giorni flat:        {stats['flat_days']}")
+    print(f"  Total trades:       {stats['total_trades']}")
+    print(f"  Directional trades: {stats['directional_trades']}")
+    print(f"  Flat days:          {stats['flat_days']}")
 
     if not stats["sufficient_data"]:
         print(f"\n  {stats['message']}")
     else:
         print(f"\n  LLM Accuracy:       {stats['llm_accuracy']:.1f}%")
         print(f"  Win Rate:           {stats['win_rate']:.1f}%")
-        print(f"  P&L totale (pips):  {stats['total_pips']:+.1f}")
-        print(f"\n  Valutazione: {stats['rating']}")
+        print(f"  Total P&L (pips):   {stats['total_pips']:+.1f}")
+        print(f"\n  Rating: {stats['rating']}")
 
     print("=" * 60)
     print()

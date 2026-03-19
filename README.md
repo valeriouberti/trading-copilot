@@ -1,4 +1,4 @@
-# Trading Assistant
+# Trading Copilot
 
 Sistema di analisi pre-market per trader CFD retail. Genera report giornalieri con analisi tecnica, sentiment macro e notizie aggregate — tutto a costo zero (serve solo una API key Groq gratuita).
 
@@ -57,6 +57,7 @@ python main.py
 ```
 
 Il sistema:
+
 1. Recupera le notizie dai feed RSS configurati
 2. Scarica i dati di prezzo e calcola gli indicatori tecnici
 3. Analizza il sentiment macro con Groq LLM (o FinBERT)
@@ -86,6 +87,7 @@ python main.py --config my_config.yaml
 ## Come Interpretare il Report
 
 ### Sentiment Macro (-3 a +3)
+
 - **+2 / +3**: Mercato fortemente rialzista — cercare opportunita' LONG
 - **+1**: Moderatamente positivo — bias LONG con cautela
 - **0**: Neutro — nessuna direzione chiara
@@ -93,6 +95,7 @@ python main.py --config my_config.yaml
 - **-2 / -3**: Mercato fortemente ribassista — cercare opportunita' SHORT
 
 ### Tabella Assets
+
 - **RSI**: Sotto 30 = ipervenduto (potenziale rimbalzo), Sopra 70 = ipercomprato (potenziale correzione)
 - **MACD**: Crossover rialzista/ribassista indica cambio di momentum
 - **vs VWAP**: Prezzo sopra VWAP = forza, sotto = debolezza intraday
@@ -101,6 +104,7 @@ python main.py --config my_config.yaml
 - **Azione**: Suggerimento sintetico basato su tecnici + sentiment
 
 ### Suggerimento per il trading
+
 1. Se Score Tecnico e LLM Bias concordano → segnale piu' affidabile
 2. Se sono in conflitto → massima cautela, meglio attendere
 3. Usa sempre il report come **punto di partenza**, poi verifica su TradingView
@@ -115,11 +119,12 @@ Modifica `config.yaml`:
 assets:
   - symbol: "NQ=F"
     display_name: "NASDAQ 100 Futures"
-  - symbol: "CL=F"           # Aggiungi qui
-    display_name: "Crude Oil"  # Nome che apparira' nel report
+  - symbol: "CL=F" # Aggiungi qui
+    display_name: "Crude Oil" # Nome che apparira' nel report
 ```
 
 I simboli seguono la convenzione Yahoo Finance:
+
 - Futures: `ES=F`, `NQ=F`, `GC=F`, `CL=F`
 - Forex: `EURUSD=X`, `GBPUSD=X`
 - Indici: `^GSPC`, `^IXIC`
@@ -132,6 +137,7 @@ I simboli seguono la convenzione Yahoo Finance:
 ### Pre-Market (07:00 - 08:30 ora italiana)
 
 1. **Esegui il Trading Assistant**:
+
    ```bash
    python main.py
    ```
@@ -153,6 +159,7 @@ I simboli seguono la convenzione Yahoo Finance:
 5. **Opera su Fineco** solo quando hai conferma visiva su TradingView
 
 ### Tips
+
 - Esegui il report anche dopo la chiusura per avere un riepilogo della giornata
 - Se il sentiment e' neutro o conflittuale, riduci la size o resta flat
 - I report sono salvati nella cartella `reports/` — utili per tenere un diario di trading
@@ -206,12 +213,12 @@ trading-assistant/
 
 ## Risoluzione Problemi
 
-| Problema | Soluzione |
-|----------|-----------|
-| `GROQ_API_KEY non impostata` | Esporta la variabile d'ambiente (vedi Setup punto 3) |
-| `No data returned for symbol` | Verifica che il simbolo sia corretto su Yahoo Finance |
-| `Rate limit exceeded` | Aspetta qualche minuto, Groq free tier ha limiti |
-| `FinBERT download lento` | Normale al primo avvio, il modello viene cachato |
+| Problema                       | Soluzione                                                               |
+| ------------------------------ | ----------------------------------------------------------------------- |
+| `GROQ_API_KEY non impostata`   | Esporta la variabile d'ambiente (vedi Setup punto 3)                    |
+| `No data returned for symbol`  | Verifica che il simbolo sia corretto su Yahoo Finance                   |
+| `Rate limit exceeded`          | Aspetta qualche minuto, Groq free tier ha limiti                        |
+| `FinBERT download lento`       | Normale al primo avvio, il modello viene cachato                        |
 | Report non si apre nel browser | Usa `--no-browser` e apri manualmente il file dalla cartella `reports/` |
 
 ---

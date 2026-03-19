@@ -23,7 +23,7 @@ def get_market_session() -> str:
     weekday = now.weekday()
 
     if weekday >= 5:  # Saturday/Sunday
-        return "Weekend — Mercati Chiusi"
+        return "Weekend — Markets Closed"
     if 13 <= hour < 14:
         return "Pre-Market (08:00-09:30 ET)"
     elif 14 <= hour < 15 and now.minute < 30:
@@ -66,19 +66,19 @@ def _signal_color(label: str) -> str:
 def _action_hint(composite: str, bias: str) -> str:
     """Generate action hint from technical score and LLM bias."""
     if composite == "BULLISH" and bias in ("BULLISH", ""):
-        return "Cercare LONG"
+        return "Look for LONG"
     elif composite == "BEARISH" and bias in ("BEARISH", ""):
-        return "Cercare SHORT"
+        return "Look for SHORT"
     elif composite == "BULLISH" and bias == "BEARISH":
-        return "Conflitto — Cautela"
+        return "Conflict — Caution"
     elif composite == "BEARISH" and bias == "BULLISH":
-        return "Conflitto — Cautela"
+        return "Conflict — Caution"
     else:
-        return "Attendere"
+        return "Wait"
 
 
 def _format_volume(volume: float) -> str:
-    """Formatta il volume in formato leggibile ($XXXk o $X.Xm)."""
+    """Format volume in readable format ($XXXk or $X.Xm)."""
     if volume >= 1_000_000:
         return f"${volume / 1_000_000:.1f}m"
     elif volume >= 1_000:
@@ -87,7 +87,7 @@ def _format_volume(volume: float) -> str:
 
 
 def _poly_signal_color(signal: str) -> str:
-    """Colore CSS per il segnale Polymarket."""
+    """CSS color for the Polymarket signal."""
     if signal == "BULLISH":
         return "#00c851"
     elif signal == "BEARISH":
@@ -96,7 +96,7 @@ def _poly_signal_color(signal: str) -> str:
 
 
 def _category_badge(category: str) -> str:
-    """Badge HTML colorato per la categoria del mercato."""
+    """Colored HTML badge for the market category."""
     colors = {
         "FED": "#3b82f6",
         "MACRO": "#f59e0b",
@@ -112,7 +112,7 @@ def _category_badge(category: str) -> str:
 
 
 def _prob_color(prob: float) -> str:
-    """Colore CSS per la probabilità SÌ."""
+    """CSS color for YES probability."""
     if prob > 60:
         return "#ef4444"
     elif prob < 40:
@@ -124,12 +124,12 @@ def _build_polymarket_section(
     poly_data: dict[str, Any] | None,
     validation_flags: list[str] | None = None,
 ) -> str:
-    """Costruisce la sezione HTML del segnale Polymarket."""
+    """Build the HTML section for the Polymarket signal."""
     if not poly_data or poly_data.get("market_count", 0) == 0:
         return """
         <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;text-align:center;">
             <h2 style="margin:0 0 8px;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:2px;">Polymarket Signal</h2>
-            <p style="color:#64748b;">Nessun dato Polymarket disponibile</p>
+            <p style="color:#64748b;">No Polymarket data available</p>
         </div>"""
 
     signal = poly_data.get("signal", "NEUTRAL")
@@ -146,7 +146,7 @@ def _build_polymarket_section(
     <div style="background:#374151;border-radius:6px;height:12px;width:200px;margin:8px auto;overflow:hidden;">
         <div style="background:{sig_color};height:100%;width:{confidence:.0f}%;border-radius:6px;"></div>
     </div>
-    <div style="color:#94a3b8;font-size:0.85em;">{confidence:.0f}% confidenza</div>"""
+    <div style="color:#94a3b8;font-size:0.85em;">{confidence:.0f}% confidence</div>"""
 
     # Top markets table rows
     market_rows = ""
@@ -176,9 +176,9 @@ def _build_polymarket_section(
         <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:0.9em;margin-top:16px;">
             <thead>
                 <tr style="border-bottom:2px solid #374151;">
-                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Domanda</th>
-                    <th style="padding:8px 10px;text-align:center;color:#94a3b8;">Categoria</th>
-                    <th style="padding:8px 10px;text-align:center;color:#94a3b8;">Prob. S&Igrave;</th>
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Question</th>
+                    <th style="padding:8px 10px;text-align:center;color:#94a3b8;">Category</th>
+                    <th style="padding:8px 10px;text-align:center;color:#94a3b8;">Prob. YES</th>
                     <th style="padding:8px 10px;text-align:right;color:#94a3b8;">Volume</th>
                 </tr>
             </thead>
@@ -196,18 +196,18 @@ def _build_polymarket_section(
     if triple:
         confluence_html = f"""
         <div style="background:#1e3a2f;border:1px solid #22c55e;border-radius:8px;padding:12px;margin-top:16px;">
-            <span style="color:#86efac;">&#9989; CONFLUENZA TRIPLA: LLM + Tecnici + Polymarket concordano &rarr; {signal}</span>
+            <span style="color:#86efac;">&#9989; TRIPLE CONFLUENCE: LLM + Technicals + Polymarket agree &rarr; {signal}</span>
         </div>"""
     elif conflict:
         flag_msg = conflict[0]
         confluence_html = f"""
         <div style="background:#3d2f0f;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-top:16px;">
-            <span style="color:#fcd34d;">&#9888;&#65039; CONFLITTO: {flag_msg}</span>
+            <span style="color:#fcd34d;">&#9888;&#65039; CONFLICT: {flag_msg}</span>
         </div>"""
     else:
         confluence_html = """
         <div style="background:#1f2937;border:1px solid #4b5563;border-radius:8px;padding:12px;margin-top:16px;">
-            <span style="color:#9ca3af;">&#10134; Segnale neutro o parziale &mdash; usa come contesto</span>
+            <span style="color:#9ca3af;">&#10134; Neutral or partial signal &mdash; use as context</span>
         </div>"""
 
     return f"""
@@ -218,16 +218,16 @@ def _build_polymarket_section(
             <div style="font-size:2.5em;font-weight:bold;color:{sig_color};margin:8px 0;">{signal}</div>
             {conf_bar}
             <div style="color:#64748b;font-size:0.85em;margin-top:4px;">
-                Basato su {market_count} mercati predittivi &middot; Volume totale: ${total_volume:,.0f}
+                Based on {market_count} prediction markets &middot; Total volume: ${total_volume:,.0f}
             </div>
         </div>
 
         <div style="display:flex;justify-content:center;gap:40px;margin-top:16px;">
             <div style="text-align:center;">
-                <span style="color:#22c55e;font-size:1.1em;">&#128200; Prob. eventi BULLISH: {bullish_prob:.1f}%</span>
+                <span style="color:#22c55e;font-size:1.1em;">&#128200; BULLISH event prob.: {bullish_prob:.1f}%</span>
             </div>
             <div style="text-align:center;">
-                <span style="color:#ef4444;font-size:1.1em;">&#128201; Prob. eventi BEARISH: {bearish_prob:.1f}%</span>
+                <span style="color:#ef4444;font-size:1.1em;">&#128201; BEARISH event prob.: {bearish_prob:.1f}%</span>
             </div>
         </div>
 
@@ -239,15 +239,15 @@ def _build_polymarket_section(
 def _build_regime_section(regime: str, regime_reason: str) -> str:
     """Build the HTML section for the daily operational regime."""
     colors = {
-        "LONG": ("#22c55e", "#1e3a2f", "Cercare SOLO setup LONG"),
-        "SHORT": ("#ef4444", "#3d1f1f", "Cercare SOLO setup SHORT"),
-        "NEUTRAL": ("#eab308", "#3d2f0f", "Nessun trade direzionale"),
+        "LONG": ("#22c55e", "#1e3a2f", "Look ONLY for LONG setups"),
+        "SHORT": ("#ef4444", "#3d1f1f", "Look ONLY for SHORT setups"),
+        "NEUTRAL": ("#eab308", "#3d2f0f", "No directional trades"),
     }
     color, bg, action = colors.get(regime, colors["NEUTRAL"])
     return f"""
-    <!-- REGIME OPERATIVO -->
+    <!-- OPERATIONAL REGIME -->
     <div style="background:{bg};border:2px solid {color};border-radius:12px;padding:20px;margin-bottom:24px;text-align:center;">
-        <h2 style="margin:0 0 8px;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:2px;">Regime Operativo</h2>
+        <h2 style="margin:0 0 8px;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:2px;">Operational Regime</h2>
         <div style="font-size:2.5em;font-weight:bold;color:{color};margin:8px 0;">{regime}</div>
         <div style="color:#cbd5e1;font-size:1em;margin-bottom:4px;">{action}</div>
         <div style="color:#64748b;font-size:0.85em;">{regime_reason}</div>
@@ -264,15 +264,15 @@ def generate_report(
     regime: str = "NEUTRAL",
     regime_reason: str = "",
 ) -> str:
-    """Genera il report HTML e restituisce il percorso del file.
+    """Generate the HTML report and return the file path.
 
     Args:
         sentiment: SentimentResult object.
         asset_analyses: List of AssetAnalysis objects.
         news: List of news article dicts.
         output_dir: Directory to save the report.
-        poly_data: Dati Polymarket opzionali da get_polymarket_context().
-        validation_flags: Flag di validazione incluse quelle Polymarket.
+        poly_data: Optional Polymarket data from get_polymarket_context().
+        validation_flags: Validation flags including Polymarket ones.
 
     Returns:
         Absolute path to the generated HTML file.
@@ -293,7 +293,7 @@ def generate_report(
             <tr>
                 <td style="padding:10px;border-bottom:1px solid #374151;font-weight:bold;">{a.display_name}</td>
                 <td colspan="9" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
-                    Errore: {a.error}
+                    Error: {a.error}
                 </td>
             </tr>"""
             continue
@@ -368,7 +368,7 @@ def generate_report(
     else:
         risk_html = """
         <div style="background:#1e3a2f;border:1px solid #22c55e;border-radius:8px;padding:16px;margin-bottom:24px;">
-            <p style="color:#86efac;margin:0;">Nessun evento di rischio particolare segnalato.</p>
+            <p style="color:#86efac;margin:0;">No particular risk events reported.</p>
         </div>"""
 
     # Build news section
@@ -388,7 +388,7 @@ def generate_report(
 
     score = getattr(sentiment, "sentiment_score", 0)
     score_color = _sentiment_color(score)
-    score_label = getattr(sentiment, "sentiment_label", "Neutro")
+    score_label = getattr(sentiment, "sentiment_label", "Neutral")
     source = getattr(sentiment, "source", "N/A")
     confidence = getattr(sentiment, "confidence", 0)
 
@@ -406,7 +406,7 @@ def generate_report(
         )
 
     html = f"""<!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -420,7 +420,7 @@ def generate_report(
         <div>
             <h1 style="margin:0;font-size:1.5em;color:#f1f5f9;">Trading Assistant Report</h1>
             <p style="margin:4px 0 0;color:#94a3b8;">
-                {now_it.strftime('%d %B %Y — %H:%M')} (ora italiana) &middot; {now.strftime('%H:%M')} UTC
+                {now_it.strftime('%d %B %Y — %H:%M')} (Italian time) &middot; {now.strftime('%H:%M')} UTC
             </p>
         </div>
         <div style="text-align:right;">
@@ -430,15 +430,15 @@ def generate_report(
         </div>
     </div>
 
-    <!-- SENTIMENT MACRO -->
+    <!-- MACRO SENTIMENT -->
     <div style="background:linear-gradient(135deg,#1e293b,#0f172a);border:2px solid {score_color};border-radius:12px;padding:24px;margin-bottom:24px;text-align:center;">
-        <h2 style="margin:0 0 8px;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:2px;">Sentiment Macro</h2>
+        <h2 style="margin:0 0 8px;color:#94a3b8;font-size:0.9em;text-transform:uppercase;letter-spacing:2px;">Macro Sentiment</h2>
         <div style="font-size:4em;font-weight:bold;color:{score_color};margin:8px 0;">
             {score:+.1f}
         </div>
         <div style="font-size:1.2em;color:{score_color};margin-bottom:8px;">{score_label}</div>
         <div style="color:#64748b;font-size:0.85em;">
-            Fonte: {source.upper()} | Confidenza: {confidence:.0f}%
+            Source: {source.upper()} | Confidence: {confidence:.0f}%
         </div>
         {finbert_html}
     </div>
@@ -460,20 +460,20 @@ def generate_report(
 
     <!-- ASSETS TABLE -->
     <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;overflow-x:auto;">
-        <h2 style="margin:0 0 16px;color:#f1f5f9;">Analisi Assets</h2>
+        <h2 style="margin:0 0 16px;color:#f1f5f9;">Asset Analysis</h2>
         <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:0.9em;">
             <thead>
                 <tr style="border-bottom:2px solid #374151;">
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Asset</th>
-                    <th style="padding:10px;text-align:left;color:#94a3b8;">Prezzo</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Price</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">RSI</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">MACD</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">vs VWAP</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">EMA Trend</th>
-                    <th style="padding:10px;text-align:left;color:#94a3b8;">Score Tecnico</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Technical Score</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">LLM Bias</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Poly Signal</th>
-                    <th style="padding:10px;text-align:left;color:#94a3b8;">Azione</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Action</th>
                 </tr>
             </thead>
             <tbody>
@@ -486,14 +486,14 @@ def generate_report(
     <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
         <details>
             <summary style="cursor:pointer;color:#f1f5f9;font-size:1.1em;font-weight:bold;margin-bottom:12px;">
-                Notizie Raw ({len(news)} articoli)
+                Raw News ({len(news)} articles)
             </summary>
             <table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:0.85em;">
                 <thead>
                     <tr style="border-bottom:1px solid #374151;">
-                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Titolo</th>
-                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Fonte</th>
-                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Ora</th>
+                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Title</th>
+                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Source</th>
+                        <th style="padding:6px 10px;text-align:left;color:#94a3b8;">Time</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -505,8 +505,8 @@ def generate_report(
 
     <!-- FOOTER -->
     <div style="text-align:center;padding:16px;color:#64748b;font-size:0.8em;border-top:1px solid #1e293b;">
-        <p>Solo uso informativo. Nessun consiglio finanziario.</p>
-        <p>Generato da Trading Assistant</p>
+        <p>For informational use only. Not financial advice.</p>
+        <p>Generated by Trading Assistant</p>
     </div>
 
 </div>
@@ -531,7 +531,7 @@ def print_terminal_summary(
     regime_reason: str = "",
     validation_flags: list[str] | None = None,
 ) -> None:
-    """Stampa un riepilogo ASCII compatto nel terminale."""
+    """Print a compact ASCII summary to the terminal."""
     session = get_market_session()
     now = datetime.now(timezone.utc)
     now_it = now.astimezone(ZoneInfo("Europe/Rome"))
@@ -539,7 +539,7 @@ def print_terminal_summary(
     print()
     print("=" * 70)
     print(f"  TRADING ASSISTANT — {now_it.strftime('%d/%m/%Y %H:%M')} IT ({now.strftime('%H:%M')} UTC)")
-    print(f"  Sessione: {session}")
+    print(f"  Session: {session}")
     print("=" * 70)
 
     score = getattr(sentiment, "sentiment_score", 0)
@@ -550,8 +550,8 @@ def print_terminal_summary(
     finbert_score = getattr(sentiment, "finbert_score", None)
     finbert_agreement = getattr(sentiment, "finbert_agreement", "")
     finbert_str = f" | FinBERT: {finbert_score:+.1f} [{finbert_agreement}]" if finbert_score is not None else ""
-    print(f"\n  SENTIMENT MACRO: {score:+.1f} — {label} (bias: {bias}, fonte: {source}){finbert_str}")
-    print(f"  REGIME OPERATIVO: {regime} — {regime_reason}")
+    print(f"\n  SENTIMENT MACRO: {score:+.1f} — {label} (bias: {bias}, source: {source}){finbert_str}")
+    print(f"  OPERATIONAL REGIME: {regime} — {regime_reason}")
 
     drivers = getattr(sentiment, "key_drivers", [])
     if drivers:
@@ -568,7 +568,7 @@ def print_terminal_summary(
     # Validation flags and confluence status
     flags = validation_flags or []
     if flags:
-        print("\n  VALIDAZIONE:")
+        print("\n  VALIDATION:")
         for flag in flags:
             if "TRIPLE_CONFLUENCE" in flag:
                 print(f"    ✓ {flag}")
@@ -577,9 +577,9 @@ def print_terminal_summary(
             else:
                 print(f"    • {flag}")
     else:
-        print("\n  VALIDAZIONE: OK — nessun flag")
+        print("\n  VALIDATION: OK — no flags")
 
-    print(f"\n  {'Asset':<25} {'Prezzo':>12} {'Score':<10} {'Azione':<20}")
+    print(f"\n  {'Asset':<25} {'Price':>12} {'Score':<10} {'Action':<20}")
     print("  " + "-" * 67)
 
     asset_biases = getattr(sentiment, "asset_biases", {})
@@ -592,7 +592,7 @@ def print_terminal_summary(
         hint = _action_hint(a.composite_score, a_bias)
         print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {hint:<20}")
 
-    print(f"\n  Notizie analizzate: {news_count}")
+    print(f"\n  News analyzed: {news_count}")
 
     if poly_data and poly_data.get("market_count", 0) > 0:
         p_sig = poly_data.get("signal", "NEUTRAL")
@@ -601,6 +601,6 @@ def print_terminal_summary(
         print(f"  POLYMARKET: {p_sig} ({p_conf:.0f}%) — {p_count} markets analyzed")
 
     print("=" * 70)
-    print("  Solo uso informativo. Nessun consiglio finanziario.")
+    print("  For informational use only. Not financial advice.")
     print("=" * 70)
     print()

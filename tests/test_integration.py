@@ -1,4 +1,4 @@
-"""Test di integrazione per il pipeline completo."""
+"""Integration tests for the full pipeline."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from modules.hallucination_guard import validate, validate_polymarket_consistenc
 
 
 def _mock_yf_daily() -> pd.DataFrame:
-    """DataFrame daily realistico per i mock."""
+    """Realistic daily DataFrame for mocks."""
     np.random.seed(42)
     dates = pd.date_range(end=pd.Timestamp.now(), periods=100, freq="D")
     close = np.linspace(100, 130, 100) + np.random.normal(0, 1, 100)
@@ -35,7 +35,7 @@ def _mock_yf_daily() -> pd.DataFrame:
 
 
 def _mock_yf_5m() -> pd.DataFrame:
-    """DataFrame 5min realistico per i mock."""
+    """Realistic 5min DataFrame for mocks."""
     np.random.seed(42)
     dates = pd.date_range(end=pd.Timestamp.now(), periods=200, freq="5min")
     close = 130.0 + np.random.normal(0, 0.3, 200).cumsum()
@@ -49,7 +49,7 @@ def _mock_yf_5m() -> pd.DataFrame:
 
 
 def _mock_feed_entries(count: int = 5) -> MagicMock:
-    """Crea un feed RSS mock con N entries."""
+    """Create a mock RSS feed with N entries."""
     now = datetime.now(timezone.utc)
     entries = []
     titles = [
@@ -77,7 +77,7 @@ def _mock_feed_entries(count: int = 5) -> MagicMock:
 
 class TestFullPipelineSuccess:
     def test_end_to_end_with_mocked_externals(self, mock_news_items, mock_llm_response) -> None:
-        """Verifica il pipeline completo con tutti gli external mockati."""
+        """Verify the full pipeline with all mocked externals."""
         # Mock yfinance
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
@@ -124,12 +124,12 @@ class TestFullPipelineSuccess:
                 html = f.read()
 
             assert "NASDAQ 100 Futures" in html
-            assert "Nessun consiglio finanziario" in html
+            assert "Not financial advice" in html
 
 
 class TestPipelineWithNoNews:
     def test_empty_news_pipeline(self) -> None:
-        """Verifica che il pipeline funzioni senza notizie."""
+        """Verify that the pipeline works without news."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
@@ -152,7 +152,7 @@ class TestPipelineWithNoNews:
 
 class TestPipelineWithLLMFailure:
     def test_groq_failure_still_generates_report(self, mock_news_items) -> None:
-        """Verifica che il pipeline completi con fallback se Groq fallisce."""
+        """Verify that the pipeline completes with fallback if Groq fails."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
@@ -170,8 +170,8 @@ class TestPipelineWithLLMFailure:
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
-                        sentiment_label="Neutro (fallback)",
-                        key_drivers=["Groq non disponibile"],
+                        sentiment_label="Neutral (fallback)",
+                        key_drivers=["Groq not available"],
                         directional_bias="NEUTRAL",
                         confidence=0.0,
                         source="finbert",
@@ -191,7 +191,7 @@ class TestPipelineWithLLMFailure:
 
 class TestPipelineNoLLMFlag:
     def test_no_llm_skips_groq(self, mock_news_items) -> None:
-        """Verifica che --no-llm non invochi Groq."""
+        """Verify that --no-llm does not invoke Groq."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
@@ -205,8 +205,8 @@ class TestPipelineNoLLMFlag:
         # Simulate --no-llm: create sentiment directly without calling analyze_sentiment
         sentiment = SentimentResult(
             sentiment_score=0.0,
-            sentiment_label="N/A — LLM disabilitato",
-            key_drivers=["LLM disabilitato dall'utente"],
+            sentiment_label="N/A — LLM disabled",
+            key_drivers=["LLM disabled by user"],
             directional_bias="NEUTRAL",
             confidence=0.0,
             source="none",
@@ -222,7 +222,7 @@ class TestPipelineNoLLMFlag:
 
 class TestPipelineCustomAssets:
     def test_custom_assets_only(self) -> None:
-        """Verifica che --assets override limiti l'analisi ai soli asset specificati."""
+        """Verify that --assets override limits analysis to specified assets only."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
@@ -243,7 +243,7 @@ class TestPipelineCustomAssets:
 
 class TestTerminalOutput:
     def test_terminal_summary_runs(self, make_sentiment, make_asset_analysis, capsys) -> None:
-        """Verifica che il summary terminale non causi errori."""
+        """Verify that the terminal summary does not cause errors."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
         print_terminal_summary(sentiment, assets, 10)
@@ -253,7 +253,7 @@ class TestTerminalOutput:
         assert len(captured.out) > 100
 
     def test_terminal_summary_with_polymarket(self, make_sentiment, make_asset_analysis, mock_polymarket_data, capsys) -> None:
-        """Verifica che il summary terminale includa la riga Polymarket."""
+        """Verify that the terminal summary includes the Polymarket row."""
         sentiment = make_sentiment()
         assets = [make_asset_analysis()]
         print_terminal_summary(sentiment, assets, 10, poly_data=mock_polymarket_data)
@@ -265,7 +265,7 @@ class TestTerminalOutput:
 
 class TestPipelineWithTripleConfluence:
     def test_triple_confluence_in_report(self, mock_news_items, mock_polymarket_data) -> None:
-        """Tutti e tre i segnali allineati → TRIPLE_CONFLUENCE nel report HTML."""
+        """All three signals aligned → TRIPLE_CONFLUENCE in HTML report."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
@@ -282,7 +282,7 @@ class TestPipelineWithTripleConfluence:
 
         sentiment = SentimentResult(
             sentiment_score=-2.0,
-            sentiment_label="Ribassista",
+            sentiment_label="Bearish",
             key_drivers=["Recession fears", "Fed hawkish", "Weak data"],
             directional_bias="BEARISH",
             confidence=75.0,
@@ -312,5 +312,5 @@ class TestPipelineWithTripleConfluence:
             with open(report_path, encoding="utf-8") as f:
                 html = f.read()
 
-            assert "CONFLUENZA TRIPLA" in html
+            assert "TRIPLE CONFLUENCE" in html
             assert "Polymarket Signal" in html

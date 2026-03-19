@@ -1,4 +1,4 @@
-"""Test suite per il modulo price_data."""
+"""Test suite for the price_data module."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from modules.price_data import AssetAnalysis, TechnicalSignal, analyze_assets, _
 
 
 def _make_ohlcv_df(rows: int = 100, trend: str = "up") -> pd.DataFrame:
-    """Genera un DataFrame OHLCV realistico per il testing."""
+    """Generate a realistic OHLCV DataFrame for testing."""
     dates = pd.date_range(end=pd.Timestamp.now(), periods=rows, freq="D")
     np.random.seed(42)
 
@@ -39,7 +39,7 @@ def _make_ohlcv_df(rows: int = 100, trend: str = "up") -> pd.DataFrame:
 
 
 def _make_5m_df(rows: int = 200, base_price: float = 150.0) -> pd.DataFrame:
-    """Genera un DataFrame 5min realistico."""
+    """Generate a realistic 5min DataFrame."""
     dates = pd.date_range(end=pd.Timestamp.now(), periods=rows, freq="5min")
     np.random.seed(42)
     close = base_price + np.random.normal(0, 0.5, rows).cumsum()
@@ -58,7 +58,7 @@ def _make_5m_df(rows: int = 200, base_price: float = 150.0) -> pd.DataFrame:
 
 class TestIndicatorCalculation:
     def test_all_indicators_present(self) -> None:
-        """Verifica che tutti gli indicatori siano presenti nell'output."""
+        """Verify that all indicators are present in the output."""
         daily_df = _make_ohlcv_df(100, "up")
         intraday_df = _make_5m_df(200)
 
@@ -75,7 +75,7 @@ class TestIndicatorCalculation:
         assert "ATR" in signal_names
 
     def test_indicator_values_are_floats(self) -> None:
-        """Verifica che i valori degli indicatori siano float."""
+        """Verify that indicator values are floats."""
         daily_df = _make_ohlcv_df(100, "up")
         intraday_df = _make_5m_df(200)
 
@@ -92,7 +92,7 @@ class TestIndicatorCalculation:
 
 class TestRSIRange:
     def test_rsi_between_0_and_100_uptrend(self) -> None:
-        """Verifica che RSI sia tra 0 e 100 con trend rialzista."""
+        """Verify that RSI is between 0 and 100 with bullish trend."""
         daily_df = _make_ohlcv_df(100, "up")
         intraday_df = _make_5m_df(200)
 
@@ -107,7 +107,7 @@ class TestRSIRange:
         assert 0 <= rsi_signal.value <= 100
 
     def test_rsi_between_0_and_100_downtrend(self) -> None:
-        """Verifica che RSI sia tra 0 e 100 con trend ribassista."""
+        """Verify that RSI is between 0 and 100 with bearish trend."""
         daily_df = _make_ohlcv_df(100, "down")
         intraday_df = _make_5m_df(200)
 
@@ -124,7 +124,7 @@ class TestRSIRange:
 
 class TestCompositeSignal:
     def test_composite_bullish(self) -> None:
-        """Verifica che segnali prevalentemente bullish diano BULLISH."""
+        """Verify that predominantly bullish signals produce BULLISH."""
         daily_df = _make_ohlcv_df(100, "up")
         intraday_df = _make_5m_df(200, base_price=float(daily_df["Close"].iloc[-1]))
 
@@ -142,7 +142,7 @@ class TestCompositeSignal:
             assert result.composite_score == "BULLISH"
 
     def test_composite_bearish(self) -> None:
-        """Verifica che segnali prevalentemente bearish diano BEARISH."""
+        """Verify that predominantly bearish signals produce BEARISH."""
         daily_df = _make_ohlcv_df(100, "down")
         intraday_df = _make_5m_df(200, base_price=float(daily_df["Close"].iloc[-1]))
 
@@ -159,7 +159,7 @@ class TestCompositeSignal:
             assert result.composite_score == "BEARISH"
 
     def test_composite_neutral_on_mixed(self) -> None:
-        """Verifica che segnali misti diano NEUTRAL con confidenza 40-60%."""
+        """Verify that mixed signals produce NEUTRAL with confidence 40-60%."""
         analysis = AssetAnalysis(
             symbol="TEST=F",
             display_name="Test",
@@ -180,7 +180,7 @@ class TestCompositeSignal:
 
 class TestErrorHandling:
     def test_yfinance_failure_returns_error(self) -> None:
-        """Verifica che un errore yfinance restituisca un asset con errore."""
+        """Verify that a yfinance error returns an asset with error."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(side_effect=Exception("Connection timeout"))
 
@@ -192,7 +192,7 @@ class TestErrorHandling:
         assert "Connection timeout" in results[0].error
 
     def test_empty_dataframe_returns_error(self) -> None:
-        """Verifica che dati vuoti da yfinance vengano gestiti."""
+        """Verify that empty data from yfinance is handled."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(return_value=pd.DataFrame())
 
@@ -203,7 +203,7 @@ class TestErrorHandling:
         assert results[0].error is not None
 
     def test_invalid_ticker_no_crash(self) -> None:
-        """Verifica che un ticker invalido non causi crash."""
+        """Verify that an invalid ticker does not cause a crash."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(return_value=pd.DataFrame())
 
@@ -217,7 +217,7 @@ class TestErrorHandling:
 
 class TestAssetAnalysisSerialization:
     def test_to_dict(self) -> None:
-        """Verifica la serializzazione di AssetAnalysis."""
+        """Verify serialization of AssetAnalysis."""
         analysis = AssetAnalysis(
             symbol="NQ=F",
             display_name="NASDAQ 100",
@@ -235,7 +235,7 @@ class TestAssetAnalysisSerialization:
         assert d["error"] is None
 
     def test_to_dict_with_error(self) -> None:
-        """Verifica serializzazione con errore."""
+        """Verify serialization with error."""
         analysis = AssetAnalysis(
             symbol="ERR=F",
             display_name="Error",
@@ -250,7 +250,7 @@ class TestAssetAnalysisSerialization:
 
 class TestNoVolumeAsset:
     def test_fx_pair_no_volume_vwap_neutral(self) -> None:
-        """Verifica che un asset senza volume abbia VWAP neutro."""
+        """Verify that an asset without volume has neutral VWAP."""
         daily_df = _make_ohlcv_df(100, "up")
         # Create 5m data with zero volume (FX-like)
         intraday_df = _make_5m_df(200)
@@ -267,12 +267,12 @@ class TestNoVolumeAsset:
         vwap_signal = next((s for s in result.signals if s.name == "VWAP"), None)
         assert vwap_signal is not None
         assert vwap_signal.label == "NEUTRAL"
-        assert "non disponibile" in vwap_signal.detail
+        assert "not available" in vwap_signal.detail
 
 
 class TestMultipleAssets:
     def test_analyze_multiple_assets(self) -> None:
-        """Verifica analisi di piu' asset contemporaneamente."""
+        """Verify analysis of multiple assets simultaneously."""
         daily_df = _make_ohlcv_df(100, "up")
         intraday_df = _make_5m_df(200)
 
