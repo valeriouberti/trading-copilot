@@ -1,0 +1,325 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Trading Copilot — EMA Pullback Strategy with LLM Bias Filter
+
+//@version=6
+indicator("Trading Copilot — EMA Pullback", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ─────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────
+
+// Manual bias from Python report (set this each morning)
+i_bias = input.string("NEUTRAL", "LLM Bias (from report)", options=["BULLISH", "BEARISH", "NEUTRAL"], group="Report Settings")
+i_regime = input.string("NEUTRAL", "Regime (from report)", options=["LONG", "SHORT", "NEUTRAL"], group="Report Settings")
+i_confidence = input.int(50, "Report Confidence %", minval=0, maxval=100, group="Report Settings")
+i_flags = input.bool(false, "Validation Flags Present?", tooltip="Set TRUE if the report shows any red flags (SENTIMENT_MISMATCH, DIRECTION_CONFLICT). Forces NEUTRAL regime.", group="Report Settings")
+
+// EMA settings
+i_ema_fast = input.int(20, "EMA Fast Length", minval=5, maxval=50, group="EMA Settings")
+i_ema_slow = input.int(50, "EMA Slow Length", minval=20, maxval=200, group="EMA Settings")
+
+// RSI settings
+i_rsi_len = input.int(14, "RSI Length", minval=5, maxval=30, group="RSI Settings")
+i_rsi_ob = input.int(70, "RSI Overbought", minval=60, maxval=90, group="RSI Settings")
+i_rsi_os = input.int(30, "RSI Oversold", minval=10, maxval=40, group="RSI Settings")
+
+// ATR settings (for SL/TP)
+i_atr_len = input.int(14, "ATR Length", minval=5, maxval=30, group="Risk Management")
+i_sl_mult = input.float(1.5, "SL Multiplier (× ATR)", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+i_tp_mult = input.float(3.0, "TP Multiplier (× ATR)", minval=1.0, maxval=10.0, step=0.5, group="Risk Management")
+i_risk_pct = input.float(1.0, "Risk % per Trade", minval=0.1, maxval=5.0, step=0.1, group="Risk Management")
+i_capital = input.float(5000, "Capital (€)", minval=100, group="Risk Management")
+
+// Display settings
+i_show_signals = input.bool(true, "Show Entry Arrows", group="Display")
+i_show_sl_tp = input.bool(true, "Show SL/TP Lines on Entry", group="Display")
+i_show_bg = input.bool(true, "Show Trend Background", group="Display")
+i_show_vwap = input.bool(true, "Show VWAP", group="Display")
+i_show_table = input.bool(true, "Show Info Table", group="Display")
+i_table_pos = input.string("Top Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Display")
+
+// Pullback sensitivity
+i_touch_pct = input.float(0.15, "EMA Touch Threshold %", minval=0.01, maxval=1.0, step=0.01, tooltip="How close price must get to EMA20 to count as a 'touch'. Lower = stricter.", group="Pullback Settings")
+i_rejection_bars = input.int(3, "Max Bars for Rejection", minval=1, maxval=10, tooltip="After touching EMA20, how many bars to wait for rejection candle.", group="Pullback Settings")
+
+// ─────────────────────────────────────────────────────────────────────
+// CALCULATIONS
+// ─────────────────────────────────────────────────────────────────────
+
+// EMAs
+ema_fast = ta.ema(close, i_ema_fast)
+ema_slow = ta.ema(close, i_ema_slow)
+
+// Trend structure
+bullish_structure = ema_fast > ema_slow
+bearish_structure = ema_fast < ema_slow
+
+// RSI
+rsi = ta.rsi(close, i_rsi_len)
+rsi_ok_long = rsi < i_rsi_ob
+rsi_ok_short = rsi > i_rsi_os
+
+// ATR
+atr = ta.atr(i_atr_len)
+atr_pct = (atr / close) * 100
+
+// VWAP
+vwap_val = ta.vwap(hlc3)
+above_vwap = close > vwap_val
+below_vwap = close < vwap_val
+
+// MACD
+[macd_line, signal_line, hist_line] = ta.macd(close, 12, 26, 9)
+macd_bullish = hist_line > 0
+macd_bearish = hist_line < 0
+
+// ─────────────────────────────────────────────────────────────────────
+// EFFECTIVE REGIME (flags override to NEUTRAL)
+// ─────────────────────────────────────────────────────────────────────
+
+effective_regime = i_flags ? "NEUTRAL" : i_regime
+
+// ─────────────────────────────────────────────────────────────────────
+// PULLBACK DETECTION — EMA20 Touch + Rejection
+// ─────────────────────────────────────────────────────────────────────
+
+// Distance from EMA20 as percentage
+dist_to_ema = math.abs(close - ema_fast) / ema_fast * 100
+touched_ema = dist_to_ema <= i_touch_pct
+
+// Track if price touched EMA20 recently (within N bars)
+var int bars_since_touch = 100
+if touched_ema
+    bars_since_touch := 0
+else
+    bars_since_touch += 1
+
+recent_touch = bars_since_touch <= i_rejection_bars
+
+// ── LONG PULLBACK: price dips to EMA20, then bounces above ──
+// Candle must close above EMA20 after recent touch, coming from below/at EMA20
+long_rejection = recent_touch and close > ema_fast and close > open and low <= ema_fast * (1 + i_touch_pct / 100)
+
+// ── SHORT PULLBACK: price rallies to EMA20, then rejects below ──
+// Candle must close below EMA20 after recent touch, coming from above/at EMA20
+short_rejection = recent_touch and close < ema_fast and close < open and high >= ema_fast * (1 - i_touch_pct / 100)
+
+// ─────────────────────────────────────────────────────────────────────
+// ENTRY CONDITIONS
+// ─────────────────────────────────────────────────────────────────────
+
+// All pre-conditions for LONG
+long_preconditions = bullish_structure and above_vwap and rsi_ok_long
+
+// All pre-conditions for SHORT
+short_preconditions = bearish_structure and below_vwap and rsi_ok_short
+
+// Full LONG signal: regime allows + structure + pullback rejection + bias filter
+long_signal = effective_regime == "LONG" and long_preconditions and long_rejection and i_bias != "BEARISH"
+
+// Full SHORT signal: regime allows + structure + pullback rejection + bias filter
+short_signal = effective_regime == "SHORT" and short_preconditions and short_rejection and i_bias != "BULLISH"
+
+// Prevent repeated signals — only fire on first bar of signal
+var bool in_long = false
+var bool in_short = false
+
+long_entry = long_signal and not in_long
+short_entry = short_signal and not in_short
+
+if long_entry
+    in_long := true
+    in_short := false
+if short_entry
+    in_short := true
+    in_long := false
+
+// Reset position state when structure breaks
+if in_long and not bullish_structure
+    in_long := false
+if in_short and not bearish_structure
+    in_short := false
+
+// ─────────────────────────────────────────────────────────────────────
+// SL / TP CALCULATIONS
+// ─────────────────────────────────────────────────────────────────────
+
+var float entry_price = na
+var float sl_price = na
+var float tp_price = na
+var float position_size = na
+
+if long_entry
+    entry_price := close
+    sl_price := close - atr * i_sl_mult
+    tp_price := close + atr * i_tp_mult
+    sl_dist = close - sl_price
+    position_size := sl_dist > 0 ? (i_capital * i_risk_pct / 100) / sl_dist : 0
+
+if short_entry
+    entry_price := close
+    sl_price := close + atr * i_sl_mult
+    tp_price := close - atr * i_tp_mult
+    sl_dist = sl_price - close
+    position_size := sl_dist > 0 ? (i_capital * i_risk_pct / 100) / sl_dist : 0
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — EMAs, VWAP, Background
+// ─────────────────────────────────────────────────────────────────────
+
+// EMAs
+plot(ema_fast, "EMA Fast", color=color.new(#f97316, 0), linewidth=2)  // Orange
+plot(ema_slow, "EMA Slow", color=color.new(#3b82f6, 0), linewidth=2)  // Blue
+
+// VWAP
+plot(i_show_vwap ? vwap_val : na, "VWAP", color=color.new(#ffffff, 30), linewidth=1, style=plot.style_circles)
+
+// Trend background
+bg_color = not i_show_bg ? na : bullish_structure ? color.new(#22c55e, 92) : bearish_structure ? color.new(#ef4444, 92) : na
+bgcolor(bg_color, title="Trend Background")
+
+// Regime background — subtle highlight when regime is active
+regime_color = effective_regime == "LONG" ? color.new(#22c55e, 96) : effective_regime == "SHORT" ? color.new(#ef4444, 96) : na
+bgcolor(regime_color, title="Regime Background")
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — Entry Arrows
+// ─────────────────────────────────────────────────────────────────────
+
+plotshape(i_show_signals and long_entry, "LONG Entry", shape.triangleup, location.belowbar, color.new(#22c55e, 0), size=size.normal, text="LONG")
+plotshape(i_show_signals and short_entry, "SHORT Entry", shape.triangledown, location.abovebar, color.new(#ef4444, 0), size=size.normal, text="SHORT")
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — SL/TP Lines (drawn on entry, persist until structure break)
+// ─────────────────────────────────────────────────────────────────────
+
+var line sl_line = na
+var line tp_line = na
+var line entry_line = na
+var label sl_label = na
+var label tp_label = na
+
+if (long_entry or short_entry) and i_show_sl_tp
+    // Clean up previous lines
+    if not na(sl_line)
+        line.delete(sl_line)
+    if not na(tp_line)
+        line.delete(tp_line)
+    if not na(entry_line)
+        line.delete(entry_line)
+    if not na(sl_label)
+        label.delete(sl_label)
+    if not na(tp_label)
+        label.delete(tp_label)
+
+    entry_line := line.new(bar_index, entry_price, bar_index + 50, entry_price, color=color.new(#ffffff, 30), style=line.style_dashed, width=1)
+    sl_line := line.new(bar_index, sl_price, bar_index + 50, sl_price, color=color.new(#ef4444, 0), style=line.style_solid, width=2)
+    tp_line := line.new(bar_index, tp_price, bar_index + 50, tp_price, color=color.new(#22c55e, 0), style=line.style_solid, width=2)
+    sl_label := label.new(bar_index + 52, sl_price, "SL " + str.tostring(sl_price, format.mintick), color=color.new(#ef4444, 80), textcolor=#ef4444, style=label.style_label_left, size=size.small)
+    tp_label := label.new(bar_index + 52, tp_price, "TP " + str.tostring(tp_price, format.mintick), color=color.new(#22c55e, 80), textcolor=#22c55e, style=label.style_label_left, size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — Pre-condition dots (structure ready but no pullback yet)
+// ─────────────────────────────────────────────────────────────────────
+
+// Small dots when structure is aligned but waiting for pullback
+long_ready = effective_regime == "LONG" and long_preconditions and not long_entry and not in_long
+short_ready = effective_regime == "SHORT" and short_preconditions and not short_entry and not in_short
+
+plotshape(long_ready and touched_ema, "Pullback Touch (Long)", shape.diamond, location.belowbar, color.new(#22c55e, 60), size=size.tiny)
+plotshape(short_ready and touched_ema, "Pullback Touch (Short)", shape.diamond, location.abovebar, color.new(#ef4444, 60), size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────────────
+
+alertcondition(long_entry, "LONG Entry Signal", "Trading Copilot: LONG entry confirmed — EMA20 pullback bounce")
+alertcondition(short_entry, "SHORT Entry Signal", "Trading Copilot: SHORT entry confirmed — EMA20 pullback rejection")
+alertcondition(long_ready and touched_ema, "LONG Pullback Touch", "Trading Copilot: Price touching EMA20 — watch for bounce (LONG regime)")
+alertcondition(short_ready and touched_ema, "SHORT Pullback Touch", "Trading Copilot: Price touching EMA20 — watch for rejection (SHORT regime)")
+
+// ─────────────────────────────────────────────────────────────────────
+// INFO TABLE
+// ─────────────────────────────────────────────────────────────────────
+
+if barstate.islast and i_show_table
+    // Table position
+    t_pos = switch i_table_pos
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+    var table info = table.new(t_pos, 2, 14, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
+
+    // Header
+    table.cell(info, 0, 0, "TRADING COPILOT", text_color=#ffffff, text_size=size.normal, bgcolor=color.new(#3b82f6, 20), text_halign=text.align_center)
+    table.merge_cells(info, 0, 0, 1, 0)
+
+    // Regime
+    regime_col = effective_regime == "LONG" ? #22c55e : effective_regime == "SHORT" ? #ef4444 : #eab308
+    regime_txt = effective_regime + (i_flags ? " (FLAGS!)" : "")
+    table.cell(info, 0, 1, "Regime", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 1, regime_txt, text_color=regime_col, text_size=size.small)
+
+    // LLM Bias
+    bias_col = i_bias == "BULLISH" ? #22c55e : i_bias == "BEARISH" ? #ef4444 : #eab308
+    table.cell(info, 0, 2, "LLM Bias", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 2, i_bias, text_color=bias_col, text_size=size.small)
+
+    // Confidence
+    table.cell(info, 0, 3, "Confidence", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 3, str.tostring(i_confidence) + "%", text_color=#ffffff, text_size=size.small)
+
+    // Separator
+    table.cell(info, 0, 4, "── TECHNICALS ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 4, 1, 4)
+
+    // EMA Trend
+    ema_col = bullish_structure ? #22c55e : bearish_structure ? #ef4444 : #eab308
+    ema_txt = bullish_structure ? "BULLISH" : bearish_structure ? "BEARISH" : "FLAT"
+    table.cell(info, 0, 5, "EMA " + str.tostring(i_ema_fast) + "/" + str.tostring(i_ema_slow), text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 5, ema_txt, text_color=ema_col, text_size=size.small)
+
+    // RSI
+    rsi_col = rsi > i_rsi_ob ? #ef4444 : rsi < i_rsi_os ? #22c55e : #ffffff
+    rsi_status = rsi > i_rsi_ob ? " OB" : rsi < i_rsi_os ? " OS" : ""
+    table.cell(info, 0, 6, "RSI(" + str.tostring(i_rsi_len) + ")", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 6, str.tostring(rsi, "#.1") + rsi_status, text_color=rsi_col, text_size=size.small)
+
+    // VWAP
+    vwap_col = above_vwap ? #22c55e : #ef4444
+    vwap_txt = above_vwap ? "ABOVE" : "BELOW"
+    vwap_dist_pct = (close - vwap_val) / vwap_val * 100
+    table.cell(info, 0, 7, "vs VWAP", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 7, vwap_txt + " (" + str.tostring(vwap_dist_pct, "+#.2") + "%)", text_color=vwap_col, text_size=size.small)
+
+    // MACD
+    macd_col = macd_bullish ? #22c55e : #ef4444
+    macd_txt = macd_bullish ? "BULLISH" : "BEARISH"
+    table.cell(info, 0, 8, "MACD", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 8, macd_txt, text_color=macd_col, text_size=size.small)
+
+    // ATR
+    table.cell(info, 0, 9, "ATR(" + str.tostring(i_atr_len) + ")", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 9, str.tostring(atr, format.mintick) + " (" + str.tostring(atr_pct, "#.2") + "%)", text_color=#ffffff, text_size=size.small)
+
+    // Separator
+    table.cell(info, 0, 10, "── RISK ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 10, 1, 10)
+
+    // SL distance
+    sl_dist = atr * i_sl_mult
+    table.cell(info, 0, 11, "SL Distance", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 11, str.tostring(sl_dist, format.mintick) + " pts", text_color=#ef4444, text_size=size.small)
+
+    // TP distance
+    tp_dist = atr * i_tp_mult
+    table.cell(info, 0, 12, "TP Distance", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 12, str.tostring(tp_dist, format.mintick) + " pts", text_color=#22c55e, text_size=size.small)
+
+    // R:R ratio
+    rr = i_sl_mult > 0 ? i_tp_mult / i_sl_mult : 0
+    table.cell(info, 0, 13, "R:R", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 13, "1:" + str.tostring(rr, "#.1"), text_color=#ffffff, text_size=size.small)
