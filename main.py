@@ -166,7 +166,7 @@ def main() -> None:
     else:
         print("[2b/5] Recupero dati Polymarket...")
         try:
-            poly_data = get_polymarket_context(assets)
+            poly_data = get_polymarket_context(assets, groq_model=groq_model)
             p_count = poly_data.get("market_count", 0)
             p_signal = poly_data.get("signal", "NEUTRAL")
             print(f"      Polymarket: {p_count} mercati analizzati, signal={p_signal}")

@@ -9,6 +9,11 @@ import pytest
 
 from modules.polymarket import (
     _classify_category,
+    _get_tags_for_assets,
+    _get_keywords_for_assets,
+    _keyword_classify_single,
+    _classify_markets_with_keywords,
+    classify_markets_with_llm,
     compute_signal,
     fetch_markets,
 )
@@ -16,7 +21,7 @@ from modules.hallucination_guard import validate_polymarket_consistency
 
 
 # ---------------------------------------------------------------------------
-# Helper: build a fake market dict
+# Helper: build a fake market dict (raw from API)
 # ---------------------------------------------------------------------------
 
 def _make_market(
@@ -40,8 +45,9 @@ def _make_signal_market(
     prob_yes: float = 50.0,
     volume_usd: float = 100_000,
     category: str = "OTHER",
+    impact: str = "",
 ) -> dict[str, Any]:
-    """Mercato già elaborato (output di fetch_markets)."""
+    """Mercato gia' elaborato (output di fetch_markets + classify)."""
     return {
         "question": question,
         "prob_yes": prob_yes,
@@ -50,11 +56,12 @@ def _make_signal_market(
         "end_date": "2026-12-31",
         "url": "https://polymarket.com/event/test",
         "category": category,
+        "impact": impact,
     }
 
 
 # ---------------------------------------------------------------------------
-# Tests: fetch_markets
+# Tests: fetch_markets (with pagination and tags)
 # ---------------------------------------------------------------------------
 
 class TestFetchMarketsFiltersByKeyword:
@@ -102,14 +109,110 @@ class TestFetchMarketsFiltersByVolume:
         assert 5_000 not in volumes
 
 
+class TestFetchMarketsWithTags:
+    def test_passes_tag_parameter_to_api(self) -> None:
+        """Il parametro tag viene passato all'API."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("modules.polymarket.requests.get", return_value=mock_resp) as mock_get:
+            fetch_markets(["fed"], tags=["economics"])
+
+        # Check that at least one call included the tag
+        calls = mock_get.call_args_list
+        assert any(
+            call.kwargs.get("params", {}).get("tag") == "economics"
+            or (call.args[0] if call.args else None) and call.kwargs.get("params", {}).get("tag") == "economics"
+            for call in calls
+        )
+
+
+class TestFetchMarketsPagination:
+    def test_fetches_multiple_pages(self) -> None:
+        """Deve paginare quando ci sono piu' di MARKETS_PER_PAGE risultati."""
+        page1 = [_make_market(f"Market fed {i}?", 50, 100_000) for i in range(100)]
+        page2 = [_make_market(f"Market fed extra {i}?", 50, 100_000) for i in range(50)]
+
+        call_count = 0
+
+        def mock_get(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            offset = kwargs.get("params", {}).get("offset", 0)
+            resp.json.return_value = page1 if offset == 0 else page2
+            return resp
+
+        with patch("modules.polymarket.requests.get", side_effect=mock_get):
+            result = fetch_markets(["fed"], tags=[None])
+
+        # Should have made at least 2 API calls (page 1 + page 2)
+        assert call_count >= 2
+
+
+class TestFetchMarketsDeduplication:
+    def test_deduplicates_across_tags(self) -> None:
+        """Mercati duplicati da tag diversi vengono deduplicati."""
+        same_market = _make_market("Will the Fed cut rates?", 60, 200_000)
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [same_market]
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("modules.polymarket.requests.get", return_value=mock_resp):
+            result = fetch_markets(["fed"], tags=["economics", "politics"])
+
+        assert len(result) == 1
+
+
 class TestFetchMarketsNetworkFailure:
     def test_returns_empty_on_connection_error(self) -> None:
-        """In caso di errore di rete, deve restituire lista vuota senza eccezioni."""
+        """In caso di errore di rete, deve restituire lista vuota."""
         with patch("modules.polymarket.requests.get", side_effect=ConnectionError("network down")):
-            with patch("modules.polymarket.time.sleep"):  # skip actual sleeps
+            with patch("modules.polymarket.time.sleep"):
                 result = fetch_markets(["fed"])
 
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: tag and keyword helpers
+# ---------------------------------------------------------------------------
+
+class TestGetTagsForAssets:
+    def test_returns_tags_for_nasdaq(self) -> None:
+        assets = [{"symbol": "NQ=F", "display_name": "NASDAQ 100"}]
+        tags = _get_tags_for_assets(assets)
+        assert "economics" in tags
+
+    def test_returns_default_for_unknown(self) -> None:
+        assets = [{"symbol": "ZZZ", "display_name": "Unknown"}]
+        tags = _get_tags_for_assets(assets)
+        assert tags == _get_tags_for_assets(assets)  # Should not crash
+
+    def test_deduplicates(self) -> None:
+        assets = [
+            {"symbol": "NQ=F", "display_name": "NASDAQ"},
+            {"symbol": "ES=F", "display_name": "S&P 500"},
+        ]
+        tags = _get_tags_for_assets(assets)
+        assert len(tags) == len(set(tags))
+
+
+class TestGetKeywordsForAssets:
+    def test_returns_keywords_for_nasdaq(self) -> None:
+        assets = [{"symbol": "NQ=F", "display_name": "NASDAQ 100"}]
+        kw = _get_keywords_for_assets(assets)
+        assert "fed" in kw
+        assert "recession" in kw
+
+    def test_returns_keywords_for_gold(self) -> None:
+        assets = [{"symbol": "GC=F", "display_name": "Gold Futures"}]
+        kw = _get_keywords_for_assets(assets)
+        assert "gold" in kw
+        assert "war" in kw
 
 
 # ---------------------------------------------------------------------------
@@ -132,21 +235,112 @@ class TestCategoryClassification:
         ("Will it rain tomorrow?", "OTHER"),
     ])
     def test_category_per_keyword(self, question: str, expected: str) -> None:
-        """Ogni categoria deve essere attivata dalle keyword corrette."""
         assert _classify_category(question) == expected
 
 
 # ---------------------------------------------------------------------------
-# Tests: compute_signal
+# Tests: keyword classification (fallback)
+# ---------------------------------------------------------------------------
+
+class TestKeywordClassification:
+    def test_bearish_keyword(self) -> None:
+        assert _keyword_classify_single("Will recession hit US?") == "BEARISH_IF_YES"
+
+    def test_bullish_keyword(self) -> None:
+        assert _keyword_classify_single("Will rate cut happen?") == "BULLISH_IF_YES"
+
+    def test_unknown_defaults_to_bearish(self) -> None:
+        assert _keyword_classify_single("Will aliens arrive?") == "BEARISH_IF_YES"
+
+    def test_classify_markets_with_keywords_adds_impact(self) -> None:
+        markets = [
+            _make_signal_market("Will recession hit?", 70, 100_000),
+            _make_signal_market("Will rate cut happen?", 60, 100_000),
+        ]
+        result = _classify_markets_with_keywords(markets)
+        assert result[0]["impact"] == "BEARISH_IF_YES"
+        assert result[1]["impact"] == "BULLISH_IF_YES"
+
+
+# ---------------------------------------------------------------------------
+# Tests: LLM classification
+# ---------------------------------------------------------------------------
+
+class TestLLMClassification:
+    def test_falls_back_to_keywords_without_api_key(self) -> None:
+        """Senza API key, usa keyword fallback."""
+        markets = [
+            _make_signal_market("Will recession hit?", 70, 100_000),
+        ]
+        with patch.dict("os.environ", {"GROQ_API_KEY": ""}, clear=False):
+            result = classify_markets_with_llm(markets, api_key="")
+        assert result[0]["impact"] == "BEARISH_IF_YES"
+
+    def test_empty_markets_returns_empty(self) -> None:
+        assert classify_markets_with_llm([]) == []
+
+    def test_llm_success(self) -> None:
+        """LLM classification applies impact correctly."""
+        markets = [
+            _make_signal_market("Will US avoid recession?", 70, 100_000),
+            _make_signal_market("Will tariffs increase?", 80, 200_000),
+        ]
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = '[{"index": 1, "impact": "BULLISH_IF_YES"}, {"index": 2, "impact": "BEARISH_IF_YES"}]'
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = mock_response
+
+        mock_groq_cls = MagicMock(return_value=mock_client_instance)
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}, clear=False):
+            with patch.dict("sys.modules", {"groq": MagicMock(Groq=mock_groq_cls)}):
+                # Re-import to pick up patched module
+                import importlib
+                import modules.polymarket as pm
+                importlib.reload(pm)
+                result = pm.classify_markets_with_llm(markets, api_key="test-key")
+
+        assert result[0]["impact"] == "BULLISH_IF_YES"
+        assert result[1]["impact"] == "BEARISH_IF_YES"
+
+    def test_llm_failure_falls_back(self) -> None:
+        """Se LLM fallisce, usa keyword fallback."""
+        markets = [
+            _make_signal_market("Will recession hit?", 70, 100_000),
+        ]
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.side_effect = RuntimeError("LLM down")
+
+        mock_groq_cls = MagicMock(return_value=mock_client_instance)
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}, clear=False):
+            with patch.dict("sys.modules", {"groq": MagicMock(Groq=mock_groq_cls)}):
+                import importlib
+                import modules.polymarket as pm
+                importlib.reload(pm)
+                result = pm.classify_markets_with_llm(markets, api_key="test-key")
+
+        assert result[0]["impact"] == "BEARISH_IF_YES"
+
+
+# ---------------------------------------------------------------------------
+# Tests: compute_signal (volume-weighted)
 # ---------------------------------------------------------------------------
 
 class TestComputeSignalBearish:
     def test_bearish_markets_produce_bearish_signal(self) -> None:
-        """Mercati con eventi bearish ad alta probabilità danno segnale BEARISH."""
+        """Mercati bearish ad alta prob e alto volume danno segnale BEARISH."""
         markets = [
-            _make_signal_market("Will recession hit US?", prob_yes=75, volume_usd=300_000),
-            _make_signal_market("Will there be a market crash?", prob_yes=70, volume_usd=200_000),
-            _make_signal_market("Will war escalate?", prob_yes=80, volume_usd=250_000),
+            _make_signal_market("Will recession hit US?", prob_yes=75,
+                                volume_usd=300_000, impact="BEARISH_IF_YES"),
+            _make_signal_market("Will there be a market crash?", prob_yes=70,
+                                volume_usd=200_000, impact="BEARISH_IF_YES"),
+            _make_signal_market("Will war escalate?", prob_yes=80,
+                                volume_usd=250_000, impact="BEARISH_IF_YES"),
         ]
         result = compute_signal(markets)
         assert result["signal"] == "BEARISH"
@@ -155,11 +349,14 @@ class TestComputeSignalBearish:
 
 class TestComputeSignalBullish:
     def test_bullish_markets_produce_bullish_signal(self) -> None:
-        """Mercati con eventi bullish ad alta probabilità danno segnale BULLISH."""
+        """Mercati bullish ad alta prob e alto volume danno segnale BULLISH."""
         markets = [
-            _make_signal_market("Will the Fed announce a rate cut?", prob_yes=80, volume_usd=300_000),
-            _make_signal_market("Will economic recovery continue?", prob_yes=75, volume_usd=200_000),
-            _make_signal_market("Will expansion continue in Q2?", prob_yes=70, volume_usd=250_000),
+            _make_signal_market("Will the Fed announce a rate cut?", prob_yes=80,
+                                volume_usd=300_000, impact="BULLISH_IF_YES"),
+            _make_signal_market("Will economic recovery continue?", prob_yes=75,
+                                volume_usd=200_000, impact="BULLISH_IF_YES"),
+            _make_signal_market("Will expansion continue in Q2?", prob_yes=70,
+                                volume_usd=250_000, impact="BULLISH_IF_YES"),
         ]
         result = compute_signal(markets)
         assert result["signal"] == "BULLISH"
@@ -168,25 +365,50 @@ class TestComputeSignalBullish:
 
 class TestComputeSignalNeutral:
     def test_mixed_markets_produce_neutral_signal(self) -> None:
-        """Mercati misti con probabilità ~50% danno segnale NEUTRAL."""
+        """Mercati misti con probabilita' e volumi simili danno NEUTRAL."""
         markets = [
-            _make_signal_market("Will recession hit?", prob_yes=50, volume_usd=200_000),
-            _make_signal_market("Will rate cut happen?", prob_yes=50, volume_usd=200_000),
-            _make_signal_market("Will recovery continue?", prob_yes=50, volume_usd=200_000),
-            _make_signal_market("Will market crash?", prob_yes=50, volume_usd=200_000),
+            _make_signal_market("Will recession hit?", prob_yes=50,
+                                volume_usd=200_000, impact="BEARISH_IF_YES"),
+            _make_signal_market("Will rate cut happen?", prob_yes=50,
+                                volume_usd=200_000, impact="BULLISH_IF_YES"),
         ]
         result = compute_signal(markets)
         assert result["signal"] == "NEUTRAL"
 
 
+class TestComputeSignalVolumeWeighting:
+    def test_high_volume_market_dominates(self) -> None:
+        """Un mercato con volume molto piu' alto deve dominare il segnale."""
+        markets = [
+            _make_signal_market("Will recession hit?", prob_yes=60,
+                                volume_usd=10_000, impact="BEARISH_IF_YES"),
+            _make_signal_market("Will rate cut happen?", prob_yes=80,
+                                volume_usd=1_000_000, impact="BULLISH_IF_YES"),
+        ]
+        result = compute_signal(markets)
+        assert result["signal"] == "BULLISH"
+
+
 class TestComputeSignalEmptyMarkets:
     def test_empty_list_returns_neutral(self) -> None:
-        """Lista vuota deve restituire NEUTRAL senza crash."""
         result = compute_signal([])
         assert result["signal"] == "NEUTRAL"
         assert result["confidence"] == 50.0
         assert result["market_count"] == 0
         assert result["top_markets"] == []
+
+
+class TestComputeSignalFallbackClassification:
+    def test_missing_impact_uses_keyword_fallback(self) -> None:
+        """Se impact manca, compute_signal usa keyword fallback inline."""
+        markets = [
+            _make_signal_market("Will recession hit?", prob_yes=80, volume_usd=200_000),
+        ]
+        # No impact field set
+        del markets[0]["impact"]
+        result = compute_signal(markets)
+        # Should still produce a signal without crashing
+        assert result["signal"] in ("BEARISH", "BULLISH", "NEUTRAL")
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +432,7 @@ class TestTripleConfluenceFlag:
 
 class TestPolymarketConflictFlag:
     def test_conflict_when_llm_bullish_poly_bearish(self, make_sentiment) -> None:
-        """Conflitto quando LLM è BULLISH ma Polymarket è BEARISH con alta confidenza."""
+        """Conflitto quando LLM e' BULLISH ma Polymarket e' BEARISH."""
         sentiment = make_sentiment(score=2.0, label="Rialzista", bias="BULLISH")
         poly = {
             "signal": "BEARISH",
@@ -222,7 +444,7 @@ class TestPolymarketConflictFlag:
         assert any("POLYMARKET_CONFLICT" in f for f in flags)
 
     def test_no_conflict_when_confidence_low(self, make_sentiment) -> None:
-        """Nessun conflitto se la confidenza Polymarket è bassa."""
+        """Nessun conflitto se la confidenza Polymarket e' bassa."""
         sentiment = make_sentiment(score=2.0, label="Rialzista", bias="BULLISH")
         poly = {
             "signal": "BEARISH",

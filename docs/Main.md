@@ -424,20 +424,62 @@ Esempi di mercati attivi:
 
 ### Come il Sistema Interpreta Polymarket
 
-Il modulo Polymarket del sistema:
+Il modulo Polymarket del sistema opera in 5 fasi:
 
-1. **Scarica** automaticamente i mercati attivi rilevanti per l'asset
-   che si intende tradare (filtro per keyword: "fed", "recession",
-   "inflation" per NAS100; "ecb", "euro" per EURUSD; ecc.)
+1. **Recupero con paginazione e tag**: il sistema interroga l'API Gamma
+   di Polymarket utilizzando tag di categoria specifici per gli asset
+   configurati (es. `economics`, `politics` per NAS100/S&P500).
+   Per ciascun tag, recupera fino a 300 mercati (3 pagine da 100),
+   ordinati per volume decrescente. I mercati duplicati tra tag
+   diversi vengono automaticamente deduplicati.
 
-2. **Classifica** ogni mercato come evento BULLISH o BEARISH per i mercati
-   (es. "la Fed taglia i tassi" = evento bullish; "recessione USA" = bearish)
+2. **Filtro per keyword e volume**: i mercati recuperati vengono filtrati
+   client-side per parole chiave rilevanti (es. "fed", "recession",
+   "inflation" per NAS100; "ecb", "euro" per EURUSD; ecc.) e per
+   volume minimo > $10.000. Mercati illiquidi vengono esclusi
+   perché le probabilità con pochi partecipanti sono inaffidabili.
 
-3. **Calcola** la probabilità media pesata degli eventi bearish
-   vs bullish per produrre un segnale direzionale
+3. **Classificazione LLM**: ogni mercato viene inviato al modello LLM
+   (Llama 3.3 70B via Groq) che classifica l'impatto dell'evento:
+   - `BULLISH_IF_YES`: se l'evento SÌ si verifica, è positivo per i mercati
+     (es. "La Fed taglierà i tassi?" → SÌ = bullish)
+   - `BEARISH_IF_YES`: se l'evento SÌ si verifica, è negativo per i mercati
+     (es. "Recessione USA?" → SÌ = bearish)
 
-4. **Filtra** per volume: solo mercati con > $10.000 scambiati
-   (mercati illiquidi hanno probabilità inaffidabili)
+   Questo risolve l'ambiguità semantica: un sistema a keyword
+   classificherebbe "Gli USA eviteranno la recessione?" come bearish
+   (contiene "recessione"), ma l'LLM capisce che SÌ = bullish.
+
+   **Fallback**: se Groq non è disponibile (API key assente, errore di rete),
+   il sistema usa automaticamente una classificazione a keyword come backup.
+
+4. **Segnale pesato per volume**: il segnale finale è calcolato
+   pesando la probabilità di ogni mercato per il suo volume.
+   Un mercato con $10M di volume conta molto di più di uno con $10K.
+   Questo evita che mercati marginali distorcano il segnale.
+
+   ```
+
+   Esempio di calcolo:
+   ─────────────────────────────────────────────────────────
+   Mercato A: "Recessione USA?" (BEARISH_IF_YES)
+   Prob SÌ: 60% | Volume: $1M | Peso: 1M/1.1M = 0.91
+   Contributo bearish: 60 × 0.91 = 54.5
+
+   Mercato B: "Fed taglia tassi?" (BULLISH_IF_YES)
+   Prob SÌ: 70% | Volume: $100K | Peso: 100K/1.1M = 0.09
+   Contributo bullish: 70 × 0.09 = 6.3
+
+   Net score = 6.3 - 54.5 = -48.2 → BEARISH
+   ─────────────────────────────────────────────────────────
+
+   ```
+
+5. **Soglie decisionali**:
+   - Net score < -10 → segnale BEARISH
+   - Net score > +10 → segnale BULLISH
+   - Altrimenti → NEUTRAL
+   - Confidenza = min(100%, |net_score| × 2)
 
 ### Perché Polymarket è una Fonte Valida
 
@@ -449,6 +491,41 @@ Per il trader retail, il valore principale è diverso dalle news:
 le news dicono cosa è successo, Polymarket dice cosa il mercato
 **si aspetta che succeda**. Questa informazione forward-looking
 è complementare all'analisi retrospettiva delle notizie.
+
+### Dettagli Tecnici dell'Implementazione
+
+```
+
+Architettura del modulo Polymarket:
+════════════════════════════════════════════════════════════
+
+  Asset configurati (config.yaml)
+         │
+         ▼
+  ┌─────────────────────┐
+  │ _get_tags_for_assets │ → tag API: ["economics", "politics"]
+  │ _get_keywords        │ → keyword client: ["fed", "recession", ...]
+  └─────────────────────┘
+         │
+         ▼
+  ┌─────────────────────┐
+  │   fetch_markets()    │ → API Gamma con paginazione (fino a 300/tag)
+  │   + dedup + filtro   │ → keyword match + volume > $10K
+  └─────────────────────┘
+         │
+         ▼
+  ┌─────────────────────────────┐
+  │ classify_markets_with_llm() │ → Groq LLM: BULLISH_IF_YES / BEARISH_IF_YES
+  │   (fallback: keyword)       │ → Gestisce ambiguità semantica
+  └─────────────────────────────┘
+         │
+         ▼
+  ┌─────────────────────┐
+  │  compute_signal()    │ → Segnale pesato per volume
+  │  (volume-weighted)   │ → BULLISH / BEARISH / NEUTRAL + confidenza
+  └─────────────────────┘
+
+```
 
 ---
 
