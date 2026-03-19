@@ -10,13 +10,11 @@ BEARISH_KEYWORDS = [
     "crash", "drop", "fall", "fear", "sell", "decline", "loss", "plunge",
     "recession", "crisis", "bear", "collapse", "dump", "panic", "risk",
     "warning", "slump", "tumble", "weak", "down", "cut", "lower",
-    "calo", "crollo", "ribasso", "paura", "vendita", "perdita", "crisi",
 ]
 
 BULLISH_KEYWORDS = [
     "rally", "surge", "rise", "gain", "bull", "growth", "record", "high",
     "boost", "jump", "soar", "strong", "up", "buy", "profit", "recovery",
-    "rialzo", "crescita", "record", "guadagno", "rimbalzo", "acquisto",
 ]
 
 # More specific event-level keywords for Polymarket classification

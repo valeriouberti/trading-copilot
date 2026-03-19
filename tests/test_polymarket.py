@@ -11,6 +11,7 @@ from modules.polymarket import (
     _classify_category,
     _get_tags_for_assets,
     _get_keywords_for_assets,
+    _get_tag_slugs_for_assets,
     _keyword_classify_single,
     _classify_markets_with_keywords,
     classify_markets_with_llm,
@@ -21,22 +22,31 @@ from modules.hallucination_guard import validate_polymarket_consistency
 
 
 # ---------------------------------------------------------------------------
-# Helper: build a fake market dict (raw from API)
+# Helper: build a fake market dict (raw from API — nested inside events)
 # ---------------------------------------------------------------------------
 
-def _make_market(
+def _make_raw_market(
     question: str = "Test market?",
     prob_yes: float = 50.0,
     volume: float = 100_000,
     slug: str = "test-market",
 ) -> dict[str, Any]:
-    """Build a mock market for tests."""
+    """Build a mock raw market as it comes from the Gamma API."""
     return {
         "question": question,
         "outcomePrices": f'["{prob_yes / 100:.2f}","{(100 - prob_yes) / 100:.2f}"]',
         "volume": str(volume),
         "slug": slug,
         "endDate": "2026-12-31T00:00:00Z",
+    }
+
+
+def _make_event(markets: list[dict[str, Any]], title: str = "Test Event") -> dict[str, Any]:
+    """Wrap raw markets into an event response as returned by /events."""
+    return {
+        "title": title,
+        "slug": "test-event",
+        "markets": markets,
     }
 
 
@@ -61,79 +71,79 @@ def _make_signal_market(
 
 
 # ---------------------------------------------------------------------------
-# Tests: fetch_markets (with pagination and tags)
+# Tests: fetch_markets (via /events endpoint)
 # ---------------------------------------------------------------------------
 
-class TestFetchMarketsFiltersByKeyword:
-    def test_returns_only_matching_markets(self) -> None:
-        """Only markets with matching keywords should be returned."""
+class TestFetchMarketsFiltersByCategory:
+    def test_returns_only_financial_markets(self) -> None:
+        """Only markets with a known financial category should be returned."""
         raw_markets = [
-            _make_market("Will the Fed cut rates?", 60, 200_000, "fed-cut"),
-            _make_market("Will it rain in NYC?", 40, 200_000, "rain-nyc"),
-            _make_market("Will recession hit in 2026?", 55, 200_000, "recession"),
-            _make_market("Will Bitcoin reach 100k?", 30, 200_000, "btc-100k"),
-            _make_market("Will Mars be colonized?", 10, 200_000, "mars"),
+            _make_raw_market("Will the Fed cut rates?", 60, 200_000, "fed-cut"),
+            _make_raw_market("Will it rain in NYC?", 40, 200_000, "rain-nyc"),
+            _make_raw_market("Will recession hit in 2026?", 55, 200_000, "recession"),
+            _make_raw_market("Will Bitcoin reach 100k?", 30, 200_000, "btc-100k"),
+            _make_raw_market("Will Mars be colonized?", 10, 200_000, "mars"),
         ]
+        event = _make_event(raw_markets)
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = raw_markets
+        mock_resp.json.return_value = [event]
         mock_resp.raise_for_status = MagicMock()
 
         with patch("modules.polymarket.requests.get", return_value=mock_resp):
-            result = fetch_markets(["fed", "recession"])
+            result = fetch_markets(tag_slugs=["fed"])
 
-        assert len(result) == 2
         questions = [m["question"] for m in result]
+        # Fed (FED), recession (MACRO), Bitcoin (CRYPTO) pass; rain and Mars are OTHER
         assert "Will the Fed cut rates?" in questions
         assert "Will recession hit in 2026?" in questions
+        assert "Will Bitcoin reach 100k?" in questions
+        assert "Will it rain in NYC?" not in questions
+        assert "Will Mars be colonized?" not in questions
 
 
 class TestFetchMarketsFiltersByVolume:
     def test_filters_low_volume_markets(self) -> None:
         """Markets with volume below threshold should be excluded."""
         raw_markets = [
-            _make_market("Will recession happen?", 60, 5_000, "low"),
-            _make_market("Will recession strike?", 60, 50_000, "mid"),
-            _make_market("Will recession occur?", 60, 200_000, "high"),
+            _make_raw_market("Will recession happen?", 60, 5_000, "low"),
+            _make_raw_market("Will recession strike?", 60, 50_000, "mid"),
+            _make_raw_market("Will recession occur?", 60, 200_000, "high"),
         ]
+        event = _make_event(raw_markets)
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = raw_markets
+        mock_resp.json.return_value = [event]
         mock_resp.raise_for_status = MagicMock()
 
         with patch("modules.polymarket.requests.get", return_value=mock_resp):
-            result = fetch_markets(["recession"], min_volume_usd=10_000)
+            result = fetch_markets(min_volume_usd=10_000, tag_slugs=["gdp"])
 
         assert len(result) == 2
         volumes = [m["volume_usd"] for m in result]
         assert 5_000 not in volumes
 
 
-class TestFetchMarketsWithTags:
-    def test_passes_tag_parameter_to_api(self) -> None:
-        """The tag parameter is passed to the API."""
+class TestFetchMarketsWithTagSlugs:
+    def test_passes_tag_slug_to_api(self) -> None:
+        """The tag_slug parameter is passed to the /events API."""
         mock_resp = MagicMock()
         mock_resp.json.return_value = []
         mock_resp.raise_for_status = MagicMock()
 
         with patch("modules.polymarket.requests.get", return_value=mock_resp) as mock_get:
-            fetch_markets(["fed"], tags=["economics"])
+            fetch_markets(tag_slugs=["fed"])
 
-        # Check that at least one call included the tag
         calls = mock_get.call_args_list
         assert any(
-            call.kwargs.get("params", {}).get("tag") == "economics"
-            or (call.args[0] if call.args else None) and call.kwargs.get("params", {}).get("tag") == "economics"
+            call.kwargs.get("params", {}).get("tag_slug") == "fed"
             for call in calls
         )
 
 
-class TestFetchMarketsPagination:
-    def test_fetches_multiple_pages(self) -> None:
-        """Should paginate when there are more than MARKETS_PER_PAGE results."""
-        page1 = [_make_market(f"Market fed {i}?", 50, 100_000) for i in range(100)]
-        page2 = [_make_market(f"Market fed extra {i}?", 50, 100_000) for i in range(50)]
-
+class TestFetchMarketsMultipleTagSlugs:
+    def test_fetches_from_multiple_slugs(self) -> None:
+        """Should make one API call per tag_slug."""
         call_count = 0
 
         def mock_get(*args, **kwargs):
@@ -141,28 +151,27 @@ class TestFetchMarketsPagination:
             call_count += 1
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
-            offset = kwargs.get("params", {}).get("offset", 0)
-            resp.json.return_value = page1 if offset == 0 else page2
+            resp.json.return_value = []
             return resp
 
         with patch("modules.polymarket.requests.get", side_effect=mock_get):
-            result = fetch_markets(["fed"], tags=[None])
+            fetch_markets(tag_slugs=["fed", "gdp", "tariffs"])
 
-        # Should have made at least 2 API calls (page 1 + page 2)
-        assert call_count >= 2
+        assert call_count == 3
 
 
 class TestFetchMarketsDeduplication:
-    def test_deduplicates_across_tags(self) -> None:
-        """Duplicate markets from different tags are deduplicated."""
-        same_market = _make_market("Will the Fed cut rates?", 60, 200_000)
+    def test_deduplicates_across_tag_slugs(self) -> None:
+        """Duplicate markets from different tag_slugs are deduplicated."""
+        same_market = _make_raw_market("Will the Fed cut rates?", 60, 200_000)
+        event = _make_event([same_market])
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = [same_market]
+        mock_resp.json.return_value = [event]
         mock_resp.raise_for_status = MagicMock()
 
         with patch("modules.polymarket.requests.get", return_value=mock_resp):
-            result = fetch_markets(["fed"], tags=["economics", "politics"])
+            result = fetch_markets(tag_slugs=["fed", "economy"])
 
         assert len(result) == 1
 
@@ -172,40 +181,76 @@ class TestFetchMarketsNetworkFailure:
         """On network error, should return empty list."""
         with patch("modules.polymarket.requests.get", side_effect=ConnectionError("network down")):
             with patch("modules.polymarket.time.sleep"):
-                result = fetch_markets(["fed"])
+                result = fetch_markets(tag_slugs=["fed"])
 
         assert result == []
 
 
+class TestFetchMarketsOptionalKeywordFilter:
+    def test_keyword_filter_narrows_results(self) -> None:
+        """When keywords are provided, they act as additional filter."""
+        raw_markets = [
+            _make_raw_market("Will the Fed cut rates?", 60, 200_000),
+            _make_raw_market("Will inflation exceed 3%?", 55, 200_000),
+        ]
+        event = _make_event(raw_markets)
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [event]
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("modules.polymarket.requests.get", return_value=mock_resp):
+            result = fetch_markets(keywords=["inflation"], tag_slugs=["fed"])
+
+        assert len(result) == 1
+        assert result[0]["question"] == "Will inflation exceed 3%?"
+
+
 # ---------------------------------------------------------------------------
-# Tests: tag and keyword helpers
+# Tests: tag_slug and keyword helpers
 # ---------------------------------------------------------------------------
 
-class TestGetTagsForAssets:
-    def test_returns_tags_for_nasdaq(self) -> None:
+class TestGetTagSlugsForAssets:
+    def test_returns_slugs_for_nasdaq(self) -> None:
         assets = [{"symbol": "NQ=F", "display_name": "NASDAQ 100"}]
-        tags = _get_tags_for_assets(assets)
-        assert "economics" in tags
+        slugs = _get_tag_slugs_for_assets(assets)
+        assert "fed" in slugs
+        assert "gdp" in slugs
+        assert "tariffs" in slugs
+
+    def test_returns_slugs_for_gold(self) -> None:
+        assets = [{"symbol": "GC=F", "display_name": "Gold Futures"}]
+        slugs = _get_tag_slugs_for_assets(assets)
+        assert "gold" in slugs
+        assert "commodities" in slugs
+        assert "geopolitics" in slugs
 
     def test_returns_default_for_unknown(self) -> None:
         assets = [{"symbol": "ZZZ", "display_name": "Unknown"}]
-        tags = _get_tags_for_assets(assets)
-        assert tags == _get_tags_for_assets(assets)  # Should not crash
+        slugs = _get_tag_slugs_for_assets(assets)
+        assert "fed" in slugs  # Default slug
 
     def test_deduplicates(self) -> None:
         assets = [
             {"symbol": "NQ=F", "display_name": "NASDAQ"},
             {"symbol": "ES=F", "display_name": "S&P 500"},
         ]
-        tags = _get_tags_for_assets(assets)
-        assert len(tags) == len(set(tags))
+        slugs = _get_tag_slugs_for_assets(assets)
+        assert len(slugs) == len(set(slugs))
+
+
+class TestGetTagsForAssetsBackcompat:
+    def test_returns_same_as_tag_slugs(self) -> None:
+        """_get_tags_for_assets is an alias for _get_tag_slugs_for_assets."""
+        assets = [{"symbol": "NQ=F", "display_name": "NASDAQ 100"}]
+        assert _get_tags_for_assets(assets) == _get_tag_slugs_for_assets(assets)
 
 
 class TestGetKeywordsForAssets:
     def test_returns_keywords_for_nasdaq(self) -> None:
         assets = [{"symbol": "NQ=F", "display_name": "NASDAQ 100"}]
         kw = _get_keywords_for_assets(assets)
-        assert "fed" in kw
+        assert "federal reserve" in kw
         assert "recession" in kw
 
     def test_returns_keywords_for_gold(self) -> None:
@@ -230,6 +275,8 @@ class TestCategoryClassification:
         ("Will Russia invade another country?", "GEOPOLITICAL"),
         ("Will new tariffs be imposed?", "GEOPOLITICAL"),
         ("Will China retaliate on trade?", "GEOPOLITICAL"),
+        ("Will Gold hit $3000?", "COMMODITY"),
+        ("Will crude oil prices rise?", "COMMODITY"),
         ("Will Bitcoin hit 100k?", "CRYPTO"),
         ("Will ETH surpass 5k?", "CRYPTO"),
         ("Will it rain tomorrow?", "OTHER"),
@@ -486,14 +533,14 @@ class TestTemporalDecay:
         assert weight < 0.15
 
     def test_unknown_end_date_moderate_weight(self) -> None:
-        """Unknown end date → weight 0.5."""
+        """Unknown end date -> weight 0.5."""
         from modules.polymarket import _compute_time_weight
 
         assert _compute_time_weight("") == 0.5
         assert _compute_time_weight(None) == 0.5
 
     def test_invalid_date_moderate_weight(self) -> None:
-        """Invalid date → weight 0.5."""
+        """Invalid date -> weight 0.5."""
         from modules.polymarket import _compute_time_weight
 
         assert _compute_time_weight("not-a-date") == 0.5
@@ -531,19 +578,19 @@ class TestImpactMagnitude:
 
 class TestProbabilityInversionFix:
     def test_low_prob_bearish_event_is_net_bullish(self) -> None:
-        """Recession at 12% prob → mostly bullish signal (88% no recession)."""
+        """Recession at 12% prob -> mostly bullish signal (88% no recession)."""
         markets = [
             {**_make_signal_market("Will US enter recession?", prob_yes=12,
                                    volume_usd=500_000, impact="BEARISH_IF_YES"),
              "impact_magnitude": 4},
         ]
         result = compute_signal(markets)
-        # 12% bearish, 88% bullish → net bullish
+        # 12% bearish, 88% bullish -> net bullish
         assert result["signal"] == "BULLISH"
         assert result["net_score"] > 0
 
     def test_high_prob_bearish_event_is_net_bearish(self) -> None:
-        """Recession at 80% prob → clearly bearish."""
+        """Recession at 80% prob -> clearly bearish."""
         markets = [
             {**_make_signal_market("Will US enter recession?", prob_yes=80,
                                    volume_usd=500_000, impact="BEARISH_IF_YES"),

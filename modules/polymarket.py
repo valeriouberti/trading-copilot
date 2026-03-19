@@ -1,10 +1,18 @@
-"""Polymarket module — prediction market signal (v2).
+"""Polymarket module — prediction market signal (v3).
 
-Queries the public Polymarket API to obtain probabilities of macro,
-Fed, geopolitical, and crypto events, and computes a directional
-signal to use as a third confirmation in the trading pipeline.
+Queries the Polymarket Gamma API /events endpoint with curated
+tag_slugs to obtain probabilities of macro, Fed, geopolitical,
+and commodity events, and computes a directional signal to use
+as a third confirmation in the trading pipeline.
 
-v2 improvements:
+v3 improvements over v2:
+- Uses /events endpoint with tag_slug for accurate server-side filtering
+  (the /markets endpoint ignores tag filters entirely)
+- Curated tag_slug mapping per asset class (fed, gdp, tariffs, gold, etc.)
+- Category gate rejects non-financial markets (OTHER)
+- Extracts markets from nested event responses
+
+v2 improvements (retained):
 - Fixed probability inversion: accounts for BOTH sides of each market
 - Temporal decay: markets resolving sooner weighted more heavily
 - Impact magnitude: LLM scores each event's market impact (1-5)
@@ -30,33 +38,47 @@ GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
-MARKETS_PER_PAGE = 100
-MAX_PAGES = 3  # Fetch up to 300 markets per tag
+EVENTS_PER_TAG = 20  # Max events per tag_slug query
+MAX_MARKETS = 20  # Final cap on returned markets
 
 # ---------------------------------------------------------------------------
-# Tag mapping per asset class
+# Tag-slug mapping per asset class
 # ---------------------------------------------------------------------------
-_ASSET_TAG_MAP: dict[str, list[str]] = {
-    "NQ": ["economics", "politics"],
-    "NAS": ["economics", "politics"],
-    "IXIC": ["economics", "politics"],
-    "ES": ["economics", "politics"],
-    "SPX": ["economics", "politics"],
-    "GSPC": ["economics", "politics"],
-    "EUR": ["economics", "politics"],
-    "GC": ["economics", "politics"],
-    "GOLD": ["economics", "politics"],
-}
+# These map to real Polymarket tag_slugs on the /events endpoint.
+_ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
+    # Order matters: longer/more specific keys first to avoid substring false matches
+    # (e.g. "ES" in "futures" would wrongly match Gold Futures)
+    ("IXIC", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("NAS",  ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("NQ",   ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("GSPC", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("SPX",  ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("GOLD", ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
+    ("GC",   ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
+    ("OIL",  ["oil", "commodities", "geopolitics", "fed"]),
+    ("CL",   ["oil", "commodities", "geopolitics", "fed"]),
+    ("EUR",  ["fed", "inflation", "interest-rates", "economy", "tariffs", "geopolitics"]),
+    ("ES",   ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+]
 
-_DEFAULT_TAGS = ["economics", "politics"]
+_DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics", "tariffs"]
 
 # ---------------------------------------------------------------------------
 # Category classification keywords
 # ---------------------------------------------------------------------------
 _CATEGORY_RULES: list[tuple[str, list[str]]] = [
-    ("FED", ["fed", "federal reserve", "rate", "fomc", "interest", "inflation", "cpi"]),
-    ("MACRO", ["recession", "gdp", "unemployment", "economy", "growth", "debt", "default"]),
-    ("GEOPOLITICAL", ["war", "russia", "china", "ukraine", "iran", "israel", "nato", "conflict", "tariff", "trade"]),
+    ("FED", ["fed", "federal reserve", "rate hike", "rate cut", "fomc",
+             "interest rate", "inflation", "cpi", "monetary policy", "powell"]),
+    ("MACRO", ["recession", "gdp", "unemployment", "jobs", "nonfarm",
+               "economy", "growth", "debt", "default", "fiscal", "treasury",
+               "s&p", "sp500", "nasdaq", "stock market", "bear market",
+               "bull market", "negative gdp", "company", "nvidia", "tesla",
+               "apple", "google", "amazon", "microsoft"]),
+    ("COMMODITY", ["gold", "silver", "crude oil", "oil", "commodity",
+                   "commodities", "natural gas"]),
+    ("GEOPOLITICAL", ["war", "russia", "china", "ukraine", "iran", "israel",
+                      "nato", "conflict", "tariff", "sanctions", "trade war",
+                      "invasion", "military", "ceasefire", "hormuz"]),
     ("CRYPTO", ["bitcoin", "btc", "eth", "crypto", "coinbase"]),
 ]
 
@@ -71,58 +93,82 @@ def _classify_category(question: str) -> str:
     return "OTHER"
 
 
-def _get_tags_for_assets(assets: list[dict[str, str]]) -> list[str]:
-    """Derive Polymarket API tags from configured assets."""
-    tags: list[str] = []
+def _get_tag_slugs_for_assets(assets: list[dict[str, str]]) -> list[str]:
+    """Derive Polymarket /events tag_slugs from configured assets."""
+    slugs: list[str] = []
     for asset in assets:
         symbol = asset.get("symbol", "").upper()
-        display_name = asset.get("display_name", "").lower()
+        # Match on symbol only (not display_name) to avoid substring issues
+        # e.g. "ES" matching "Gold Futures" via "futurES"
         matched = False
-        for key, asset_tags in _ASSET_TAG_MAP.items():
-            if key in symbol or key.lower() in display_name:
-                tags.extend(asset_tags)
+        for key, tag_slugs in _ASSET_TAG_SLUGS:
+            if key in symbol:
+                slugs.extend(tag_slugs)
                 matched = True
                 break
         if not matched:
-            tags.extend(_DEFAULT_TAGS)
-    return list(dict.fromkeys(tags))
+            slugs.extend(_DEFAULT_TAG_SLUGS)
+    return list(dict.fromkeys(slugs))
+
+
+# Keep for backward compatibility with tests
+def _get_tags_for_assets(assets: list[dict[str, str]]) -> list[str]:
+    """Derive Polymarket API tag_slugs from configured assets."""
+    return _get_tag_slugs_for_assets(assets)
 
 
 def _get_keywords_for_assets(assets: list[dict[str, str]]) -> list[str]:
-    """Build keyword list based on configured assets for client-side filtering."""
+    """Build keyword list based on configured assets for client-side filtering.
+
+    Used only as a secondary safety net — the /events tag_slug endpoint
+    already provides good server-side filtering.
+    """
     keywords: list[str] = []
     for asset in assets:
         symbol = asset.get("symbol", "").upper()
         display_name = asset.get("display_name", "").lower()
 
         if any(s in symbol for s in ("NQ", "NAS", "IXIC")):
-            keywords.extend(["fed", "recession", "rate", "inflation", "nasdaq",
-                             "sp500", "economy", "tariff", "trade"])
+            keywords.extend(["federal reserve", "fed rate", "fomc",
+                             "recession", "inflation", "cpi", "nasdaq",
+                             "s&p 500", "sp500", "gdp", "unemployment",
+                             "tariff", "trade war", "interest rate"])
         elif any(s in symbol for s in ("ES", "SPX", "GSPC")):
-            keywords.extend(["fed", "recession", "rate", "inflation", "nasdaq",
-                             "sp500", "economy", "tariff", "trade"])
+            keywords.extend(["federal reserve", "fed rate", "fomc",
+                             "recession", "inflation", "cpi",
+                             "s&p 500", "sp500", "gdp", "unemployment",
+                             "tariff", "trade war", "interest rate"])
         elif "EUR" in symbol:
-            keywords.extend(["ecb", "euro", "federal reserve", "europe",
-                             "dollar", "tariff"])
+            keywords.extend(["ecb", "euro", "federal reserve", "eurozone",
+                             "dollar", "tariff", "interest rate"])
         elif "GC" in symbol or "gold" in display_name:
-            keywords.extend(["gold", "inflation", "fed", "geopolitical",
-                             "war", "tariff"])
+            keywords.extend(["gold", "inflation", "federal reserve",
+                             "geopolitical", "war", "tariff", "interest rate"])
         else:
-            keywords.extend(["recession", "fed", "economy", "market"])
+            keywords.extend(["recession", "federal reserve", "gdp",
+                             "interest rate", "inflation"])
 
     return list(dict.fromkeys(keywords))
 
 
 # ---------------------------------------------------------------------------
-# API fetching with pagination and tag support
+# API fetching via /events endpoint
 # ---------------------------------------------------------------------------
 
-def _fetch_page(params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Fetch a single page from the Gamma API with retry."""
+def _fetch_events(tag_slug: str) -> list[dict[str, Any]]:
+    """Fetch events from the Gamma /events endpoint with retry."""
+    params: dict[str, Any] = {
+        "limit": EVENTS_PER_TAG,
+        "active": "true",
+        "closed": "false",
+        "tag_slug": tag_slug,
+        "order": "volume",
+        "ascending": "false",
+    }
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.get(
-                f"{GAMMA_API_BASE}/markets",
+                f"{GAMMA_API_BASE}/events",
                 params=params,
                 timeout=15,
             )
@@ -144,105 +190,132 @@ def _fetch_page(params: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _parse_market(market_raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse a raw market dict from the API into our standard format.
+
+    Returns None if the market should be skipped (OTHER category,
+    missing data, etc.).
+    """
+    question = market_raw.get("question", "")
+    if not question:
+        return None
+
+    category = _classify_category(question)
+    if category == "OTHER":
+        return None
+
+    try:
+        volume = float(market_raw.get("volume", 0) or 0)
+    except (ValueError, TypeError):
+        volume = 0.0
+
+    try:
+        outcome_prices_raw = market_raw.get("outcomePrices", "[]")
+        if isinstance(outcome_prices_raw, str):
+            outcome_prices = json.loads(outcome_prices_raw)
+        else:
+            outcome_prices = outcome_prices_raw
+
+        prob_yes = round(float(outcome_prices[0]) * 100, 1) if len(outcome_prices) > 0 else 50.0
+        prob_no = round(float(outcome_prices[1]) * 100, 1) if len(outcome_prices) > 1 else round(100 - prob_yes, 1)
+    except (ValueError, TypeError, IndexError, json.JSONDecodeError):
+        prob_yes = 50.0
+        prob_no = 50.0
+
+    slug = market_raw.get("slug", "")
+    url = f"https://polymarket.com/event/{slug}" if slug else ""
+    end_date = market_raw.get("endDate", "") or ""
+
+    return {
+        "question": question,
+        "prob_yes": prob_yes,
+        "prob_no": prob_no,
+        "volume_usd": volume,
+        "end_date": end_date,
+        "url": url,
+        "category": category,
+    }
+
+
 def fetch_markets(
-    keywords: list[str],
-    min_volume_usd: float = 10_000,
+    keywords: list[str] | None = None,
+    min_volume_usd: float = 0,
     tags: list[str] | None = None,
+    *,
+    tag_slugs: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch Polymarket markets with pagination, tag and keyword filtering.
+    """Fetch Polymarket markets via the /events endpoint with tag_slug filtering.
+
+    Primary approach: queries /events with each tag_slug, extracts nested
+    markets, deduplicates, classifies by category, and rejects non-financial.
 
     Args:
-        keywords: Keywords to filter markets (client-side).
+        keywords: Optional keywords for additional client-side filtering.
         min_volume_usd: Minimum USD volume to consider a market.
-        tags: API tags for server-side filtering (e.g. "economics", "politics").
+        tags: Alias for tag_slugs (backward compatibility).
+        tag_slugs: Tag slugs for the /events endpoint
+                   (e.g. "fed", "gdp", "tariffs").
 
     Returns:
         List of filtered markets, sorted by descending volume (max 20).
     """
+    slug_list = tag_slugs or tags or []
+    if not slug_list:
+        slug_list = list(_DEFAULT_TAG_SLUGS)
+
+    # Fetch events from all tag_slugs
     all_raw_markets: list[dict[str, Any]] = []
-    tag_list = tags if tags else [None]
-
-    for tag in tag_list:
-        for page in range(MAX_PAGES):
-            offset = page * MARKETS_PER_PAGE
-            params: dict[str, Any] = {
-                "limit": MARKETS_PER_PAGE,
-                "offset": offset,
-                "active": "true",
-                "closed": "false",
-                "order": "volume",
-                "ascending": "false",
-            }
-            if tag:
-                params["tag"] = tag
-
-            fetched = _fetch_page(params)
-            if not fetched:
-                break
-            all_raw_markets.extend(fetched)
-            if len(fetched) < MARKETS_PER_PAGE:
-                break  # Last page
+    for slug in slug_list:
+        events = _fetch_events(slug)
+        for event in events:
+            # Events contain nested markets
+            nested = event.get("markets", [])
+            if nested:
+                all_raw_markets.extend(nested)
+            else:
+                # Some endpoints return flat market objects
+                all_raw_markets.append(event)
 
     # Deduplicate by question text
     seen_questions: set[str] = set()
     unique_markets: list[dict[str, Any]] = []
-    for market in all_raw_markets:
-        q = market.get("question", "")
+    for market_raw in all_raw_markets:
+        q = market_raw.get("question", "")
         if q and q not in seen_questions:
             seen_questions.add(q)
-            unique_markets.append(market)
+            unique_markets.append(market_raw)
 
     logger.info(
         "Polymarket: %d raw -> %d unique after dedup",
         len(all_raw_markets), len(unique_markets),
     )
 
-    # Client-side keyword filtering and parsing
+    # Parse, classify, and filter
     results: list[dict[str, Any]] = []
-    for market in unique_markets:
-        question = market.get("question", "")
-        q_lower = question.lower()
-
-        if not any(kw.lower() in q_lower for kw in keywords):
+    for market_raw in unique_markets:
+        parsed = _parse_market(market_raw)
+        if parsed is None:
             continue
 
-        try:
-            volume = float(market.get("volume", 0) or 0)
-        except (ValueError, TypeError):
-            volume = 0.0
-
-        if volume < min_volume_usd:
+        if parsed["volume_usd"] < min_volume_usd:
             continue
 
-        try:
-            outcome_prices_raw = market.get("outcomePrices", "[]")
-            if isinstance(outcome_prices_raw, str):
-                outcome_prices = json.loads(outcome_prices_raw)
-            else:
-                outcome_prices = outcome_prices_raw
+        # Optional keyword filter (secondary safety net)
+        if keywords:
+            q_lower = parsed["question"].lower()
+            if not any(kw.lower() in q_lower for kw in keywords):
+                continue
 
-            prob_yes = round(float(outcome_prices[0]) * 100, 1) if len(outcome_prices) > 0 else 50.0
-            prob_no = round(float(outcome_prices[1]) * 100, 1) if len(outcome_prices) > 1 else round(100 - prob_yes, 1)
-        except (ValueError, TypeError, IndexError, json.JSONDecodeError):
-            prob_yes = 50.0
-            prob_no = 50.0
-
-        slug = market.get("slug", "")
-        url = f"https://polymarket.com/event/{slug}" if slug else ""
-        end_date = market.get("endDate", "") or ""
-
-        results.append({
-            "question": question,
-            "prob_yes": prob_yes,
-            "prob_no": prob_no,
-            "volume_usd": volume,
-            "end_date": end_date,
-            "url": url,
-            "category": _classify_category(question),
-        })
+        results.append(parsed)
 
     results.sort(key=lambda m: m["volume_usd"], reverse=True)
-    return results[:20]
+
+    logger.info(
+        "Polymarket: %d markets after filtering (from %d unique)",
+        min(len(results), MAX_MARKETS), len(unique_markets),
+    )
+
+    return results[:MAX_MARKETS]
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +489,7 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
         If BEARISH_IF_YES:  score = -(prob_yes - 50) / 50   (range: -1 to +1)
         If BULLISH_IF_YES:  score = +(prob_yes - 50) / 50   (range: -1 to +1)
 
-        weighted_score = score × volume_weight × time_weight × magnitude
+        weighted_score = score x volume_weight x time_weight x magnitude
 
     Args:
         markets: List of markets with fields 'impact' and 'impact_magnitude'.
@@ -476,7 +549,7 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
 
     net_score = bullish_pct - bearish_pct
 
-    # Directional threshold (±15 for signal, scaling confidence)
+    # Directional threshold (+/-15 for signal, scaling confidence)
     if net_score > 15:
         signal = "BULLISH"
         confidence = min(100.0, 50 + net_score)
@@ -526,15 +599,14 @@ def get_polymarket_context(
 ) -> dict[str, Any]:
     """High-level function called from main.py.
 
-    Builds tags and keywords based on configured assets, fetches
-    Polymarket markets with pagination, classifies with LLM (or keywords),
-    and computes the aggregate signal weighted by volume, time and magnitude.
+    Builds tag_slugs based on configured assets, fetches Polymarket
+    events via /events endpoint, extracts markets, classifies with
+    LLM (or keywords), and computes the aggregate signal.
     """
-    tags = _get_tags_for_assets(assets)
-    keywords = _get_keywords_for_assets(assets)
+    tag_slugs = _get_tag_slugs_for_assets(assets)
 
-    logger.info("Polymarket: searching with tags %s, keywords %s", tags, keywords)
-    markets = fetch_markets(keywords, tags=tags)
+    logger.info("Polymarket: searching with tag_slugs %s", tag_slugs)
+    markets = fetch_markets(tag_slugs=tag_slugs)
 
     # Classify with LLM (falls back to keywords if unavailable)
     markets = classify_markets_with_llm(
