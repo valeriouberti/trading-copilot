@@ -292,7 +292,7 @@ def generate_report(
             asset_rows += f"""
             <tr>
                 <td style="padding:10px;border-bottom:1px solid #374151;font-weight:bold;">{a.display_name}</td>
-                <td colspan="9" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
+                <td colspan="13" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
                     Error: {a.error}
                 </td>
             </tr>"""
@@ -301,13 +301,19 @@ def generate_report(
         signals_map = {s.name: s for s in a.signals}
         rsi = signals_map.get("RSI")
         macd = signals_map.get("MACD")
+        bb = signals_map.get("BBANDS")
+        stoch = signals_map.get("STOCH")
         vwap = signals_map.get("VWAP")
         ema = signals_map.get("EMA_TREND")
+        adx = signals_map.get("ADX")
 
         rsi_cell = f'<span style="color:{_signal_color(rsi.label)}">{rsi.value:.1f} ({rsi.label})</span>' if rsi and rsi.value else "N/A"
         macd_cell = f'<span style="color:{_signal_color(macd.label)}">{macd.label}</span>' if macd else "N/A"
+        bb_cell = f'<span style="color:{_signal_color(bb.label)}">{bb.label}<br><span style="font-size:0.8em;color:#9ca3af;">{bb.detail}</span></span>' if bb else "N/A"
+        stoch_cell = f'<span style="color:{_signal_color(stoch.label)}">{stoch.value:.0f} ({stoch.label})</span>' if stoch and stoch.value is not None else "N/A"
         vwap_cell = f'<span style="color:{_signal_color(vwap.label)}">{vwap.detail}</span>' if vwap else "N/A"
         ema_cell = f'<span style="color:{_signal_color(ema.label)}">{ema.label}</span>' if ema else "N/A"
+        adx_cell = f'<span style="color:#9ca3af;">{adx.detail}</span>' if adx else "N/A"
 
         score_color = _signal_color(a.composite_score)
         # v2: per-asset LLM bias (falls back to global bias)
@@ -330,16 +336,25 @@ def generate_report(
         else:
             poly_cell = '<span style="color:#64748b;">N/A</span>'
 
+        # Data source badge (only shown for non-yfinance)
+        source_badge = ""
+        data_src = getattr(a, "data_source", "yfinance")
+        if data_src != "yfinance":
+            source_badge = f' <span style="color:#6366f1;font-size:0.7em;">via {data_src}</span>'
+
         asset_rows += f"""
             <tr>
                 <td style="padding:10px;border-bottom:1px solid #374151;font-weight:bold;">{a.display_name}<br>
-                    <span style="color:#9ca3af;font-size:0.85em;">{a.symbol}</span></td>
+                    <span style="color:#9ca3af;font-size:0.85em;">{a.symbol}</span>{source_badge}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{price_str}
                     <span style="color:{change_color};font-size:0.85em;"> {change_str}</span></td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{rsi_cell}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{macd_cell}</td>
+                <td style="padding:10px;border-bottom:1px solid #374151;">{bb_cell}</td>
+                <td style="padding:10px;border-bottom:1px solid #374151;">{stoch_cell}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{vwap_cell}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{ema_cell}</td>
+                <td style="padding:10px;border-bottom:1px solid #374151;">{adx_cell}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">
                     <span style="color:{score_color};font-weight:bold;">{a.composite_score}</span>
                     <span style="color:#9ca3af;font-size:0.85em;"> ({a.confidence_pct}%)</span></td>
@@ -468,11 +483,14 @@ def generate_report(
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Price</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">RSI</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">MACD</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">BB</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Stoch</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">vs VWAP</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">EMA Trend</th>
-                    <th style="padding:10px;text-align:left;color:#94a3b8;">Technical Score</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">ADX</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Score</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">LLM Bias</th>
-                    <th style="padding:10px;text-align:left;color:#94a3b8;">Poly Signal</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">Poly</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Action</th>
                 </tr>
             </thead>
