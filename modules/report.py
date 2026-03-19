@@ -310,7 +310,9 @@ def generate_report(
         ema_cell = f'<span style="color:{_signal_color(ema.label)}">{ema.label}</span>' if ema else "N/A"
 
         score_color = _signal_color(a.composite_score)
-        bias = getattr(sentiment, "directional_bias", "FLAT")
+        # v2: per-asset LLM bias (falls back to global bias)
+        asset_biases = getattr(sentiment, "asset_biases", {})
+        bias = asset_biases.get(a.symbol, getattr(sentiment, "directional_bias", "FLAT"))
         hint = _action_hint(a.composite_score, bias)
         hint_color = "#22c55e" if "LONG" in hint else "#ef4444" if "SHORT" in hint else "#eab308"
 
@@ -390,6 +392,19 @@ def generate_report(
     source = getattr(sentiment, "source", "N/A")
     confidence = getattr(sentiment, "confidence", 0)
 
+    # FinBERT ensemble info
+    finbert_score = getattr(sentiment, "finbert_score", None)
+    finbert_agreement = getattr(sentiment, "finbert_agreement", "")
+    finbert_html = ""
+    if finbert_score is not None and finbert_agreement:
+        agree_color = {"AGREE": "#22c55e", "PARTIAL": "#eab308", "DISAGREE": "#ef4444"}.get(finbert_agreement, "#9ca3af")
+        finbert_html = (
+            f'<div style="color:#64748b;font-size:0.85em;margin-top:4px;">'
+            f'FinBERT: {finbert_score:+.1f} — '
+            f'<span style="color:{agree_color};">{finbert_agreement}</span>'
+            f'</div>'
+        )
+
     html = f"""<!DOCTYPE html>
 <html lang="it">
 <head>
@@ -425,6 +440,7 @@ def generate_report(
         <div style="color:#64748b;font-size:0.85em;">
             Fonte: {source.upper()} | Confidenza: {confidence:.0f}%
         </div>
+        {finbert_html}
     </div>
 
     {_build_polymarket_section(poly_data, validation_flags)}
@@ -531,7 +547,10 @@ def print_terminal_summary(
     bias = getattr(sentiment, "directional_bias", "FLAT")
     source = getattr(sentiment, "source", "N/A")
 
-    print(f"\n  SENTIMENT MACRO: {score:+.1f} — {label} (bias: {bias}, fonte: {source})")
+    finbert_score = getattr(sentiment, "finbert_score", None)
+    finbert_agreement = getattr(sentiment, "finbert_agreement", "")
+    finbert_str = f" | FinBERT: {finbert_score:+.1f} [{finbert_agreement}]" if finbert_score is not None else ""
+    print(f"\n  SENTIMENT MACRO: {score:+.1f} — {label} (bias: {bias}, fonte: {source}){finbert_str}")
     print(f"  REGIME OPERATIVO: {regime} — {regime_reason}")
 
     drivers = getattr(sentiment, "key_drivers", [])
@@ -563,12 +582,14 @@ def print_terminal_summary(
     print(f"\n  {'Asset':<25} {'Prezzo':>12} {'Score':<10} {'Azione':<20}")
     print("  " + "-" * 67)
 
+    asset_biases = getattr(sentiment, "asset_biases", {})
     for a in asset_analyses:
         if a.error:
             print(f"  {a.display_name:<25} {'ERROR':>12} {'':10} {a.error[:20]}")
             continue
         price_str = f"{a.price:,.2f}" if a.price else "N/A"
-        hint = _action_hint(a.composite_score, bias)
+        a_bias = asset_biases.get(a.symbol, bias)
+        hint = _action_hint(a.composite_score, a_bias)
         print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {hint:<20}")
 
     print(f"\n  Notizie analizzate: {news_count}")

@@ -43,7 +43,7 @@ class TestValidGroqResponse:
 
         assert result.sentiment_score == 1.0
         assert result.sentiment_label == "moderatamente rialzista"
-        assert result.source == "groq"
+        assert result.source in ("groq", "groq-2pass")
 
     def test_response_has_all_keys(self, mock_news_items: list, mock_llm_response: dict) -> None:
         """Verifica che l'output contenga tutte le chiavi richieste."""
@@ -344,4 +344,132 @@ class TestGroqMarkdownCleanup:
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.sentiment_score == 1.0
-        assert result.source == "groq"
+        assert result.source in ("groq", "groq-2pass")
+
+
+class TestPerAssetScoring:
+    """Test per-asset scoring (v2)."""
+
+    def test_per_asset_scores_populated(self, mock_news_items: list) -> None:
+        """Verifica che i punteggi per-asset vengano estratti dal JSON."""
+        response_data = {
+            "sentiment_score": 1.0,
+            "sentiment_label": "rialzista",
+            "key_drivers": ["a", "b", "c"],
+            "directional_bias": "BULLISH",
+            "risk_events": [],
+            "confidence": 70,
+            "asset_scores": {"NQ=F": 1.5, "GC=F": -0.8},
+        }
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _make_groq_response(
+            json.dumps(response_data)
+        )
+        assets = [
+            {"symbol": "NQ=F", "display_name": "NASDAQ 100"},
+            {"symbol": "GC=F", "display_name": "Gold"},
+        ]
+
+        with patch("modules.sentiment.Groq", return_value=mock_client):
+            result = _analyze_with_groq(mock_news_items, assets, "llama-3.3-70b-versatile", "fake-key")
+
+        assert result.asset_scores["NQ=F"] == 1.5
+        assert result.asset_scores["GC=F"] == -0.8
+        assert result.asset_biases["NQ=F"] == "BULLISH"
+        assert result.asset_biases["GC=F"] == "BEARISH"
+
+    def test_asset_scores_fallback_to_global(self, mock_news_items: list) -> None:
+        """Se un asset non ha score specifico, usa il globale."""
+        response_data = {
+            "sentiment_score": 1.0,
+            "sentiment_label": "rialzista",
+            "key_drivers": ["a", "b", "c"],
+            "directional_bias": "BULLISH",
+            "risk_events": [],
+            "confidence": 70,
+            "asset_scores": {},  # Empty
+        }
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _make_groq_response(
+            json.dumps(response_data)
+        )
+
+        with patch("modules.sentiment.Groq", return_value=mock_client):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+
+        # Falls back to global sentiment_score of 1.0
+        assert result.asset_scores["NQ=F"] == 1.0
+        assert result.asset_biases["NQ=F"] == "BULLISH"
+
+
+class TestTemporalTagging:
+    """Test temporal recency tagging."""
+
+    def test_news_tagged_with_recency(self, mock_news_items: list) -> None:
+        """Verifica che le notizie vengano taggate con recency."""
+        from modules.sentiment import _tag_news_with_recency
+
+        tagged = _tag_news_with_recency(mock_news_items)
+        assert len(tagged) == len(mock_news_items)
+        # First article was 2h ago
+        assert "h fa" in tagged[0]["_time_tag"]
+
+    def test_news_without_datetime_gets_no_tag(self) -> None:
+        """Notizie senza datetime valida ricevono tag vuoto."""
+        from modules.sentiment import _tag_news_with_recency
+
+        news = [{"title": "Test", "published_at": "not-a-date", "source": "X"}]
+        tagged = _tag_news_with_recency(news)
+        assert tagged[0]["_time_tag"] == ""
+
+
+class TestFinBERTEnsemble:
+    """Test FinBERT cross-validation ensemble."""
+
+    def test_agree_boosts_confidence(self) -> None:
+        """Scores entro 1.0 → AGREE, boost +5%."""
+        from modules.sentiment import _compute_finbert_agreement
+
+        label, mod = _compute_finbert_agreement(1.0, 1.5)
+        assert label == "AGREE"
+        assert mod == 5.0
+
+    def test_disagree_reduces_confidence(self) -> None:
+        """Divergenza > 2.0 → DISAGREE, -15%."""
+        from modules.sentiment import _compute_finbert_agreement
+
+        label, mod = _compute_finbert_agreement(2.0, -1.0)
+        assert label == "DISAGREE"
+        assert mod == -15.0
+
+    def test_partial_no_change(self) -> None:
+        """Divergenza 1-2 → PARTIAL, nessuna modifica."""
+        from modules.sentiment import _compute_finbert_agreement
+
+        label, mod = _compute_finbert_agreement(1.0, -0.5)
+        assert label == "PARTIAL"
+        assert mod == 0.0
+
+    def test_none_finbert_returns_empty(self) -> None:
+        """FinBERT None → label vuoto."""
+        from modules.sentiment import _compute_finbert_agreement
+
+        label, mod = _compute_finbert_agreement(1.0, None)
+        assert label == ""
+        assert mod == 0.0
+
+    def test_to_dict_includes_v2_fields(self) -> None:
+        """Verifica che to_dict includa i campi v2."""
+        result = SentimentResult(
+            sentiment_score=1.0,
+            sentiment_label="Rialzista",
+            asset_scores={"NQ=F": 1.5},
+            asset_biases={"NQ=F": "BULLISH"},
+            finbert_score=1.2,
+            finbert_agreement="AGREE",
+        )
+        d = result.to_dict()
+        assert d["asset_scores"] == {"NQ=F": 1.5}
+        assert d["asset_biases"] == {"NQ=F": "BULLISH"}
+        assert d["finbert_score"] == 1.2
+        assert d["finbert_agreement"] == "AGREE"

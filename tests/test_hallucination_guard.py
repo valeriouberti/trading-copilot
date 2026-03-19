@@ -101,6 +101,48 @@ class TestDirectionConflict:
         assert "DIRECTION_CONFLICT" not in result.flags
 
 
+class TestPerAssetDirectionConflict:
+    def test_per_asset_conflict_detected(self, make_asset_analysis, mock_news_items) -> None:
+        """Verifica DIRECTION_CONFLICT per-asset quando asset_biases divergono."""
+        from modules.sentiment import SentimentResult
+
+        sentiment = SentimentResult(
+            sentiment_score=1.0,
+            sentiment_label="Rialzista",
+            directional_bias="BULLISH",
+            asset_biases={"NQ=F": "BULLISH", "GC=F": "BEARISH"},
+            asset_scores={"NQ=F": 1.5, "GC=F": -1.0},
+        )
+        assets = [
+            make_asset_analysis(symbol="NQ=F", composite_score="BEARISH"),
+            make_asset_analysis(symbol="GC=F", composite_score="BEARISH"),
+        ]
+
+        result = validate(sentiment, mock_news_items, assets)
+
+        # NQ=F: LLM BULLISH vs tech BEARISH → conflict
+        assert any("DIRECTION_CONFLICT_NQ=F" in f for f in result.flags)
+        # GC=F: LLM BEARISH vs tech BEARISH → no conflict
+        assert not any("DIRECTION_CONFLICT_GC=F" in f for f in result.flags)
+
+    def test_no_per_asset_conflict_when_aligned(self, make_asset_analysis, mock_news_items) -> None:
+        """Nessun conflitto per-asset quando LLM e tecnici concordano."""
+        from modules.sentiment import SentimentResult
+
+        sentiment = SentimentResult(
+            sentiment_score=1.0,
+            sentiment_label="Rialzista",
+            directional_bias="BULLISH",
+            asset_biases={"NQ=F": "BULLISH"},
+            asset_scores={"NQ=F": 1.5},
+        )
+        assets = [make_asset_analysis(symbol="NQ=F", composite_score="BULLISH")]
+
+        result = validate(sentiment, mock_news_items, assets)
+
+        assert not any("DIRECTION_CONFLICT" in f for f in result.flags)
+
+
 class TestExtremeScoreNeutralNews:
     def test_extreme_positive_neutral_news(self, make_sentiment, make_asset_analysis) -> None:
         """Verifica flag su score estremo (+3) con notizie neutre."""

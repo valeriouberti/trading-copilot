@@ -460,3 +460,119 @@ class TestPolymarketConflictFlag:
         sentiment = make_sentiment()
         flags = validate_polymarket_consistency(sentiment, None)
         assert flags == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: v2 — temporal decay
+# ---------------------------------------------------------------------------
+
+class TestTemporalDecay:
+    def test_imminent_market_high_weight(self) -> None:
+        """Mercato che scade oggi ha peso ~1.0."""
+        from modules.polymarket import _compute_time_weight
+        from datetime import datetime, timedelta, timezone
+
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        weight = _compute_time_weight(tomorrow)
+        assert weight > 0.9
+
+    def test_distant_market_low_weight(self) -> None:
+        """Mercato che scade tra 6 mesi ha peso basso."""
+        from modules.polymarket import _compute_time_weight
+        from datetime import datetime, timedelta, timezone
+
+        far_future = (datetime.now(timezone.utc) + timedelta(days=180)).isoformat()
+        weight = _compute_time_weight(far_future)
+        assert weight < 0.15
+
+    def test_unknown_end_date_moderate_weight(self) -> None:
+        """End date sconosciuto → peso 0.5."""
+        from modules.polymarket import _compute_time_weight
+
+        assert _compute_time_weight("") == 0.5
+        assert _compute_time_weight(None) == 0.5
+
+    def test_invalid_date_moderate_weight(self) -> None:
+        """Data non valida → peso 0.5."""
+        from modules.polymarket import _compute_time_weight
+
+        assert _compute_time_weight("not-a-date") == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Tests: v2 — impact magnitude
+# ---------------------------------------------------------------------------
+
+class TestImpactMagnitude:
+    def test_keyword_fallback_sets_default_magnitude(self) -> None:
+        """Classificazione keyword imposta magnitude default = 3."""
+        markets = [_make_signal_market("Will recession hit?", 70, 100_000)]
+        _classify_markets_with_keywords(markets)
+        assert markets[0]["impact_magnitude"] == 3
+
+    def test_high_magnitude_market_dominates(self) -> None:
+        """Mercato con magnitude alta domina il segnale."""
+        markets = [
+            {**_make_signal_market("Low impact event", prob_yes=80,
+                                   volume_usd=200_000, impact="BULLISH_IF_YES"),
+             "impact_magnitude": 1},
+            {**_make_signal_market("Fed surprise cut", prob_yes=80,
+                                   volume_usd=200_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 5},
+        ]
+        result = compute_signal(markets)
+        # The bearish market (magnitude 5) should dominate
+        assert result["signal"] == "BEARISH"
+
+
+# ---------------------------------------------------------------------------
+# Tests: v2 — probability inversion fix (both sides counted)
+# ---------------------------------------------------------------------------
+
+class TestProbabilityInversionFix:
+    def test_low_prob_bearish_event_is_net_bullish(self) -> None:
+        """Recession at 12% prob → mostly bullish signal (88% no recession)."""
+        markets = [
+            {**_make_signal_market("Will US enter recession?", prob_yes=12,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 4},
+        ]
+        result = compute_signal(markets)
+        # 12% bearish, 88% bullish → net bullish
+        assert result["signal"] == "BULLISH"
+        assert result["net_score"] > 0
+
+    def test_high_prob_bearish_event_is_net_bearish(self) -> None:
+        """Recession at 80% prob → clearly bearish."""
+        markets = [
+            {**_make_signal_market("Will US enter recession?", prob_yes=80,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 4},
+        ]
+        result = compute_signal(markets)
+        assert result["signal"] == "BEARISH"
+        assert result["net_score"] < 0
+
+    def test_50_50_market_is_neutral(self) -> None:
+        """Mercato al 50/50 non produce segnale direzionale."""
+        markets = [
+            {**_make_signal_market("Coin flip event", prob_yes=50,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 3},
+        ]
+        result = compute_signal(markets)
+        assert result["signal"] == "NEUTRAL"
+        assert abs(result["net_score"]) < 1.0
+
+
+class TestComputeSignalV2OutputKeys:
+    def test_output_has_net_score(self) -> None:
+        """compute_signal v2 restituisce net_score."""
+        markets = [
+            {**_make_signal_market("Test", prob_yes=70,
+                                   volume_usd=100_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 3},
+        ]
+        result = compute_signal(markets)
+        assert "net_score" in result
+        assert isinstance(result["net_score"], float)

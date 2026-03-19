@@ -55,15 +55,31 @@ def validate(
             score, keyword_score,
         )
 
-    # Check 2: LLM directional bias vs technical composite
+    # Check 2: LLM directional bias vs technical composite (per-asset when available)
+    asset_biases = getattr(sentiment, "asset_biases", {})
     if asset_analyses:
-        tech_direction = _aggregate_technical_direction(asset_analyses)
-        if _is_direction_conflict(bias, tech_direction):
-            flags.append("DIRECTION_CONFLICT")
-            logger.warning(
-                "Direction conflict: LLM bias=%s, technicals=%s",
-                bias, tech_direction,
-            )
+        if asset_biases:
+            # Per-asset conflict detection
+            for a in asset_analyses:
+                a_bias = asset_biases.get(a.symbol, bias)
+                a_tech = getattr(a, "composite_score", "NEUTRAL")
+                if _is_direction_conflict(a_bias, a_tech):
+                    flags.append(
+                        f"DIRECTION_CONFLICT_{a.symbol}: LLM {a_bias} vs tech {a_tech}"
+                    )
+                    logger.warning(
+                        "Direction conflict on %s: LLM bias=%s, tech=%s",
+                        a.symbol, a_bias, a_tech,
+                    )
+        else:
+            # Fallback: global bias vs aggregate technicals
+            tech_direction = _aggregate_technical_direction(asset_analyses)
+            if _is_direction_conflict(bias, tech_direction):
+                flags.append("DIRECTION_CONFLICT")
+                logger.warning(
+                    "Direction conflict: LLM bias=%s, technicals=%s",
+                    bias, tech_direction,
+                )
 
     # Check 3: Extreme score on neutral news
     if abs(score) >= 2.5 and abs(keyword_score) < 0.5:

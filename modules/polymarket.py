@@ -1,15 +1,14 @@
-"""Modulo Polymarket — segnale da mercati predittivi.
+"""Modulo Polymarket — segnale da mercati predittivi (v2).
 
 Interroga l'API pubblica di Polymarket per ottenere probabilità
 di eventi macro, Fed, geopolitici e crypto, e calcola un segnale
 direzionale da usare come terza conferma nel pipeline di trading.
 
-Miglioramenti rispetto alla v1:
-- Paginazione: recupera fino a MAX_PAGES * MARKETS_PER_PAGE mercati
-- Tag-based filtering: usa il parametro 'tag' dell'API Gamma
-- Volume weighting: il segnale è pesato per volume (mercati più liquidi contano di più)
-- LLM classification: usa Groq per classificare se YES è bullish o bearish
-  (fallback a keyword se Groq non disponibile)
+v2 improvements:
+- Fixed probability inversion: accounts for BOTH sides of each market
+- Temporal decay: markets resolving sooner weighted more heavily
+- Impact magnitude: LLM scores each event's market impact (1-5)
+- Proper net directional score per market
 """
 
 from __future__ import annotations
@@ -18,9 +17,12 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
+
+from modules.keywords import BEARISH_EVENT_KEYWORDS, BULLISH_EVENT_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +59,6 @@ _CATEGORY_RULES: list[tuple[str, list[str]]] = [
     ("GEOPOLITICAL", ["war", "russia", "china", "ukraine", "iran", "israel", "nato", "conflict", "tariff", "trade"]),
     ("CRYPTO", ["bitcoin", "btc", "eth", "crypto", "coinbase"]),
 ]
-
-# ---------------------------------------------------------------------------
-# Keyword-based Bearish / Bullish event classification (fallback)
-# ---------------------------------------------------------------------------
-from modules.keywords import BEARISH_EVENT_KEYWORDS, BULLISH_EVENT_KEYWORDS
 
 
 def _classify_category(question: str) -> str:
@@ -249,7 +246,30 @@ def fetch_markets(
 
 
 # ---------------------------------------------------------------------------
-# LLM-based classification (with keyword fallback)
+# Temporal decay
+# ---------------------------------------------------------------------------
+
+def _compute_time_weight(end_date_str: str) -> float:
+    """Compute temporal decay weight based on market resolution date.
+
+    Markets resolving sooner are more relevant for day-trading decisions.
+    Uses a 2-week half-life: a market resolving today has weight ~1.0,
+    one resolving in 14 days has weight ~0.5.
+    """
+    if not end_date_str:
+        return 0.5  # Unknown end date gets moderate weight
+
+    try:
+        end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        days_to_resolution = max(0, (end_date - now).days)
+        return 1.0 / (1.0 + days_to_resolution / 14.0)
+    except (ValueError, TypeError):
+        return 0.5
+
+
+# ---------------------------------------------------------------------------
+# LLM-based classification with impact magnitude
 # ---------------------------------------------------------------------------
 
 def _keyword_classify_single(question: str) -> str:
@@ -269,6 +289,7 @@ def _classify_markets_with_keywords(
     """Fallback: classify all markets using keyword heuristic."""
     for market in markets:
         market["impact"] = _keyword_classify_single(market["question"])
+        market.setdefault("impact_magnitude", 3)  # Default magnitude
     return markets
 
 
@@ -277,24 +298,17 @@ def classify_markets_with_llm(
     groq_model: str = "llama-3.3-70b-versatile",
     api_key: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Use Groq LLM to classify whether YES outcome is bullish or bearish.
+    """Use Groq LLM to classify markets with direction AND impact magnitude.
 
-    Handles semantic ambiguity (e.g. "Will US avoid recession?" YES = bullish).
+    Now returns both impact direction (BULLISH_IF_YES/BEARISH_IF_YES) and
+    impact_magnitude (1-5) for more accurate signal weighting.
+
     Falls back to keyword-based classification if Groq is unavailable.
-
-    Args:
-        markets: List of market dicts with 'question'.
-        groq_model: Groq model ID.
-        api_key: Groq API key (reads from env if not provided).
-
-    Returns:
-        Same markets list with added 'impact' field.
     """
     if not markets:
         return markets
 
-    # Pre-populate ALL markets with keyword fallback to avoid race condition
-    # (ensures every market has an 'impact' field even if LLM fails mid-way)
+    # Pre-populate ALL markets with keyword fallback
     _classify_markets_with_keywords(markets)
 
     if not api_key:
@@ -312,28 +326,38 @@ def classify_markets_with_llm(
 
     batch = markets[:15]
     questions_block = "\n".join(
-        f"{i + 1}. {m['question']}" for i, m in enumerate(batch)
+        f"{i + 1}. {m['question']} (prob SI': {m['prob_yes']:.0f}%)"
+        for i, m in enumerate(batch)
     )
 
-    prompt = f"""Classifica ogni mercato predittivo: se l'evento SI' si verifica,
-e' BULLISH o BEARISH per i mercati finanziari (azioni, indici)?
+    prompt = f"""Classifica ogni mercato predittivo con DUE criteri:
+1. impact: se l'evento SI' si verifica, e' BULLISH o BEARISH per i mercati?
+2. magnitude: quanto e' market-moving questo evento? (1-5)
+
+SCALA MAGNITUDE:
+1 = marginale (politica minore, evento locale)
+2 = minore (bill legislativo, nomina)
+3 = moderato (dati economici, tensioni commerciali)
+4 = significativo (decisioni Fed, dati occupazione, CPI)
+5 = market-moving (crisi bancaria, guerra, taglio/rialzo tassi a sorpresa)
 
 MERCATI:
 {questions_block}
 
 Rispondi ESCLUSIVAMENTE con un array JSON (senza markdown, senza ```):
 [
-  {{"index": 1, "impact": "BULLISH_IF_YES"}},
-  {{"index": 2, "impact": "BEARISH_IF_YES"}},
+  {{"index": 1, "impact": "BULLISH_IF_YES", "magnitude": 4}},
+  {{"index": 2, "impact": "BEARISH_IF_YES", "magnitude": 3}},
   ...
 ]
 
 Regole:
-- impact deve essere "BULLISH_IF_YES" o "BEARISH_IF_YES"
-- Considera l'impatto sui mercati azionari/indici
-- "Fed taglia tassi" -> BULLISH_IF_YES
-- "Recessione USA" -> BEARISH_IF_YES
-- "USA evita recessione" -> BULLISH_IF_YES
+- impact: "BULLISH_IF_YES" o "BEARISH_IF_YES"
+- magnitude: intero da 1 a 5
+- "Fed taglia tassi" -> BULLISH_IF_YES, magnitude 5
+- "Recessione USA" -> BEARISH_IF_YES, magnitude 5
+- "USA evita recessione" -> BULLISH_IF_YES, magnitude 4
+- "Nuovo tariff su semiconduttori" -> BEARISH_IF_YES, magnitude 3
 - Rispondi SOLO con il JSON"""
 
     try:
@@ -343,13 +367,13 @@ Regole:
             messages=[
                 {
                     "role": "system",
-                    "content": "Classifica eventi come bullish o bearish "
-                               "per i mercati. Rispondi solo in JSON.",
+                    "content": "Classifica eventi come bullish/bearish per i mercati "
+                               "e assegna un punteggio di impatto 1-5. Rispondi solo in JSON.",
                 },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=600,
         )
         raw = response.choices[0].message.content.strip()
 
@@ -361,35 +385,41 @@ Regole:
 
         classifications = json.loads(raw)
 
-        impact_map: dict[int, str] = {}
         for c in classifications:
             idx = c.get("index", 0) - 1
-            impact_map[idx] = c.get("impact", "BEARISH_IF_YES")
+            if 0 <= idx < len(batch):
+                batch[idx]["impact"] = c.get("impact", batch[idx].get("impact", "BEARISH_IF_YES"))
+                batch[idx]["impact_magnitude"] = max(1, min(5, int(c.get("magnitude", 3))))
 
-        for i, market in enumerate(batch):
-            market["impact"] = impact_map.get(i, market.get("impact", "BEARISH_IF_YES"))
-
-        logger.info("LLM classified %d Polymarket markets", len(batch))
+        logger.info("LLM classified %d Polymarket markets with magnitude", len(batch))
         return markets
 
     except Exception as exc:
         logger.warning("LLM classification failed, using keyword fallback: %s", exc)
-        return markets  # Already pre-populated with keyword classifications
+        return markets  # Already pre-populated
 
 
 # ---------------------------------------------------------------------------
-# Signal computation (volume-weighted)
+# Signal computation v2 — fixed probability interpretation
 # ---------------------------------------------------------------------------
 
 def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
-    """Calcola il segnale direzionale aggregato, pesato per volume.
+    """Calcola il segnale direzionale aggregato (v2).
 
-    Ogni mercato contribuisce in proporzione al proprio volume.
-    La classificazione bullish/bearish viene dal campo 'impact'
-    (impostato da classify_markets_with_llm o dal fallback keyword).
+    v2 fixes:
+    - Accounts for BOTH sides of each market (YES and NO probabilities)
+    - Temporal decay: markets resolving sooner weighted more
+    - Impact magnitude: higher-impact events contribute more
+    - Net directional score: positive = bullish, negative = bearish
+
+    Formula per market:
+        If BEARISH_IF_YES:  score = -(prob_yes - 50) / 50   (range: -1 to +1)
+        If BULLISH_IF_YES:  score = +(prob_yes - 50) / 50   (range: -1 to +1)
+
+        weighted_score = score × volume_weight × time_weight × magnitude
 
     Args:
-        markets: Lista di mercati con campo 'impact' opzionale.
+        markets: Lista di mercati con campi 'impact' e 'impact_magnitude'.
 
     Returns:
         Dizionario con segnale, confidenza, punteggi e top mercati.
@@ -406,53 +436,81 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
             "market_count": 0,
         }
 
-    total_volume = sum(m["volume_usd"] for m in markets)
-    if total_volume == 0:
-        total_volume = 1.0
-
-    bearish_weighted = 0.0
-    bullish_weighted = 0.0
+    total_weight = 0.0
+    bullish_score = 0.0
+    bearish_score = 0.0
 
     for market in markets:
         prob_yes = market["prob_yes"]
-        weight = market["volume_usd"] / total_volume
+        volume = market["volume_usd"]
         impact = market.get("impact", "")
+        magnitude = market.get("impact_magnitude", 3)
 
-        # If no LLM impact, fall back to keyword classification inline
         if not impact:
             impact = _keyword_classify_single(market["question"])
 
+        # Temporal decay based on resolution date
+        time_weight = _compute_time_weight(market.get("end_date", ""))
+
+        # Combined weight
+        w = volume * time_weight * magnitude
+        total_weight += w
+
+        # Directional contribution — accounts for BOTH sides
         if impact == "BEARISH_IF_YES":
-            bearish_weighted += prob_yes * weight
+            # prob_yes = chance of bad event happening
+            bearish_score += prob_yes * w
+            bullish_score += (100 - prob_yes) * w
         elif impact == "BULLISH_IF_YES":
-            bullish_weighted += prob_yes * weight
+            # prob_yes = chance of good event happening
+            bullish_score += prob_yes * w
+            bearish_score += (100 - prob_yes) * w
 
-    net_score = bullish_weighted - bearish_weighted
+    # Normalize to percentages
+    if total_weight > 0:
+        bullish_pct = bullish_score / total_weight
+        bearish_pct = bearish_score / total_weight
+    else:
+        bullish_pct = 50.0
+        bearish_pct = 50.0
 
-    if net_score < -10:
-        signal = "BEARISH"
-        confidence = min(100.0, abs(net_score) * 2)
-    elif net_score > 10:
+    net_score = bullish_pct - bearish_pct
+
+    # Directional threshold (±15 for signal, scaling confidence)
+    if net_score > 15:
         signal = "BULLISH"
-        confidence = min(100.0, net_score * 2)
+        confidence = min(100.0, 50 + net_score)
+    elif net_score < -15:
+        signal = "BEARISH"
+        confidence = min(100.0, 50 + abs(net_score))
     else:
         signal = "NEUTRAL"
         confidence = 50.0
 
     confidence = max(0.0, min(100.0, confidence))
 
-    top_markets = sorted(
-        markets, key=lambda m: m["volume_usd"], reverse=True,
-    )[:5]
+    # Sort top markets by effective weight (volume * time * magnitude)
+    for m in markets:
+        m["_effective_weight"] = (
+            m["volume_usd"]
+            * _compute_time_weight(m.get("end_date", ""))
+            * m.get("impact_magnitude", 3)
+        )
+    top_markets = sorted(markets, key=lambda m: m["_effective_weight"], reverse=True)[:5]
+    # Clean up temp field
+    for m in markets:
+        m.pop("_effective_weight", None)
+
+    raw_volume = sum(m["volume_usd"] for m in markets)
 
     return {
         "signal": signal,
         "confidence": round(confidence, 1),
         "net_score": round(net_score, 1),
-        "bullish_prob": round(bullish_weighted, 1),
-        "bearish_prob": round(bearish_weighted, 1),
+        "bullish_prob": round(bullish_pct, 1),
+        "bearish_prob": round(bearish_pct, 1),
         "top_markets": top_markets,
-        "total_volume": round(total_volume, 2),
+        "total_volume": round(raw_volume, 2),
         "market_count": len(markets),
     }
 
@@ -470,15 +528,7 @@ def get_polymarket_context(
 
     Costruisce tag e keyword in base agli asset configurati, recupera
     i mercati Polymarket con paginazione, classifica con LLM (o keyword),
-    e calcola il segnale aggregato pesato per volume.
-
-    Args:
-        assets: Lista di dizionari asset con 'symbol' e 'display_name'.
-        groq_model: Modello Groq per classificazione LLM.
-        groq_api_key: API key Groq (opzionale, legge da env se assente).
-
-    Returns:
-        Dizionario con dati mercati e segnale direzionale.
+    e calcola il segnale aggregato pesato per volume, tempo e magnitude.
     """
     tags = _get_tags_for_assets(assets)
     keywords = _get_keywords_for_assets(assets)
@@ -494,9 +544,10 @@ def get_polymarket_context(
     signal_data = compute_signal(markets)
 
     logger.info(
-        "Polymarket: %d mercati analizzati, signal=%s",
+        "Polymarket: %d mercati analizzati, signal=%s (net=%.1f)",
         signal_data["market_count"],
         signal_data["signal"],
+        signal_data["net_score"],
     )
 
     return signal_data

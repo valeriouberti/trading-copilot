@@ -109,7 +109,7 @@ class TestFullPipelineSuccess:
             with patch("modules.sentiment.Groq", return_value=mock_groq_client):
                 sentiment = analyze_sentiment(news, assets_config)
 
-        assert sentiment.source == "groq"
+        assert sentiment.source in ("groq", "groq-2pass")
 
         # Step 4: Validate
         validation = validate(sentiment, news, asset_analyses)

@@ -2,7 +2,7 @@
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
-**Versione 1.0 — Marzo 2026**
+**Versione 2.0 — Marzo 2026**
 
 ---
 
@@ -204,19 +204,60 @@ Questa formazione gli permette di **comprendere il significato** di un
 testo finanziario con una precisione simile a quella di un analista esperto,
 ma in millisecondi e su centinaia di articoli simultaneamente.
 
-### Il Compito Specifico: Sentiment Analysis
+### Il Compito Specifico: Sentiment Analysis (v2 — Two-Pass Chain-of-Thought)
 
-Il sistema chiede all'LLM di analizzare le notizie raccolte e rispondere
-a queste domande precise:
+Il sistema usa un approccio a due passaggi per migliorare la qualità dell'analisi:
+
+**Pass 1 — Ragionamento (Chain-of-Thought):**
+L'LLM ragiona step-by-step sulle notizie con temperatura più alta (0.4)
+e 1000 token. Identifica i driver chiave, analizza l'impatto su ogni asset
+specifico, e valuta il contesto macro.
+
+**Pass 2 — Estrazione strutturata (JSON):**
+L'output del ragionamento viene dato in input a un secondo prompt con
+temperatura bassa (0.1) e few-shot calibration examples per estrarre
+un JSON strutturato con:
 
 - **Sentiment score** (da -3 a +3): quanto è positivo o negativo il
   quadro informativo complessivo per i mercati?
+- **Per-asset scores**: punteggio specifico per OGNI asset (es. Fed hawkish
+  è bearish per NQ ma può essere bullish per USD)
 - **Key drivers** (3 fattori): quali sono le tre notizie o tendenze
   principali che guidano il sentiment oggi?
 - **Directional bias** (BULLISH/BEARISH/NEUTRAL): in quale direzione
   il sentiment spinge i prezzi?
 - **Risk events**: ci sono eventi nelle prossime 4-8 ore che potrebbero
   causare movimenti bruschi?
+
+Se il two-pass fallisce, il sistema fa fallback su un singolo prompt
+(single-pass, comportamento v1).
+
+### Temporal Weighting delle Notizie
+
+Le notizie vengono taggate con la loro recency prima di essere inviate
+all'LLM (es. `[2h fa]`, `[30m fa]`). Il prompt istruisce il modello
+che notizie recenti pesano 3x rispetto a quelle più vecchie.
+
+### Few-Shot Calibration
+
+Il prompt di estrazione include esempi calibrati per ancorare i punteggi:
+- +3.0 = Fed taglia tassi a sorpresa + occupazione record + CPI sotto attese
+- +1.0 = Dati mixed ma leggermente positivi
+-  0.0 = Nessuna notizia rilevante
+- -1.0 = Dati occupazione deboli, tensioni commerciali
+- -3.0 = Crisi bancaria + recessione confermata + panic selling
+
+### FinBERT Ensemble Cross-Validation
+
+Quando Groq ha successo, il sistema esegue FinBERT in parallelo come
+cross-validazione (non solo come fallback):
+
+- **AGREE** (divergenza ≤ 1.0): boost confidenza +5%
+- **PARTIAL** (divergenza 1.0-2.0): nessuna modifica
+- **DISAGREE** (divergenza > 2.0): riduzione confidenza -15%
+
+Questo aiuta a rilevare allucinazioni dell'LLM e fornisce un secondo
+punto di vista indipendente.
 
 ### La Scala del Sentiment
 
@@ -451,47 +492,63 @@ Il modulo Polymarket del sistema opera in 5 fasi:
    volume minimo > $10.000. Mercati illiquidi vengono esclusi
    perché le probabilità con pochi partecipanti sono inaffidabili.
 
-3. **Classificazione LLM**: ogni mercato viene inviato al modello LLM
-   (Llama 3.3 70B via Groq) che classifica l'impatto dell'evento:
-   - `BULLISH_IF_YES`: se l'evento SÌ si verifica, è positivo per i mercati
-     (es. "La Fed taglierà i tassi?" → SÌ = bullish)
-   - `BEARISH_IF_YES`: se l'evento SÌ si verifica, è negativo per i mercati
-     (es. "Recessione USA?" → SÌ = bearish)
+3. **Classificazione LLM con Impact Magnitude**: ogni mercato viene
+   inviato al modello LLM (Llama 3.3 70B via Groq) che classifica
+   l'impatto dell'evento con DUE criteri:
+   - **Direzione**: `BULLISH_IF_YES` o `BEARISH_IF_YES`
+   - **Magnitude** (1-5): quanto è market-moving l'evento
+     - 1 = marginale (politica minore)
+     - 3 = moderato (dati economici, tensioni commerciali)
+     - 5 = market-moving (decisioni Fed a sorpresa, crisi)
 
-   Questo risolve l'ambiguità semantica: un sistema a keyword
-   classificherebbe "Gli USA eviteranno la recessione?" come bearish
-   (contiene "recessione"), ma l'LLM capisce che SÌ = bullish.
+   **Fallback**: se Groq non è disponibile, usa classificazione keyword
+   con magnitude default = 3.
 
-   **Fallback**: se Groq non è disponibile (API key assente, errore di rete),
-   il sistema usa automaticamente una classificazione a keyword come backup.
+4. **Segnale pesato (v2 — fixed probability inversion)**: il segnale
+   finale tiene conto di ENTRAMBI i lati di ogni mercato.
 
-4. **Segnale pesato per volume**: il segnale finale è calcolato
-   pesando la probabilità di ogni mercato per il suo volume.
-   Un mercato con $10M di volume conta molto di più di uno con $10K.
-   Questo evita che mercati marginali distorcano il segnale.
+   **Il problema della v1**: "Recessione USA al 12% SÌ" veniva conteggiato
+   solo come 12% bearish, ignorando che l'88% di probabilità NO recessione
+   è un segnale fortemente bullish.
+
+   **La formula v2**: per ogni mercato:
+   ```
+   Se BEARISH_IF_YES:
+     bearish_score += prob_yes × weight
+     bullish_score += (100 - prob_yes) × weight  ← NUOVO: lato NO
+
+   Se BULLISH_IF_YES:
+     bullish_score += prob_yes × weight
+     bearish_score += (100 - prob_yes) × weight  ← NUOVO: lato NO
+
+   weight = volume × time_weight × magnitude
+   ```
+
+   **Temporal decay**: mercati che scadono presto pesano di più.
+   Formula: `time_weight = 1.0 / (1.0 + days_to_resolution / 14.0)`
+   (half-life di 2 settimane). Un mercato che scade oggi ha peso ~1.0,
+   uno che scade tra 6 mesi ha peso ~0.07.
 
    ```
 
-   Esempio di calcolo:
+   Esempio di calcolo v2:
    ─────────────────────────────────────────────────────────
    Mercato A: "Recessione USA?" (BEARISH_IF_YES)
-   Prob SÌ: 60% | Volume: $1M | Peso: 1M/1.1M = 0.91
-   Contributo bearish: 60 × 0.91 = 54.5
+   Prob SÌ: 12% | Volume: $500K | Time: 0.5 | Mag: 4
+   Weight = 500K × 0.5 × 4 = 1M
+   Bearish: 12 × 1M = 12M
+   Bullish: 88 × 1M = 88M  ← la probabilità NO è BULLISH!
 
-   Mercato B: "Fed taglia tassi?" (BULLISH_IF_YES)
-   Prob SÌ: 70% | Volume: $100K | Peso: 100K/1.1M = 0.09
-   Contributo bullish: 70 × 0.09 = 6.3
-
-   Net score = 6.3 - 54.5 = -48.2 → BEARISH
+   Net = (88M - 12M) / 1M = +76 → fortemente BULLISH
    ─────────────────────────────────────────────────────────
 
    ```
 
-5. **Soglie decisionali**:
-   - Net score < -10 → segnale BEARISH
-   - Net score > +10 → segnale BULLISH
+5. **Soglie decisionali v2**:
+   - Net score > +15 → segnale BULLISH
+   - Net score < -15 → segnale BEARISH
    - Altrimenti → NEUTRAL
-   - Confidenza = min(100%, |net_score| × 2)
+   - Confidenza = min(100%, 50 + |net_score|)
 
 ### Perché Polymarket è una Fonte Valida
 
@@ -527,15 +584,16 @@ Architettura del modulo Polymarket:
          │
          ▼
   ┌─────────────────────────────┐
-  │ classify_markets_with_llm() │ → Groq LLM: BULLISH_IF_YES / BEARISH_IF_YES
+  │ classify_markets_with_llm() │ → Groq LLM: direction + magnitude (1-5)
   │   (fallback: keyword)       │ → Gestisce ambiguità semantica
   └─────────────────────────────┘
          │
          ▼
-  ┌─────────────────────┐
-  │  compute_signal()    │ → Segnale pesato per volume
-  │  (volume-weighted)   │ → BULLISH / BEARISH / NEUTRAL + confidenza
-  └─────────────────────┘
+  ┌──────────────────────────┐
+  │  compute_signal() v2      │ → Entrambi i lati (YES + NO) per mercato
+  │  × volume × time × mag   │ → Temporal decay (2-week half-life)
+  │                            │ → BULLISH / BEARISH / NEUTRAL + confidenza
+  └──────────────────────────┘
 
 ```
 
@@ -596,8 +654,10 @@ a parole chiave.
 Significato: l'LLM potrebbe stare "allucinando" il sentiment.
 Azione: non tradare, verifica manualmente le news.
 
-🔴 DIRECTION_CONFLICT
+🔴 DIRECTION_CONFLICT / DIRECTION_CONFLICT_{ASSET}
 Quando: LLM bias è opposto al segnale tecnico composito.
+Con per-asset scoring (v2): il conflitto viene rilevato per ogni
+singolo asset (es. DIRECTION_CONFLICT_NQ=F: LLM BULLISH vs tech BEARISH).
 Significato: news e prezzi raccontano storie diverse.
 Azione: aspetta che uno dei due si allinei.
 
@@ -1184,6 +1244,6 @@ La disciplina è responsabilità esclusiva del trader.
 
 ---
 
-_Trading Assistant v1.0 — Documentazione interna_
+_Trading Assistant v2.0 — Documentazione interna_
 _Sviluppato per uso personale. Non distribuire senza autorizzazione._
 _Nessuna parte di questo documento costituisce consulenza finanziaria._
