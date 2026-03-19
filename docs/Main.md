@@ -145,9 +145,9 @@ Il sistema aggrega news da queste fonti gratuite:
 | Fonte                      | Tipo di contenuto                              | Affidabilità |
 | -------------------------- | ---------------------------------------------- | ------------ |
 | **Yahoo Finance RSS**      | Notizie societarie e macro per asset specifici | Alta         |
-| **Reuters Business**       | Notizie macroeconomiche globali                | Molto alta   |
+| **CNBC Top News**          | Notizie finanziarie e macro USA                | Molto alta   |
 | **Investing.com**          | Analisi mercati, dati economici                | Media-Alta   |
-| **Forex Factory Calendar** | Calendario eventi macro (facoltativo)          | Alta         |
+| **MarketWatch Top Stories**| Notizie mercati, macro, earnings               | Alta         |
 
 ### Il Processo di Pulizia
 
