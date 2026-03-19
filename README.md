@@ -32,9 +32,9 @@ source venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### 3. Configura la API key di Groq
+### 3. Configura le API key
 
-Registrati su [console.groq.com](https://console.groq.com/) e crea una API key gratuita.
+**Groq (consigliata):** Registrati su [console.groq.com](https://console.groq.com/) e crea una API key gratuita.
 
 ```bash
 export GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Linux/macOS
@@ -42,9 +42,17 @@ export GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Linux/macOS
 # oppure: $env:GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Windows PowerShell
 ```
 
-Per renderla permanente, aggiungila al tuo `.bashrc`, `.zshrc` o profilo di sistema.
-
 > **Nota:** Se non imposti la chiave Groq, il sistema usa automaticamente FinBERT come fallback (richiede il download del modello al primo avvio, circa 400MB).
+
+**Twelve Data (opzionale):** Fallback per i dati di prezzo quando yfinance non e' disponibile. Registrati su [twelvedata.com](https://twelvedata.com/) per una API key gratuita (800 richieste/giorno).
+
+```bash
+export TWELVE_DATA_API_KEY="la_tua_chiave_qui"
+```
+
+> **Nota:** Se non imposti la chiave Twelve Data, il sistema usa solo yfinance. Il fallback si attiva automaticamente quando yfinance fallisce.
+
+Per rendere le chiavi permanenti, aggiungile al tuo `.bashrc`, `.zshrc` o profilo di sistema.
 
 ---
 
@@ -98,9 +106,12 @@ python main.py --config my_config.yaml
 
 - **RSI**: Sotto 30 = ipervenduto (potenziale rimbalzo), Sopra 70 = ipercomprato (potenziale correzione)
 - **MACD**: Crossover rialzista/ribassista indica cambio di momentum
+- **BB** (Bollinger Bands): Prezzo sopra banda superiore = overextended, sotto inferiore = oversold, squeeze = breakout imminente
+- **Stoch** (Stochastic): %K sotto 20 = oversold, sopra 80 = overbought, crossover = cambio momentum
 - **vs VWAP**: Prezzo sopra VWAP = forza, sotto = debolezza intraday
 - **EMA Trend**: EMA20 > EMA50 = trend rialzista, viceversa ribassista
-- **Score Tecnico**: Media dei segnali — BULLISH/BEARISH/NEUTRAL con % di confidenza
+- **ADX**: Sopra 25 = trend forte, sotto 20 = mercato in range (mostra +DI/-DI per direzione)
+- **Score Tecnico**: 6 indicatori direzionali (RSI, MACD, BB, Stoch, VWAP, EMA) — BULLISH/BEARISH/NEUTRAL con % di confidenza
 - **Azione**: Suggerimento sintetico basato su tecnici + sentiment
 
 ### Suggerimento per il trading
@@ -200,13 +211,15 @@ trading-assistant/
 ├── config.yaml                  # Configurazione (asset, feed, parametri)
 ├── modules/
 │   ├── news_fetcher.py          # Aggregatore notizie RSS
-│   ├── price_data.py            # Dati prezzo + indicatori tecnici
+│   ├── price_data.py            # Dati prezzo + indicatori tecnici (yfinance + Twelve Data)
 │   ├── sentiment.py             # Analisi sentiment (Groq / FinBERT)
 │   ├── report.py                # Generatore report HTML
 │   ├── hallucination_guard.py   # Validazione anti-allucinazione
 │   ├── polymarket.py            # Segnale mercati predittivi Polymarket (v3)
 │   ├── keywords.py              # Keyword condivise bullish/bearish
 │   └── trade_log.py             # Registro trade e statistiche
+├── tradingview/
+│   └── trading_copilot.pine     # Pine Script v6 — EMA Pullback Strategy
 ├── reports/                     # Report HTML generati
 ├── tests/                       # Test suite
 ├── requirements.txt             # Dipendenze Python
@@ -220,9 +233,10 @@ trading-assistant/
 | Problema                       | Soluzione                                                               |
 | ------------------------------ | ----------------------------------------------------------------------- |
 | `GROQ_API_KEY non impostata`   | Esporta la variabile d'ambiente (vedi Setup punto 3)                    |
-| `No data returned for symbol`  | Verifica che il simbolo sia corretto su Yahoo Finance                   |
+| `No data returned for symbol`  | Verifica il simbolo su Yahoo Finance. Se yfinance e' instabile, configura `TWELVE_DATA_API_KEY` come fallback |
 | `Rate limit exceeded`          | Aspetta qualche minuto, Groq free tier ha limiti                        |
 | `FinBERT download lento`       | Normale al primo avvio, il modello viene cachato                        |
+| `via twelvedata` nel report    | Normale: yfinance era temporaneamente non disponibile, i dati sono validi |
 | Report non si apre nel browser | Usa `--no-browser` e apri manualmente il file dalla cartella `reports/` |
 
 ---

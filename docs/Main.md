@@ -2,7 +2,7 @@
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
-**Versione 3.0 — Marzo 2026**
+**Versione 4.0 — Marzo 2026**
 
 ---
 
@@ -93,9 +93,11 @@ ciascuno con una fonte dati distinta e una logica di elaborazione propria.
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                               ║
 ║  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌────────┐ ║
+║  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌────────┐ ║
 ║  │  LAYER 1    │  │  LAYER 2    │  │ LAYER 3  │  │LAYER 4 │ ║
 ║  │  Feed News  │  │  LLM        │  │ Tecnici  │  │Poly-   │ ║
 ║  │  RSS        │→ │  Sentiment  │  │ yfinance │  │market  │ ║
+║  │             │  │             │  │ +12Data  │  │        │ ║
 ║  └─────────────┘  └─────────────┘  └──────────┘  └────────┘ ║
 ║         │                │               │            │       ║
 ║         └────────────────┴───────────────┴────────────┘       ║
@@ -128,7 +130,9 @@ in modo controllato.
 - **I/O Parallelo**: I Layer 1, 3 e 4 vengono eseguiti in parallelo tramite
   `concurrent.futures.ThreadPoolExecutor` (3 worker), riducendo il tempo totale
   del pipeline da sequenziale (~30s) a parallelo (~12-15s).
-- **Retry con backoff**: Tutti i componenti di I/O (RSS, yfinance, Polymarket API)
+- **Twelve Data fallback**: Se yfinance fallisce, il sistema tenta automaticamente
+  Twelve Data come fonte alternativa (richiede `TWELVE_DATA_API_KEY`, free tier).
+- **Retry con backoff**: Tutti i componenti di I/O (RSS, yfinance, Twelve Data, Polymarket API)
   implementano retry con backoff esponenziale (3 tentativi, base 2s).
 - **Progress bar**: `tqdm` mostra lo stato di avanzamento durante il fetch parallelo.
 - **Trade Log**: Il sistema registra i trade in `trade_log.csv` e fornisce
@@ -332,6 +336,27 @@ e il trader deve approfondire manualmente prima di operare.
 
 ## 5. Layer 3 — Indicatori Tecnici
 
+### Fonti Dati: yfinance + Twelve Data Fallback
+
+Il sistema utilizza **yfinance** come fonte primaria per i dati OHLCV
+(Open, High, Low, Close, Volume). Se yfinance fallisce (timeout, rate
+limit, errore di rete), il sistema tenta automaticamente **Twelve Data**
+come fallback.
+
+| Fonte          | Costo      | Copertura                  | Intraday         |
+| -------------- | ---------- | -------------------------- | ---------------- |
+| **yfinance**   | Gratuito   | Futures, Forex, Azioni     | 5m (ultimi 5gg)  |
+| **Twelve Data**| Free tier  | Futures, Forex, Azioni     | 5m (30+ giorni)  |
+
+Per attivare il fallback Twelve Data:
+```bash
+export TWELVE_DATA_API_KEY="la_tua_chiave_qui"
+```
+
+Il report mostra un badge "via twelvedata" accanto all'asset quando
+il fallback viene utilizzato. Se la chiave non è impostata, il fallback
+è semplicemente disabilitato.
+
 ### Perché Servono i Tecnici se Abbiamo l'LLM
 
 L'LLM analizza il **perché** il mercato potrebbe muoversi (notizie, contesto).
@@ -343,7 +368,7 @@ significa che il mercato sta resistendo alla pressione — segnale di
 possibile inversione imminente, ma non ancora confermata. In questo caso
 si aspetta prima di operare.
 
-### Gli Indicatori Utilizzati
+### Gli Indicatori Utilizzati (8 totali)
 
 **EMA 20 e EMA 50 (Exponential Moving Average)**
 
@@ -414,24 +439,79 @@ e produce un segnale di momentum direzionale.
 Il sistema usa il MACD come conferma del momentum, non come
 segnale primario di entry.
 
+**Bollinger Bands (20 periodi, 2 deviazioni standard)**
+
+Le Bande di Bollinger creano un canale dinamico attorno al prezzo
+basato sulla deviazione standard. Quando le bande si restringono
+(squeeze), la volatilità è compressa e un breakout è imminente.
+
+- Prezzo > banda superiore → BEARISH (overextended, possibile ritorno)
+- Prezzo < banda inferiore → BULLISH (oversold, possibile rimbalzo)
+- Squeeze (bandwidth < 4%) → NEUTRAL (breakout imminente, attendere direzione)
+- Prezzo tra media e superiore → BULLISH (momentum positivo)
+- Prezzo tra media e inferiore → BEARISH (momentum negativo)
+
+Le BB completano l'RSI: entrambi misurano eccesso, ma con metodi diversi
+(deviazione standard vs. rapporto forza relativa).
+
+**Stochastic (14, 3, 3)**
+
+Lo Stocastico misura la posizione del prezzo di chiusura rispetto al
+range high-low degli ultimi 14 periodi. Produce due linee: %K (veloce)
+e %D (lenta, media mobile di %K).
+
+- %K > 80 → BEARISH (ipercomprato)
+- %K < 20 → BULLISH (ipervenduto)
+- %K incrocia %D dal basso → BULLISH crossover (segnale di entry)
+- %K incrocia %D dall'alto → BEARISH crossover (segnale di exit)
+
+Il valore principale dello Stocastico è il **crossover**: segnala
+il momento esatto in cui il momentum cambia direzione, particolarmente
+utile nella strategia EMA pullback per confermare l'esaurimento del
+ritracciamento.
+
+**ADX — Average Directional Index (14 periodi)**
+
+L'ADX misura la **forza del trend**, non la direzione. Produce un
+valore da 0 a 100:
+
+- ADX > 25 → trend forte (il mercato si muove con convinzione)
+- ADX < 20 → mercato in range (movimenti senza direzione chiara)
+
+Il sistema mostra anche +DI e -DI che indicano la direzione:
++DI > -DI = trend rialzista, -DI > +DI = trend ribassista.
+
+L'ADX è **non-direzionale** nel punteggio composito (come l'ATR) —
+serve come filtro di qualità: un segnale di entry ha più valore
+quando ADX > 25 perché il trend ha forza.
+
 ### Il Punteggio Tecnico Composito
 
-Il sistema combina tutti gli indicatori in un unico score:
+Il sistema combina **6 indicatori direzionali** in un unico score
+(ATR e ADX sono informativi, non contano nel punteggio):
 
 ```
 
-Indicatore    Condizione Bullish           Peso
-──────────────────────────────────────────────
-EMA20/50      EMA20 > EMA50               +1
-VWAP          Prezzo > VWAP               +1
-RSI           30 < RSI < 70 + trending    +1
-MACD          Signal bullish crossover    +1
-──────────────────────────────────────────────
-Score 3-4/4  → BULLISH  (75-100% confidence)
-Score 2/4    → NEUTRAL  (50% confidence)
-Score 0-1/4  → BEARISH  (75-100% confidence)
+Indicatore    Condizione Bullish                Tipo
+────────────────────────────────────────────────────────
+EMA20/50      EMA20 > EMA50                    Direzionale (+1)
+VWAP          Prezzo > VWAP                    Direzionale (+1)
+RSI           30 < RSI < 70 + trending up      Direzionale (+1)
+MACD          Signal bullish crossover/pos.    Direzionale (+1)
+BB            Prezzo sopra media BB            Direzionale (+1)
+Stochastic    %K < 80 + bullish crossover      Direzionale (+1)
+────────────────────────────────────────────────────────
+ATR           Volatilità alta/bassa            Informativo
+ADX           Trend forte/debole               Informativo
+────────────────────────────────────────────────────────
+Score 4-6/6  → BULLISH  (67-100% confidence)
+Score 3/6    → NEUTRAL  (50% confidence)
+Score 0-2/6  → BEARISH  (67-100% confidence)
 
 ```
+
+Con 6 indicatori invece di 4, il punteggio composito è più robusto:
+un singolo indicatore rumoroso ha meno impatto sul risultato finale.
 
 ---
 
@@ -904,15 +984,17 @@ Situazione: lo script ha restituito errori, report non generato
 
 ### Il Pine Script su TradingView
 
-Il sistema include uno script Pine Script (TradingView) che
-visualizza automaticamente sul grafico:
+Il sistema include uno script Pine Script v6 (`tradingview/trading_copilot.pine`)
+che visualizza automaticamente sul grafico:
 
-- Le linee EMA20 (arancione) ed EMA50 (blu)
-- Il VWAP della sessione (bianco)
-- Lo sfondo verde (trend rialzista) o rosso (ribassista)
+- Le linee EMA20 (blu) ed EMA50 (arancione)
+- Il VWAP della sessione
 - Frecce LONG/SHORT quando tutte le condizioni tecniche sono soddisfatte
-- Una tabella con RSI, ATR, score tecnico e bias LLM impostato manualmente
+- Diamanti cyan come pre-segnale (struttura pronta, prezzo tocca EMA20)
+- Una tabella informativa (14 righe) con: regime, bias, confidenza, EMA,
+  RSI, VWAP, MACD, ATR, distanze SL/TP e rapporto R:R
 - Le linee di Stop Loss e Take Profit calcolate automaticamente via ATR
+- Deduplicazione segnali: un solo segnale per trend, reset su rottura struttura
 
 ### Entry LONG — Condizioni Tecniche
 
@@ -1066,14 +1148,16 @@ Box di allerta se ci sono eventi macro nelle prossime ore
 (dati Fed, CPI, NFP, earnings, ecc.)
 
 **7. Tabella Asset**
-Una riga per ogni asset configurato, con:
+Una riga per ogni asset configurato, con 13 colonne:
 
-- Prezzo corrente
-- RSI, MACD signal, posizione vs VWAP
-- Score tecnico composito
-- Bias LLM
+- Prezzo corrente e variazione %
+- RSI (valore + label), MACD (label), Bollinger Bands (label + dettaglio),
+  Stochastic (%K + label), posizione vs VWAP, EMA Trend, ADX (forza trend)
+- Score tecnico composito (6 indicatori direzionali)
+- Bias LLM per-asset
 - Segnale Polymarket
-- Hint operativo
+- Hint operativo (LONG / SHORT / Wait / Conflict)
+- Badge "via twelvedata" se il fallback è stato usato
 
 **8. News Raw (collassabile)**
 Tutti i titoli di notizie aggregati con fonte e orario,
@@ -1260,6 +1344,6 @@ La disciplina è responsabilità esclusiva del trader.
 
 ---
 
-_Trading Assistant v3.0 — Documentazione interna_
+_Trading Assistant v4.0 — Documentazione interna_
 _Sviluppato per uso personale. Non distribuire senza autorizzazione._
 _Nessuna parte di questo documento costituisce consulenza finanziaria._
