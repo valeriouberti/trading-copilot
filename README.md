@@ -168,7 +168,9 @@ I simboli seguono la convenzione Yahoo Finance:
 
 ## Integrazione Polymarket
 
-Il sistema integra i dati dei **mercati predittivi di Polymarket** come terzo segnale di conferma. Polymarket è una piattaforma dove utenti reali scommettono con denaro vero sulla probabilità di eventi futuri (decisioni della Fed, recessione, conflitti geopolitici). Queste probabilità riflettono l'opinione aggregata del mercato e possono fornire un segnale complementare all'analisi tecnica e al sentiment LLM.
+Il sistema integra i dati dei **mercati predittivi di Polymarket** come terzo segnale di conferma. Polymarket è una piattaforma dove utenti reali scommettono con denaro vero sulla probabilità di eventi futuri (decisioni della Fed, recessione, conflitti geopolitici, commodity). Queste probabilità riflettono l'opinione aggregata del mercato e possono fornire un segnale complementare all'analisi tecnica e al sentiment LLM.
+
+Il modulo (v3) utilizza l'endpoint `/events` dell'API Gamma con **tag_slug curati** per asset class (es. `fed`, `gdp`, `tariffs`, `gold`, `oil`), garantendo che vengano analizzati solo mercati finanziari rilevanti. I mercati non finanziari (sport, meteo, intrattenimento) vengono scartati automaticamente.
 
 ### Utilizzo offline
 
@@ -202,7 +204,9 @@ trading-assistant/
 │   ├── sentiment.py             # Analisi sentiment (Groq / FinBERT)
 │   ├── report.py                # Generatore report HTML
 │   ├── hallucination_guard.py   # Validazione anti-allucinazione
-│   └── polymarket.py            # Segnale mercati predittivi Polymarket
+│   ├── polymarket.py            # Segnale mercati predittivi Polymarket (v3)
+│   ├── keywords.py              # Keyword condivise bullish/bearish
+│   └── trade_log.py             # Registro trade e statistiche
 ├── reports/                     # Report HTML generati
 ├── tests/                       # Test suite
 ├── requirements.txt             # Dipendenze Python

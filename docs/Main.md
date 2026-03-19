@@ -2,7 +2,7 @@
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
-**Versione 2.0 — Marzo 2026**
+**Versione 3.0 — Marzo 2026**
 
 ---
 
@@ -480,18 +480,31 @@ Esempi di mercati attivi:
 
 Il modulo Polymarket del sistema opera in 5 fasi:
 
-1. **Recupero con paginazione e tag**: il sistema interroga l'API Gamma
-   di Polymarket utilizzando tag di categoria specifici per gli asset
-   configurati (es. `economics`, `politics` per NAS100/S&P500).
-   Per ciascun tag, recupera fino a 300 mercati (3 pagine da 100),
-   ordinati per volume decrescente. I mercati duplicati tra tag
-   diversi vengono automaticamente deduplicati.
+1. **Recupero via /events con tag_slug curati** (v3): il sistema interroga
+   l'endpoint `/events` dell'API Gamma di Polymarket utilizzando tag_slug
+   finanziari specifici per gli asset configurati. Per ogni asset, vengono
+   selezionati tag_slug curati tra quelli realmente disponibili su Polymarket:
 
-2. **Filtro per keyword e volume**: i mercati recuperati vengono filtrati
-   client-side per parole chiave rilevanti (es. "fed", "recession",
-   "inflation" per NAS100; "ecb", "euro" per EURUSD; ecc.) e per
-   volume minimo > $10.000. Mercati illiquidi vengono esclusi
-   perché le probabilità con pochi partecipanti sono inaffidabili.
+   | Asset            | Tag slugs utilizzati                                           |
+   | ---------------- | -------------------------------------------------------------- |
+   | NQ, ES, S&P      | `fed`, `inflation`, `gdp`, `unemployment`, `tariffs`, `stocks`, `economy`, `geopolitics` |
+   | EUR              | `fed`, `inflation`, `interest-rates`, `economy`, `tariffs`, `geopolitics` |
+   | Gold (GC)        | `gold`, `commodities`, `geopolitics`, `fed`, `inflation`, `oil` |
+   | Oil (CL)         | `oil`, `commodities`, `geopolitics`, `fed`                    |
+
+   Ogni evento contiene mercati nidificati che vengono estratti e deduplicati.
+
+   > **Nota tecnica (v3)**: l'endpoint `/markets` ignora completamente il
+   > parametro `tag` — restituisce tutti i mercati indipendentemente dalla
+   > categoria, includendo sport, meteo e intrattenimento. L'endpoint
+   > `/events` con `tag_slug` è l'unico che filtra correttamente server-side.
+
+2. **Filtro per categoria e volume**: ogni mercato viene classificato in una
+   categoria tematica (FED, MACRO, COMMODITY, GEOPOLITICAL, CRYPTO) tramite
+   parole chiave nel titolo. I mercati classificati come OTHER (sport, meteo,
+   intrattenimento) vengono **scartati automaticamente** (category gate).
+   Mercati illiquidi sotto la soglia volume vengono esclusi perché le
+   probabilità con pochi partecipanti sono inaffidabili.
 
 3. **Classificazione LLM con Impact Magnitude**: ogni mercato viene
    inviato al modello LLM (Llama 3.3 70B via Groq) che classifica
@@ -567,22 +580,23 @@ le news dicono cosa è successo, Polymarket dice cosa il mercato
 
 ```
 
-Architettura del modulo Polymarket:
+Architettura del modulo Polymarket (v3):
 ════════════════════════════════════════════════════════════
 
   Asset configurati (config.yaml)
          │
          ▼
-  ┌─────────────────────┐
-  │ _get_tags_for_assets │ → tag API: ["economics", "politics"]
-  │ _get_keywords        │ → keyword client: ["fed", "recession", ...]
-  └─────────────────────┘
+  ┌──────────────────────────┐
+  │ _get_tag_slugs_for_assets │ → tag_slugs: ["fed", "gdp", "tariffs", ...]
+  └──────────────────────────┘   (curati per asset, basati su slug reali)
          │
          ▼
-  ┌─────────────────────┐
-  │   fetch_markets()    │ → API Gamma con paginazione (fino a 300/tag)
-  │   + dedup + filtro   │ → keyword match + volume > $10K
-  └─────────────────────┘
+  ┌──────────────────────────┐
+  │   fetch_markets() v3      │ → GET /events?tag_slug=X (per ogni slug)
+  │                            │ → Estrazione mercati da eventi nidificati
+  │   + dedup                  │ → Deduplicazione cross-tag
+  │   + category gate          │ → Scarta OTHER (sport, meteo, ecc.)
+  └──────────────────────────┘
          │
          ▼
   ┌─────────────────────────────┐
@@ -1246,6 +1260,6 @@ La disciplina è responsabilità esclusiva del trader.
 
 ---
 
-_Trading Assistant v2.0 — Documentazione interna_
+_Trading Assistant v3.0 — Documentazione interna_
 _Sviluppato per uso personale. Non distribuire senza autorizzazione._
 _Nessuna parte di questo documento costituisce consulenza finanziaria._
