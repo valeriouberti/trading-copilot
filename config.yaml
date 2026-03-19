@@ -1,0 +1,26 @@
+# Trading Assistant Configuration
+# ================================
+
+assets:
+  - symbol: "NQ=F"
+    display_name: "NASDAQ 100 Futures"
+  - symbol: "ES=F"
+    display_name: "S&P 500 Futures"
+  - symbol: "EURUSD=X"
+    display_name: "EUR/USD"
+  - symbol: "GC=F"
+    display_name: "Gold Futures"
+
+rss_feeds:
+  - url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US"
+    name: "Yahoo Finance NASDAQ"
+  - url: "https://feeds.reuters.com/reuters/businessNews"
+    name: "Reuters Business"
+  - url: "https://www.investing.com/rss/news_14.rss"
+    name: "Investing.com"
+  - url: "https://www.forexfactory.com/rss"
+    name: "Forex Factory Calendar"
+
+groq_model: "llama-3.3-70b-versatile"
+lookback_hours: 16
+report_language: "italian"

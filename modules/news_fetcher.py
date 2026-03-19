@@ -1,0 +1,199 @@
+"""RSS news aggregator module.
+
+Fetches and filters financial news from configured RSS feeds,
+deduplicates by title similarity, and returns structured results.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime, timezone
+from difflib import SequenceMatcher
+from typing import Any
+
+import feedparser
+from dateutil import parser as date_parser
+
+logger = logging.getLogger(__name__)
+
+SIMILARITY_THRESHOLD = 0.85
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2.0
+
+
+def fetch_news(
+    feeds: list[dict[str, str]],
+    lookback_hours: int = 16,
+    assets: list[dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch and deduplicate news articles from RSS feeds.
+
+    Args:
+        feeds: List of dicts with 'url' and 'name' keys.
+        lookback_hours: Only include articles from the last N hours.
+        assets: Optional list of asset dicts for prioritization.
+
+    Returns:
+        Deduplicated list of article dicts with keys:
+        title, summary, source, published_at.
+    """
+    cutoff = datetime.now(timezone.utc).timestamp() - (lookback_hours * 3600)
+    all_articles: list[dict[str, Any]] = []
+
+    for feed_cfg in feeds:
+        url = feed_cfg["url"]
+        source_name = feed_cfg.get("name", url)
+        articles = _fetch_single_feed(url, source_name, cutoff)
+        all_articles.extend(articles)
+        logger.info("Feed '%s': %d articles after time filter", source_name, len(articles))
+
+    all_articles.sort(key=lambda a: a["published_at"], reverse=True)
+    deduplicated = _deduplicate(all_articles)
+    logger.info(
+        "Total articles: %d raw -> %d after dedup",
+        len(all_articles),
+        len(deduplicated),
+    )
+
+    if assets:
+        deduplicated = _prioritize_by_assets(deduplicated, assets)
+
+    return deduplicated
+
+
+def _fetch_single_feed(
+    url: str,
+    source_name: str,
+    cutoff_timestamp: float,
+) -> list[dict[str, Any]]:
+    """Fetch a single RSS feed with retry logic."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            feed = feedparser.parse(url)
+            if feed.bozo and not feed.entries:
+                raise ValueError(f"Feed parse error: {feed.bozo_exception}")
+            break
+        except Exception as exc:
+            if attempt == MAX_RETRIES:
+                logger.error(
+                    "Failed to fetch feed '%s' after %d attempts: %s",
+                    source_name,
+                    MAX_RETRIES,
+                    exc,
+                )
+                return []
+            wait = RETRY_BACKOFF_BASE ** attempt
+            logger.warning(
+                "Retry %d/%d for feed '%s' in %.1fs: %s",
+                attempt,
+                MAX_RETRIES,
+                source_name,
+                wait,
+                exc,
+            )
+            time.sleep(wait)
+
+    articles: list[dict[str, Any]] = []
+    for entry in feed.entries:
+        published_at = _parse_entry_date(entry)
+        if published_at is None or published_at.timestamp() < cutoff_timestamp:
+            continue
+
+        title = entry.get("title", "").strip()
+        summary = entry.get("summary", entry.get("description", "")).strip()
+        # Strip HTML tags from summary
+        if "<" in summary:
+            import re
+            summary = re.sub(r"<[^>]+>", "", summary).strip()
+
+        if not title:
+            continue
+
+        articles.append({
+            "title": title,
+            "summary": summary[:500] if summary else "",
+            "source": source_name,
+            "published_at": published_at,
+        })
+
+    return articles
+
+
+def _parse_entry_date(entry: Any) -> datetime | None:
+    """Extract and parse the publication date from a feed entry."""
+    for field in ("published", "updated", "created"):
+        raw = entry.get(field)
+        if raw:
+            try:
+                dt = date_parser.parse(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except (ValueError, OverflowError):
+                continue
+
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if parsed:
+        try:
+            return datetime(*parsed[:6], tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+def _deduplicate(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove articles with similar titles using SequenceMatcher."""
+    unique: list[dict[str, Any]] = []
+    seen_titles: list[str] = []
+
+    for article in articles:
+        title = article["title"].lower()
+        is_duplicate = False
+        for seen in seen_titles:
+            ratio = SequenceMatcher(None, title, seen).ratio()
+            if ratio >= SIMILARITY_THRESHOLD:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique.append(article)
+            seen_titles.append(title)
+
+    return unique
+
+
+def _prioritize_by_assets(
+    articles: list[dict[str, Any]],
+    assets: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Prioritize articles that mention configured assets."""
+    asset_terms: list[str] = []
+    for a in assets:
+        asset_terms.append(a.get("symbol", "").lower())
+        name = a.get("display_name", "").lower()
+        if name:
+            asset_terms.extend(name.split())
+    # Remove empty and very short terms
+    asset_terms = [t for t in asset_terms if len(t) > 2]
+
+    def mentions_asset(article: dict[str, Any]) -> bool:
+        text = f"{article['title']} {article.get('summary', '')}".lower()
+        return any(term in text for term in asset_terms)
+
+    prioritized = [a for a in articles if mentions_asset(a)]
+    rest = [a for a in articles if not mentions_asset(a)]
+    return prioritized + rest
+
+
+if __name__ == "__main__":
+    import yaml
+
+    logging.basicConfig(level=logging.INFO)
+    with open("config.yaml") as f:
+        config = yaml.safe_load(f)
+    news = fetch_news(config["rss_feeds"], config["lookback_hours"])
+    for item in news[:10]:
+        print(f"[{item['source']}] {item['title']}")
+        print(f"  {item['published_at']}")
+        print()
