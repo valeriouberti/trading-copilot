@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ def generate_report(
         Absolute path to the generated HTML file.
     """
     now = datetime.now(timezone.utc)
+    now_it = now.astimezone(ZoneInfo("Europe/Rome"))
     timestamp = now.strftime("%Y%m%d_%H%M")
     session = get_market_session()
 
@@ -393,7 +395,7 @@ def generate_report(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trading Assistant Report — {now.strftime('%d/%m/%Y %H:%M')} UTC</title>
+    <title>Trading Assistant Report — {now_it.strftime('%d/%m/%Y %H:%M')} IT</title>
 </head>
 <body style="margin:0;padding:0;background:#0f172a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;">
 <div style="max-width:1200px;margin:0 auto;padding:24px;">
@@ -403,7 +405,7 @@ def generate_report(
         <div>
             <h1 style="margin:0;font-size:1.5em;color:#f1f5f9;">Trading Assistant Report</h1>
             <p style="margin:4px 0 0;color:#94a3b8;">
-                {now.strftime('%d %B %Y — %H:%M')} UTC
+                {now_it.strftime('%d %B %Y — %H:%M')} (ora italiana) &middot; {now.strftime('%H:%M')} UTC
             </p>
         </div>
         <div style="text-align:right;">
@@ -511,14 +513,16 @@ def print_terminal_summary(
     poly_data: dict[str, Any] | None = None,
     regime: str = "NEUTRAL",
     regime_reason: str = "",
+    validation_flags: list[str] | None = None,
 ) -> None:
     """Stampa un riepilogo ASCII compatto nel terminale."""
     session = get_market_session()
     now = datetime.now(timezone.utc)
+    now_it = now.astimezone(ZoneInfo("Europe/Rome"))
 
     print()
     print("=" * 70)
-    print(f"  TRADING ASSISTANT — {now.strftime('%d/%m/%Y %H:%M')} UTC")
+    print(f"  TRADING ASSISTANT — {now_it.strftime('%d/%m/%Y %H:%M')} IT ({now.strftime('%H:%M')} UTC)")
     print(f"  Sessione: {session}")
     print("=" * 70)
 
@@ -541,6 +545,20 @@ def print_terminal_summary(
         print("\n  RISK EVENTS:")
         for e in risk_events:
             print(f"    ! {e}")
+
+    # Validation flags and confluence status
+    flags = validation_flags or []
+    if flags:
+        print("\n  VALIDAZIONE:")
+        for flag in flags:
+            if "TRIPLE_CONFLUENCE" in flag:
+                print(f"    ✓ {flag}")
+            elif "CONFLICT" in flag or "MISMATCH" in flag:
+                print(f"    ✗ {flag}")
+            else:
+                print(f"    • {flag}")
+    else:
+        print("\n  VALIDAZIONE: OK — nessun flag")
 
     print(f"\n  {'Asset':<25} {'Prezzo':>12} {'Score':<10} {'Azione':<20}")
     print("  " + "-" * 67)

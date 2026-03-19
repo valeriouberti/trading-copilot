@@ -236,8 +236,9 @@ class TestPipelineCustomAssets:
         assert len(results) == 1
         assert results[0].symbol == "GC=F"
         assert results[0].display_name == "Gold Futures"
-        # yf.Ticker should have been called exactly once with "GC=F"
-        mock_yf.assert_called_once_with("GC=F")
+        # yf.Ticker called twice (daily + 5m data via _fetch_with_retry)
+        assert mock_yf.call_count == 2
+        mock_yf.assert_any_call("GC=F")
 
 
 class TestTerminalOutput:

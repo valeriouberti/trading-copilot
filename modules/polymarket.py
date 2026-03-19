@@ -61,15 +61,7 @@ _CATEGORY_RULES: list[tuple[str, list[str]]] = [
 # ---------------------------------------------------------------------------
 # Keyword-based Bearish / Bullish event classification (fallback)
 # ---------------------------------------------------------------------------
-BEARISH_EVENT_KEYWORDS = [
-    "recession", "crash", "rate hike", "hawkish", "default",
-    "war", "conflict", "tariff", "unemployment rise", "contraction",
-]
-
-BULLISH_EVENT_KEYWORDS = [
-    "rate cut", "dovish", "soft landing", "growth", "rally",
-    "recovery", "expansion",
-]
+from modules.keywords import BEARISH_EVENT_KEYWORDS, BULLISH_EVENT_KEYWORDS
 
 
 def _classify_category(question: str) -> str:
@@ -301,18 +293,22 @@ def classify_markets_with_llm(
     if not markets:
         return markets
 
+    # Pre-populate ALL markets with keyword fallback to avoid race condition
+    # (ensures every market has an 'impact' field even if LLM fails mid-way)
+    _classify_markets_with_keywords(markets)
+
     if not api_key:
         api_key = os.environ.get("GROQ_API_KEY", "")
 
     if not api_key:
         logger.info("No Groq API key — keyword classification for Polymarket")
-        return _classify_markets_with_keywords(markets)
+        return markets
 
     try:
         from groq import Groq
     except ImportError:
         logger.warning("groq library not installed — keyword classification")
-        return _classify_markets_with_keywords(markets)
+        return markets
 
     batch = markets[:15]
     questions_block = "\n".join(
@@ -371,18 +367,14 @@ Regole:
             impact_map[idx] = c.get("impact", "BEARISH_IF_YES")
 
         for i, market in enumerate(batch):
-            market["impact"] = impact_map.get(i, "BEARISH_IF_YES")
-
-        # Keyword fallback for markets beyond the LLM batch
-        for market in markets[15:]:
-            market["impact"] = _keyword_classify_single(market["question"])
+            market["impact"] = impact_map.get(i, market.get("impact", "BEARISH_IF_YES"))
 
         logger.info("LLM classified %d Polymarket markets", len(batch))
         return markets
 
     except Exception as exc:
-        logger.warning("LLM classification failed, using keywords: %s", exc)
-        return _classify_markets_with_keywords(markets)
+        logger.warning("LLM classification failed, using keyword fallback: %s", exc)
+        return markets  # Already pre-populated with keyword classifications
 
 
 # ---------------------------------------------------------------------------

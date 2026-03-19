@@ -6,6 +6,7 @@ deduplicates by title similarity, and returns structured results.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -143,19 +144,40 @@ def _parse_entry_date(entry: Any) -> datetime | None:
     return None
 
 
+def _title_hash(title: str) -> str:
+    """Compute a normalized hash for fast exact-match dedup."""
+    normalized = " ".join(title.lower().split())
+    return hashlib.md5(normalized.encode()).hexdigest()
+
+
 def _deduplicate(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove articles with similar titles using SequenceMatcher."""
+    """Remove articles with similar titles.
+
+    Uses a two-phase approach:
+    1. Hash pre-filter for exact/near-exact duplicates (O(1) lookup)
+    2. SequenceMatcher for fuzzy duplicates (only against non-hash-matched)
+    """
     unique: list[dict[str, Any]] = []
+    seen_hashes: set[str] = set()
     seen_titles: list[str] = []
 
     for article in articles:
         title = article["title"].lower()
+        h = _title_hash(title)
+
+        # Phase 1: exact hash match
+        if h in seen_hashes:
+            continue
+        seen_hashes.add(h)
+
+        # Phase 2: fuzzy match against already-seen titles
         is_duplicate = False
         for seen in seen_titles:
             ratio = SequenceMatcher(None, title, seen).ratio()
             if ratio >= SIMILARITY_THRESHOLD:
                 is_duplicate = True
                 break
+
         if not is_duplicate:
             unique.append(article)
             seen_titles.append(title)

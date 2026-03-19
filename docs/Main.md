@@ -123,6 +123,18 @@ Ogni layer opera in modo indipendente: un guasto o un'assenza di dati
 in uno non blocca gli altri. Il sistema è progettato per degradare
 in modo controllato.
 
+### Ottimizzazioni Architetturali
+
+- **I/O Parallelo**: I Layer 1, 3 e 4 vengono eseguiti in parallelo tramite
+  `concurrent.futures.ThreadPoolExecutor` (3 worker), riducendo il tempo totale
+  del pipeline da sequenziale (~30s) a parallelo (~12-15s).
+- **Retry con backoff**: Tutti i componenti di I/O (RSS, yfinance, Polymarket API)
+  implementano retry con backoff esponenziale (3 tentativi, base 2s).
+- **Progress bar**: `tqdm` mostra lo stato di avanzamento durante il fetch parallelo.
+- **Trade Log**: Il sistema registra i trade in `trade_log.csv` e fornisce
+  statistiche di accuracy dopo 30+ trade direzionali (flag `--log-trade`, `--review-trades`).
+- **Fuso orario italiano**: Report e terminal summary mostrano l'ora italiana (Europe/Rome).
+
 ---
 
 ## 3. Layer 1 — Feed News e Aggregazione
@@ -616,7 +628,7 @@ Il regime determina il comportamento operativo per tutta la giornata.
 
 ### Regime LONG
 
-**Condizione**: LLM score ≥ +1 + tecnici BULLISH (o NEUTRAL)
+**Condizione**: LLM score ≥ +0.9 + tecnici BULLISH (o NEUTRAL)
 
 - nessun flag rosso
 
@@ -641,7 +653,7 @@ Tutti i segnali spingono al rialzo → regime LONG.
 
 ### Regime SHORT
 
-**Condizione**: LLM score ≤ -1 + tecnici BEARISH (o NEUTRAL)
+**Condizione**: LLM score ≤ -0.9 + tecnici BEARISH (o NEUTRAL)
 
 - nessun flag rosso
 
@@ -1066,8 +1078,18 @@ Fine giornata:
 
 ### Il Trade Log
 
-Ogni operazione — incluse le giornate flat — deve essere registrata
-nel file `trade_log.csv`:
+Ogni operazione — incluse le giornate flat — può essere registrata
+automaticamente nel file `trade_log.csv` tramite il flag `--log-trade`:
+
+```bash
+# Registra l'analisi odierna come trade
+python main.py --log-trade
+
+# Rivedi le statistiche di accuracy
+python main.py --review-trades
+```
+
+Struttura del file `trade_log.csv`:
 
 ```
 

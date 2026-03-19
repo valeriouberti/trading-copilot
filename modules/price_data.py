@@ -7,6 +7,7 @@ using pandas-ta. Returns structured analysis per asset.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +15,9 @@ import pandas_ta as ta
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 3
+RETRY_BACKOFF_BASE = 2.0
 
 
 @dataclass
@@ -79,17 +83,41 @@ def analyze_assets(assets: list[dict[str, str]]) -> list[AssetAnalysis]:
     return results
 
 
+def _fetch_with_retry(symbol: str, period: str, interval: str):
+    """Fetch yfinance data with retry and exponential backoff."""
+    ticker = yf.Ticker(symbol)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            df = ticker.history(period=period, interval=interval, timeout=15)
+            return df
+        except Exception as exc:
+            if attempt == MAX_RETRIES:
+                raise
+            wait = RETRY_BACKOFF_BASE ** attempt
+            logger.warning(
+                "yfinance %s (%s/%s) failed (attempt %d/%d), retry in %.1fs: %s",
+                symbol, period, interval, attempt, MAX_RETRIES, wait, exc,
+            )
+            time.sleep(wait)
+    return None
+
+
 def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     """Download data and compute indicators for a single asset."""
-    ticker = yf.Ticker(symbol)
-
-    # Daily data for trend indicators
-    df_daily = ticker.history(period="60d", interval="1d")
-    if df_daily.empty:
+    # Daily data for trend indicators (with retry)
+    df_daily = _fetch_with_retry(symbol, period="60d", interval="1d")
+    if df_daily is None or df_daily.empty:
         raise ValueError(f"No daily data returned for {symbol}")
 
-    # 5-minute data for intraday context
-    df_5m = ticker.history(period="5d", interval="5m")
+    # 5-minute data for intraday context (with retry)
+    try:
+        df_5m = _fetch_with_retry(symbol, period="5d", interval="5m")
+        if df_5m is None:
+            df_5m = _fetch_with_retry(symbol, period="5d", interval="5m")
+    except Exception as exc:
+        logger.warning("Could not fetch 5m data for %s: %s", symbol, exc)
+        import pandas as pd
+        df_5m = pd.DataFrame()
 
     current_price = float(df_daily["Close"].iloc[-1])
     prev_close = float(df_daily["Close"].iloc[-2]) if len(df_daily) >= 2 else current_price
@@ -139,7 +167,11 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             vwap_val = float(vwap_series.iloc[-1])
             current_5m = float(df_5m["Close"].iloc[-1])
             pct_diff = ((current_5m - vwap_val) / vwap_val) * 100
-            if current_5m > vwap_val:
+            # Only signal directional if distance > 0.1% from VWAP
+            if abs(pct_diff) < 0.1:
+                label = "NEUTRAL"
+                detail = f"Prezzo ≈ VWAP ({pct_diff:+.2f}%) — troppo vicino"
+            elif current_5m > vwap_val:
                 label = "BULLISH"
                 detail = f"Prezzo sopra VWAP ({pct_diff:+.2f}%)"
             else:

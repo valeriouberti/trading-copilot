@@ -11,20 +11,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from modules.keywords import BEARISH_KEYWORDS, BULLISH_KEYWORDS
+
 logger = logging.getLogger(__name__)
-
-BEARISH_KEYWORDS = [
-    "crash", "drop", "fall", "fear", "sell", "decline", "loss", "plunge",
-    "recession", "crisis", "bear", "collapse", "dump", "panic", "risk",
-    "warning", "slump", "tumble", "weak", "down", "cut", "lower",
-    "calo", "crollo", "ribasso", "paura", "vendita", "perdita", "crisi",
-]
-
-BULLISH_KEYWORDS = [
-    "rally", "surge", "rise", "gain", "bull", "growth", "record", "high",
-    "boost", "jump", "soar", "strong", "up", "buy", "profit", "recovery",
-    "rialzo", "crescita", "record", "guadagno", "rimbalzo", "acquisto",
-]
 
 
 @dataclass
@@ -239,9 +228,9 @@ def determine_regime(
 
     tech_direction = _aggregate_technical_direction(asset_analyses) if asset_analyses else "NEUTRAL"
 
-    if score >= 1.0 and tech_direction in ("BULLISH", "NEUTRAL"):
+    if score >= 0.9 and tech_direction in ("BULLISH", "NEUTRAL"):
         return "LONG", "LLM bullish + tecnici favorevoli"
-    elif score <= -1.0 and tech_direction in ("BEARISH", "NEUTRAL"):
+    elif score <= -0.9 and tech_direction in ("BEARISH", "NEUTRAL"):
         return "SHORT", "LLM bearish + tecnici favorevoli"
     else:
         return "NEUTRAL", "Segnali non direzionali o in conflitto"
