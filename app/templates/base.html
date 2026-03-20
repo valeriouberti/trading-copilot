@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title | default("Trading Copilot") }}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-logo">&#9670;</span>
+            <a href="/">Trading Copilot</a>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Dashboard</a>
+            <a href="#" class="nav-link disabled">Trades</a>
+            <a href="#" class="nav-link disabled">Analytics</a>
+            <a href="#" class="nav-link disabled">Settings</a>
+        </div>
+        <div class="nav-status">
+            <span class="status-dot"></span>
+            <span class="status-text">Online</span>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <span>Trading Copilot v0.1.0</span>
+        <span class="footer-sep">|</span>
+        <span>Not financial advice. Trade at your own risk.</span>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

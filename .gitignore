@@ -94,3 +94,11 @@ reports/
 .vscode/
 .env
 .env.*
+
+# SQLite database
+trading.db
+trading.db-journal
+trading.db-wal
+
+# Trade log (generated)
+trade_log.csv
