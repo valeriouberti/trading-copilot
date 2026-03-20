@@ -370,9 +370,10 @@ def _fetch_daily(symbol: str) -> tuple[pd.DataFrame, str]:
     """Fetch daily data, trying yfinance first then Twelve Data.
 
     Returns (dataframe, source_name).
+    Fetches 200 bars (~10 months) so EMA50 has enough history to render.
     """
     try:
-        df = _fetch_with_retry(symbol, period="60d", interval="1d")
+        df = _fetch_with_retry(symbol, period="10mo", interval="1d")
         if df is not None and not df.empty:
             return df, "yfinance"
     except DataFetchTransient as exc:
@@ -380,7 +381,7 @@ def _fetch_daily(symbol: str) -> tuple[pd.DataFrame, str]:
     except Exception as exc:
         logger.warning("yfinance daily failed for %s: %s", symbol, exc)
 
-    df = _fetch_twelvedata(symbol, interval="1d", outputsize=60)
+    df = _fetch_twelvedata(symbol, interval="1d", outputsize=200)
     if df is not None and not df.empty:
         logger.info("Using Twelve Data fallback for %s (daily)", symbol)
         return df, "twelvedata"

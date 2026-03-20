@@ -2,6 +2,64 @@
 
 {% block head %}
 <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+.live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(63, 185, 80, 0.1);
+    color: var(--accent-green);
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "SF Mono", "Fira Code", monospace;
+    letter-spacing: 0.5px;
+    border: 1px solid rgba(63, 185, 80, 0.25);
+    transition: all 0.3s;
+}
+.live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    animation: live-blink 2s ease-in-out infinite;
+}
+@keyframes live-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+.live-pulse {
+    background: rgba(63, 185, 80, 0.2);
+    border-color: rgba(63, 185, 80, 0.5);
+}
+.tf-bar {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.tf-btn {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: "SF Mono", "Fira Code", monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.tf-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+}
+.tf-btn.tf-active {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: #fff;
+}
+</style>
 {% endblock %}
 
 {% block content %}
@@ -30,7 +88,22 @@
     <!-- Left column: chart + technicals -->
     <div class="detail-main">
         <div class="card">
-            <h3>Price Chart</h3>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <h3 style="margin:0;">Price Chart</h3>
+                    <div class="tf-bar">
+                        <button class="tf-btn" data-tf="5m" onclick="switchTF('5m')">5m</button>
+                        <button class="tf-btn" data-tf="15m" onclick="switchTF('15m')">15m</button>
+                        <button class="tf-btn" data-tf="1h" onclick="switchTF('1h')">1H</button>
+                        <button class="tf-btn" data-tf="4h" onclick="switchTF('4h')">4H</button>
+                        <button class="tf-btn tf-active" data-tf="1d" onclick="switchTF('1d')">1D</button>
+                        <button class="tf-btn" data-tf="1wk" onclick="switchTF('1wk')">1W</button>
+                    </div>
+                </div>
+                <span id="live-badge" class="live-badge" style="display:none;">
+                    <span class="live-dot"></span> LIVE
+                </span>
+            </div>
             <div id="chart-container" style="height:400px; width:100%;"></div>
         </div>
 
@@ -109,6 +182,11 @@
 const SYMBOL = "{{ asset.symbol }}";
 let chart = null;
 let analysisData = null;
+let candleSeries = null;
+let lastCandle = null;
+let liveInterval = null;
+let currentTF = "1d";
+const POLL_INTERVAL = 30000; // 30 seconds
 
 // Initialize chart and auto-run analysis on load
 document.addEventListener("DOMContentLoaded", function() {
@@ -183,11 +261,11 @@ function renderChart(data) {
         grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         rightPriceScale: { borderColor: '#30363d' },
-        timeScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d', timeVisible: false },
     });
 
     // Candlestick series
-    const candleSeries = chart.addCandlestickSeries({
+    candleSeries = chart.addCandlestickSeries({
         upColor: '#3fb950',
         downColor: '#f85149',
         borderDownColor: '#f85149',
@@ -196,6 +274,10 @@ function renderChart(data) {
         wickUpColor: '#3fb950',
     });
     candleSeries.setData(chartData.ohlc);
+
+    // Store last candle for real-time updates
+    const ohlc = chartData.ohlc;
+    lastCandle = { ...ohlc[ohlc.length - 1] };
 
     // EMA20 overlay
     if (chartData.ema20 && chartData.ema20.length) {
@@ -243,6 +325,125 @@ function renderChart(data) {
     }
 
     chart.timeScale().fitContent();
+
+    // Start live price polling
+    startLiveUpdates();
+}
+
+// ─── Real-time chart updates ─────────────────────────────────
+function updateChartPrice(price) {
+    if (!candleSeries || !lastCandle || !price) return;
+
+    lastCandle.close = price;
+    if (price > lastCandle.high) lastCandle.high = price;
+    if (price < lastCandle.low) lastCandle.low = price;
+
+    candleSeries.update(lastCandle);
+}
+
+function startLiveUpdates() {
+    // Clear any existing interval
+    if (liveInterval) clearInterval(liveInterval);
+
+    // Show live badge
+    const badge = document.getElementById("live-badge");
+    if (badge) badge.style.display = "inline-flex";
+
+    // Poll price every POLL_INTERVAL
+    liveInterval = setInterval(fetchLivePrice, POLL_INTERVAL);
+}
+
+async function fetchLivePrice() {
+    try {
+        const res = await fetch(`/api/quote/${encodeURIComponent(SYMBOL)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.price) {
+            updateChartPrice(data.price);
+            // Also update the price display
+            const priceEl = document.querySelector(".current-price");
+            if (priceEl) priceEl.textContent = fmt(data.price);
+            // Flash the live badge
+            const badge = document.getElementById("live-badge");
+            if (badge) { badge.classList.add("live-pulse"); setTimeout(() => badge.classList.remove("live-pulse"), 1000); }
+        }
+    } catch (e) { /* silent */ }
+}
+
+// ─── Timeframe switcher ──────────────────────────────────────
+async function switchTF(tf) {
+    currentTF = tf;
+
+    // Update active button
+    document.querySelectorAll(".tf-btn").forEach(b => {
+        b.classList.toggle("tf-active", b.dataset.tf === tf);
+    });
+
+    // If switching back to 1d and we have analysis data, use it
+    if (tf === "1d" && analysisData) {
+        renderChart(analysisData);
+        return;
+    }
+
+    // Fetch OHLC for the selected timeframe
+    const container = document.getElementById("chart-container");
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);">Loading ' + tf + ' data...</div>';
+
+    try {
+        const res = await fetch(`/api/ohlc/${encodeURIComponent(SYMBOL)}?tf=${tf}`);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        renderOHLCChart(data, tf);
+    } catch (err) {
+        container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--accent-red);">Failed to load ' + tf + ' data: ' + err.message + '</div>';
+    }
+}
+
+function renderOHLCChart(data, tf) {
+    const container = document.getElementById("chart-container");
+    container.innerHTML = "";
+
+    const isIntraday = ["5m", "15m", "1h", "4h"].includes(tf);
+
+    chart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#1c2128' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: {
+            borderColor: '#30363d',
+            timeVisible: isIntraday,
+            secondsVisible: false,
+        },
+    });
+
+    candleSeries = chart.addCandlestickSeries({
+        upColor: '#3fb950',
+        downColor: '#f85149',
+        borderDownColor: '#f85149',
+        borderUpColor: '#3fb950',
+        wickDownColor: '#f85149',
+        wickUpColor: '#3fb950',
+    });
+    candleSeries.setData(data.ohlc);
+
+    // Store last candle for live updates
+    if (data.ohlc.length > 0) {
+        lastCandle = { ...data.ohlc[data.ohlc.length - 1] };
+    }
+
+    // EMA overlays
+    if (data.ema20 && data.ema20.length > 1) {
+        const ema20Series = chart.addLineSeries({ color: '#58a6ff', lineWidth: 1, title: 'EMA20' });
+        ema20Series.setData(data.ema20);
+    }
+    if (data.ema50 && data.ema50.length > 1) {
+        const ema50Series = chart.addLineSeries({ color: '#d2a8ff', lineWidth: 1, title: 'EMA50' });
+        ema50Series.setData(data.ema50);
+    }
+
+    chart.timeScale().fitContent();
+    startLiveUpdates();
 }
 
 function renderSetupBox(data) {
@@ -650,6 +851,9 @@ document.addEventListener("ws:price_update", function(e) {
     const data = e.detail;
     if (data.symbol !== SYMBOL) return;
 
+    // Update chart candle in real-time
+    if (data.price) updateChartPrice(data.price);
+
     // Update price display if technicals card is visible
     const priceEl = document.querySelector(".current-price");
     if (priceEl && data.price) {
@@ -660,6 +864,10 @@ document.addEventListener("ws:price_update", function(e) {
         changeEl.textContent = (data.change_pct >= 0 ? "+" : "") + data.change_pct.toFixed(2) + "%";
         changeEl.className = "price-change " + (data.change_pct >= 0 ? "price-up" : "price-down");
     }
+
+    // Flash live badge on WS update
+    const badge = document.getElementById("live-badge");
+    if (badge) { badge.style.display = "inline-flex"; badge.classList.add("live-pulse"); setTimeout(() => badge.classList.remove("live-pulse"), 1000); }
 });
 
 document.addEventListener("ws:signal", function(e) {
