@@ -102,7 +102,7 @@ python main.py --config my_config.yaml
 - **-1**: Moderatamente negativo — bias SHORT con cautela
 - **-2 / -3**: Mercato fortemente ribassista — cercare opportunita' SHORT
 
-### Tabella Assets
+### Tabella Assets (15 colonne)
 
 - **RSI**: Sotto 30 = ipervenduto (potenziale rimbalzo), Sopra 70 = ipercomprato (potenziale correzione)
 - **MACD**: Crossover rialzista/ribassista indica cambio di momentum
@@ -112,13 +112,27 @@ python main.py --config my_config.yaml
 - **EMA Trend**: EMA20 > EMA50 = trend rialzista, viceversa ribassista
 - **ADX**: Sopra 25 = trend forte, sotto 20 = mercato in range (mostra +DI/-DI per direzione)
 - **Score Tecnico**: 6 indicatori direzionali (RSI, MACD, BB, Stoch, VWAP, EMA) — BULLISH/BEARISH/NEUTRAL con % di confidenza
+- **MTF**: Multi-Timeframe Alignment — ALIGNED (Weekly+Daily+1H concordano), PARTIAL (2/3), CONFLICTING (tutti diversi)
+- **QS**: Quality Score (0-5) — indica la qualita' del setup (confluenza, ADX>25, key level, candle pattern, volume)
 - **Azione**: Suggerimento sintetico basato su tecnici + sentiment
+
+### Sezioni Aggiuntive nel Report
+
+- **Regime Operativo**: LONG / SHORT / NEUTRAL — determina la direzione dei trade per la giornata
+- **Calendario Economico**: Eventi high-impact (NFP, CPI, FOMC) con countdown e regime override automatico entro 2h
+- **Session Filter**: Sessione corrente (London/NYSE/Dead Zone) con qualita' (HIGH/MEDIUM/LOW) e countdown alla prossima finestra
+- **Multi-Timeframe Alignment**: Trend EMA20/50 su Weekly, Daily e 1H per ogni asset con badge di allineamento
+- **Quality Score**: Breakdown 1-5 per ogni asset — rule: trade solo setup con score >= 4
+- **Matrice Correlazione**: Correlazione 30 giorni tra asset — alert se due asset correlati (>0.7) vanno nella stessa direzione
+- **Key Levels**: PDH/PDL/PDC, PWH/PWL, Pivot Points classici, livelli psicologici con distanza % dal prezzo
 
 ### Suggerimento per il trading
 
-1. Se Score Tecnico e LLM Bias concordano → segnale piu' affidabile
+1. Se Score Tecnico, LLM Bias e Polymarket concordano → **Triple Confluence**, segnale piu' affidabile
 2. Se sono in conflitto → massima cautela, meglio attendere
-3. Usa sempre il report come **punto di partenza**, poi verifica su TradingView
+3. Quality Score >= 4 → setup ad alta probabilita'. Sotto 4 → skip
+4. Controlla la matrice correlazione: non aprire trade nella stessa direzione su NQ e ES simultaneamente
+5. Usa sempre il report come **punto di partenza**, poi verifica su TradingView
 
 ---
 
@@ -211,17 +225,20 @@ trading-assistant/
 ├── config.yaml                  # Configurazione (asset, feed, parametri)
 ├── modules/
 │   ├── news_fetcher.py          # Aggregatore notizie RSS
-│   ├── price_data.py            # Dati prezzo + indicatori tecnici (yfinance + Twelve Data)
+│   ├── price_data.py            # Dati prezzo + indicatori tecnici + key levels + MTF + QS + correlazione
 │   ├── sentiment.py             # Analisi sentiment (Groq / FinBERT)
-│   ├── report.py                # Generatore report HTML
+│   ├── report.py                # Generatore report HTML (15 colonne + sezioni avanzate)
 │   ├── hallucination_guard.py   # Validazione anti-allucinazione
+│   ├── economic_calendar.py     # Calendario economico Forex Factory + regime override
 │   ├── polymarket.py            # Segnale mercati predittivi Polymarket (v3)
 │   ├── keywords.py              # Keyword condivise bullish/bearish
-│   └── trade_log.py             # Registro trade e statistiche
+│   └── trade_log.py             # Registro trade e statistiche (con quality score)
 ├── tradingview/
-│   └── trading_copilot.pine     # Pine Script v6 — EMA Pullback Strategy
+│   └── trading_copilot.pine     # Pine Script v6 — EMA Pullback + Trailing Stop + Session Filter
+├── docs/
+│   └── Main.md                  # Manuale operativo completo (v4.1)
 ├── reports/                     # Report HTML generati
-├── tests/                       # Test suite
+├── tests/                       # Test suite (250+ test)
 ├── requirements.txt             # Dipendenze Python
 └── README.md                    # Questa guida
 ```

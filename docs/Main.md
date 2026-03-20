@@ -2,7 +2,7 @@
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
-**Versione 4.0 — Marzo 2026**
+**Versione 4.1 — Marzo 2026**
 
 ---
 
@@ -26,10 +26,17 @@
 9. [Tutti i Casi Possibili](#9-tutti-i-casi-possibili)
 10. [La Strategia di Entry](#10-la-strategia-di-entry)
 11. [Gestione del Rischio](#11-gestione-del-rischio)
-12. [Il Report Giornaliero](#12-il-report-giornaliero)
-13. [Routine Operativa Quotidiana](#13-routine-operativa-quotidiana)
-14. [Validazione e Miglioramento Continuo](#14-validazione-e-miglioramento-continuo)
-15. [Limitazioni e Rischi del Sistema](#15-limitazioni-e-rischi-del-sistema)
+12. [Key Levels — Supporti e Resistenze](#12-key-levels--supporti-e-resistenze)
+13. [Calendario Economico](#13-calendario-economico)
+14. [Multi-Timeframe Alignment](#14-multi-timeframe-alignment)
+15. [Session Time Filter](#15-session-time-filter)
+16. [Setup Quality Score](#16-setup-quality-score)
+17. [Correlation Filter](#17-correlation-filter)
+18. [Trailing Stop Engine](#18-trailing-stop-engine)
+19. [Il Report Giornaliero](#19-il-report-giornaliero)
+20. [Routine Operativa Quotidiana](#20-routine-operativa-quotidiana)
+21. [Validazione e Miglioramento Continuo](#21-validazione-e-miglioramento-continuo)
+22. [Limitazioni e Rischi del Sistema](#22-limitazioni-e-rischi-del-sistema)
 
 ---
 
@@ -93,7 +100,6 @@ ciascuno con una fonte dati distinta e una logica di elaborazione propria.
 ╠══════════════════════════════════════════════════════════════╣
 ║                                                               ║
 ║  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌────────┐ ║
-║  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌────────┐ ║
 ║  │  LAYER 1    │  │  LAYER 2    │  │ LAYER 3  │  │LAYER 4 │ ║
 ║  │  Feed News  │  │  LLM        │  │ Tecnici  │  │Poly-   │ ║
 ║  │  RSS        │→ │  Sentiment  │  │ yfinance │  │market  │ ║
@@ -102,9 +108,19 @@ ciascuno con una fonte dati distinta e una logica di elaborazione propria.
 ║         │                │               │            │       ║
 ║         └────────────────┴───────────────┴────────────┘       ║
 ║                                   │                           ║
+║              ┌────────────────────┼────────────────────┐      ║
+║              │                    │                    │       ║
+║    ┌─────────▼────────┐ ┌────────▼────────┐ ┌────────▼─────┐ ║
+║    │ Key Levels       │ │ Econ Calendar   │ │ MTF Analysis │ ║
+║    │ PDH/PDL/Pivots   │ │ ForexFactory    │ │ W/D/1H EMA   │ ║
+║    └─────────┬────────┘ └────────┬────────┘ └────────┬─────┘ ║
+║              └────────────────────┼────────────────────┘      ║
+║                                   │                           ║
 ║                     ┌─────────────▼──────────────┐           ║
 ║                     │   MOTORE DI CONFLUENZA      │           ║
 ║                     │   Hallucination Guard       │           ║
+║                     │   Quality Score (1-5)       │           ║
+║                     │   Correlation Filter        │           ║
 ║                     │   Validation Flags          │           ║
 ║                     └─────────────┬──────────────┘           ║
 ║                                   │                           ║
@@ -116,6 +132,7 @@ ciascuno con una fonte dati distinta e una logica di elaborazione propria.
 ║                     ┌─────────────▼──────────────┐           ║
 ║                     │     TRADER (umano)          │           ║
 ║                     │   TradingView + Fineco      │           ║
+║                     │   (Trailing Stop Engine)    │           ║
 ║                     └─────────────────────────────┘           ║
 ╚══════════════════════════════════════════════════════════════╝
 
@@ -135,9 +152,23 @@ in modo controllato.
 - **Retry con backoff**: Tutti i componenti di I/O (RSS, yfinance, Twelve Data, Polymarket API)
   implementano retry con backoff esponenziale (3 tentativi, base 2s).
 - **Progress bar**: `tqdm` mostra lo stato di avanzamento durante il fetch parallelo.
-- **Trade Log**: Il sistema registra i trade in `trade_log.csv` e fornisce
+- **Trade Log**: Il sistema registra i trade in `trade_log.csv` (con quality score) e fornisce
   statistiche di accuracy dopo 30+ trade direzionali (flag `--log-trade`, `--review-trades`).
 - **Fuso orario italiano**: Report e terminal summary mostrano l'ora italiana (Europe/Rome).
+- **Key Levels**: PDH/PDL/PDC, PWH/PWL, Pivot Points classici e livelli psicologici
+  con distanza % dal prezzo corrente.
+- **Calendario Economico**: Eventi high-impact da Forex Factory con regime override
+  automatico a NEUTRAL entro 2 ore dall'evento.
+- **Multi-Timeframe Analysis**: EMA20/EMA50 su Weekly, Daily e 1H con classificazione
+  di allineamento (ALIGNED/PARTIAL/CONFLICTING) e penalità nel composite score.
+- **Session Time Filter**: Finestre operative London (08:00-09:00 CET) e NYSE (15:30-16:30 CET)
+  con blocco dead zone (11:00-14:00 CET).
+- **Quality Score**: Score 1-5 per setup basato su confluenza, ADX>25, key level,
+  candle pattern e volume. Regola: trade solo score >= 4.
+- **Correlation Filter**: Matrice correlazione 30 giorni tra asset. Blocca trade
+  same-direction su coppie con correlazione > 0.7.
+- **Trailing Stop Engine**: 3 modalità di uscita nel Pine Script (Fixed TP, Trailing,
+  Partial+Trail) con breakeven a +1R e trail a +2R.
 
 ---
 
@@ -991,10 +1022,36 @@ che visualizza automaticamente sul grafico:
 - Il VWAP della sessione
 - Frecce LONG/SHORT quando tutte le condizioni tecniche sono soddisfatte
 - Diamanti cyan come pre-segnale (struttura pronta, prezzo tocca EMA20)
-- Una tabella informativa (14 righe) con: regime, bias, confidenza, EMA,
-  RSI, VWAP, MACD, ATR, distanze SL/TP e rapporto R:R
+- Una tabella informativa (22 righe) con: regime, bias, confidenza, quality score,
+  EMA, RSI, VWAP, MACD, ATR, session, exit mode, trailing info, distanze SL/TP e R:R
 - Le linee di Stop Loss e Take Profit calcolate automaticamente via ATR
+- Linea trailing stop dinamica (verde/rossa) che si aggiorna in tempo reale
+- Marcatori R-multiple sul grafico (+1R, +2R, +3R...) per tracking visivo
 - Deduplicazione segnali: un solo segnale per trend, reset su rottura struttura
+
+### Filtri Aggiuntivi nel Pine Script
+
+Oltre alle condizioni tecniche base, lo script applica tre filtri addizionali:
+
+**Session Filter**: I segnali vengono generati solo durante le finestre ad alto
+volume — London open (08:00-09:00 CET) e NYSE open (15:30-16:30 CET). I segnali
+nella dead zone (11:00-14:00 CET) vengono bloccati. Le finestre sono configurabili
+negli input dello script.
+
+**Quality Score Filter**: Il quality score dal report (0-5) viene inserito
+manualmente negli input dello script. Se il QS è sotto la soglia minima
+(default 4), i segnali vengono bloccati. QS = 0 disabilita il filtro
+(per retrocompatibilità).
+
+**Trailing Stop Engine**: Lo script offre 3 modalità di uscita selezionabili:
+
+1. **Fixed TP** (default): uscita a R:R fisso 1:2
+2. **Trailing Stop**: dopo +1R lo SL si sposta a breakeven, dopo +2R lo SL
+   trail a +1R dietro il prezzo massimo/minimo raggiunto
+3. **Partial + Trail**: 50% della posizione esce a 2R, il restante trail
+   con stop ATR-based
+
+La modalità si seleziona dall'input "Exit Mode" nelle impostazioni dello script.
 
 ### Entry LONG — Condizioni Tecniche
 
@@ -1030,17 +1087,18 @@ che visualizza automaticamente sul grafico:
 
 ```
 
-### Impostazione del Bias LLM su TradingView
+### Impostazione dei Parametri su TradingView
 
 Il collegamento manuale tra il report Python e TradingView:
 
 1. Leggi il report → vedi `directional_bias: BEARISH`
 2. Apri TradingView → click sull'ingranaggio del tuo script
 3. Campo "Bias LLM" → seleziona `BEARISH`
-4. Lo script filtrerà automaticamente i segnali LONG,
-   mostrando solo frecce SHORT
+4. Campo "Quality Score (from report)" → inserisci il QS dell'asset
+5. Campo "Exit Mode" → scegli Fixed TP / Trailing / Partial+Trail
+6. Lo script filtrerà automaticamente i segnali in base a bias, QS e sessione
 
-Questo passaggio richiede 30 secondi ogni mattina ed è il punto
+Questo passaggio richiede 1 minuto ogni mattina ed è il punto
 di integrazione tra il sistema algoritmico e l'analisi tecnica.
 
 ---
@@ -1106,7 +1164,396 @@ Con R:R 1:1:
 
 ---
 
-## 12. Il Report Giornaliero
+## 12. Key Levels — Supporti e Resistenze
+
+### Perché i Livelli Sono Fondamentali
+
+Un segnale LONG perfetto che punta dritto in una resistenza maggiore è un trade
+perdente. Senza conoscere i livelli chiave, il sistema produce segnali tecnicamente
+corretti ma operativamente inutili.
+
+I key levels rappresentano zone di prezzo dove il mercato ha storicamente reagito
+con forza — sono i punti dove confluiscono ordini istituzionali, stop loss di massa,
+e liquidità concentrata.
+
+### Livelli Calcolati
+
+Il sistema calcola automaticamente 5 categorie di livelli:
+
+```
+
+1. Previous Day High / Low / Close (PDH / PDL / PDC)
+   Fonte: candela daily precedente da yfinance
+   Importanza: livelli più reattivi — il mercato "ricorda" dove è stato ieri
+
+2. Previous Week High / Low (PWH / PWL)
+   Fonte: candela weekly precedente
+   Importanza: livelli strutturali — break di PWH/PWL indica cambio di regime
+
+3. Pivot Points Classici (PP, R1, R2, S1, S2)
+   Formula: PP = (H + L + C) / 3
+   R1 = 2×PP - L    R2 = PP + (H - L)
+   S1 = 2×PP - H    S2 = PP - (H - L)
+   Importanza: usati universalmente da istituzionali e algoritmi
+
+4. Livelli Psicologici Rotondi
+   Es. NQ 20000, Gold 3000, EURUSD 1.1000
+   Importanza: attraggono ordini retail e istituzionali in massa
+
+5. Distanza % dal Livello Più Vicino
+   Calcolo: |prezzo_corrente - livello| / prezzo_corrente × 100
+   Regola: entry entro 0.5% di un livello = setup di qualità (+1 al QS)
+
+```
+
+### Come Usarli nel Trading
+
+- **Entry LONG vicino a supporto** (PDL, S1, S2, livello psicologico) → setup ad alta qualità
+- **Entry SHORT vicino a resistenza** (PDH, R1, R2, livello psicologico) → setup ad alta qualità
+- **Entry LONG verso resistenza** → rischio alto, il prezzo potrebbe rimbalzare
+- **Entry SHORT verso supporto** → rischio alto, il prezzo potrebbe rimbalzare
+
+Il report mostra i livelli nella sezione dedicata con distanza % dal prezzo corrente.
+
+---
+
+## 13. Calendario Economico
+
+### Il Problema
+
+L'LLM rileva gli eventi macro *dopo* che appaiono nelle news, ma a quel punto
+il movimento è già avvenuto. Serve sapere *prima* della sessione che NFP è alle
+14:30 o FOMC alle 20:00.
+
+### Implementazione
+
+Il modulo `modules/economic_calendar.py` recupera il calendario settimanale da
+Forex Factory (`https://nfs.faireconomy.media/ff_calendar_thisweek.json`) — gratuito,
+nessuna API key richiesta.
+
+### Eventi Monitorati
+
+Solo eventi **HIGH impact** vengono visualizzati:
+
+| Evento | Frequenza | Impatto Tipico |
+|--------|-----------|----------------|
+| NFP (Non-Farm Payrolls) | Mensile | Spike 50-200 punti su NQ in 5 minuti |
+| CPI (Consumer Price Index) | Mensile | Forte impatto su tassi e azioni |
+| FOMC Decision | 8 volte/anno | Market-mover principale |
+| GDP | Trimestrale | Conferma/smentisce recessione |
+| Retail Sales | Mensile | Salute del consumatore USA |
+| PMI (Purchasing Managers) | Mensile | Leading indicator economia |
+
+### Regime Override Automatico
+
+**Regola critica**: se un evento high-impact è previsto entro **2 ore**,
+il regime viene automaticamente forzato a **NEUTRAL**, indipendentemente
+da LLM e tecnici.
+
+```
+
+Esempio:
+─────────────────────────────────────────────────────
+Ore 13:00: Report dice regime LONG (LLM +2.0, tecnici BULLISH)
+Ore 14:30: NFP previsto
+
+→ Il sistema mostra: "FOMC tra 1h 30m — REGIME FORZATO NEUTRAL"
+→ Il trader NON opera fino a dopo il dato
+→ Dopo NFP: nuovo lancio script per assessment aggiornato
+─────────────────────────────────────────────────────
+
+```
+
+### Visualizzazione nel Report
+
+Il report HTML include una sezione dedicata con:
+- Tabella eventi del giorno con orario, importanza e countdown
+- Alert visivo per eventi imminenti (< 2h)
+- Badge "REGIME OVERRIDE" quando il calendario forza NEUTRAL
+
+---
+
+## 14. Multi-Timeframe Alignment
+
+### Il Problema
+
+Analizzare solo il timeframe daily e il 5 minuti lascia un gap: il daily dà il
+trend macro, il 5m è rumore. Manca il timeframe intermedio (1H) e quello macro
+(Weekly) per confermare che il trend sia coerente su più orizzonti.
+
+### Come Funziona
+
+Il sistema calcola il trend EMA20/EMA50 su tre timeframe:
+
+```
+
+Timeframe    Fonte Dati          Trend Logic
+──────────────────────────────────────────────────────
+Weekly       yfinance/12Data     EMA20 > EMA50 → BULLISH
+                                  EMA20 < EMA50 → BEARISH
+
+Daily        yfinance/12Data     EMA20 > EMA50 → BULLISH
+                                  EMA20 < EMA50 → BEARISH
+
+1-Hour       yfinance/12Data     EMA20 > EMA50 → BULLISH
+                                  EMA20 < EMA50 → BEARISH
+
+```
+
+### Classificazione Allineamento
+
+```
+
+ALIGNED      Weekly + Daily + 1H concordano      → Segnale forte
+PARTIAL      2 su 3 concordano                   → Segnale con cautela
+CONFLICTING  Tutti diversi / nessun accordo      → Segnale debole
+
+```
+
+### Impatto sul Composite Score
+
+Quando il MTF alignment è CONFLICTING, il composite score riceve una **penalità**
+che riduce la confidenza del segnale tecnico. Un BULLISH con 67% di confidenza
+ma MTF CONFLICTING viene degradato, rendendo meno probabile che generi un trade.
+
+### Regola Operativa
+
+**Trade solo quando Weekly + Daily + 1H concordano** (ALIGNED). In caso di
+PARTIAL, operare con cautela e size ridotta. In caso di CONFLICTING, preferire
+FLAT.
+
+### Visualizzazione nel Report
+
+Il report mostra card per ogni asset con:
+- Trend per timeframe (Weekly ↑, Daily ↑, 1H ↓)
+- Badge di allineamento (ALIGNED verde, PARTIAL giallo, CONFLICTING rosso)
+- Dettaglio EMA20/EMA50 per timeframe
+
+---
+
+## 15. Session Time Filter
+
+### Il Problema
+
+Non tutte le ore sono uguali. Le migliori opportunità sono a London open e NYSE open.
+I segnali nella "dead zone" (11:00-14:00 CET) hanno aspettativa negativa per via
+della bassa liquidità e del chop.
+
+### Finestre Operative
+
+```
+
+Sessione          Orario (CET)     Qualità     Note
+──────────────────────────────────────────────────────
+London Open       08:00 - 09:00    ALTA        Volatilità europea, breakout
+London Session    09:00 - 11:00    MEDIA       Continuazione trend London
+Dead Zone         11:00 - 14:00    BASSA       Chop, bassa liquidità — SKIP
+NYSE Pre-market   14:00 - 15:30    MEDIA       Build-up pre-apertura USA
+NYSE Open         15:30 - 16:30    ALTA        Massima liquidità e volume
+NYSE Session      16:30 - 22:00    MEDIA       Continuazione trend USA
+
+```
+
+### Implementazione
+
+**Pine Script**: lo script filtra i segnali per sessione usando
+`hour(time, "Europe/Rome")`. Segnali nella dead zone vengono bloccati.
+Le finestre sono configurabili negli input.
+
+**Report**: la sezione Session Filter mostra:
+- Sessione corrente (es. "London Session")
+- Qualità della sessione (HIGH/MEDIUM/LOW)
+- Countdown alla prossima finestra ad alta qualità
+
+### Regola Operativa
+
+Meno trade, ma di qualità superiore. Operare solo durante London Open e NYSE Open
+per massimizzare la probabilità di movimenti puliti e direzionali.
+
+---
+
+## 16. Setup Quality Score
+
+### Il Problema
+
+Tutti i segnali vengono trattati come uguali. Un LONG su supporto con ADX 35 e
+engulfing bullish vale molto più di un LONG random su EMA touch con ADX 12 nel chop.
+Serviva un sistema per quantificare la qualità di ogni setup.
+
+### Come Funziona
+
+Il Quality Score (QS) è un punteggio da **1 a 5** basato su 5 fattori binari
+(ciascuno vale +1):
+
+```
+
+Fattore              Condizione                            +1 se
+──────────────────────────────────────────────────────────────────
+C  Confluenza        4+ indicatori direzionali concordano   ✓
+T  Trend Forte       ADX > 25                               ✓
+L  Key Level         Entry entro 0.5% di un S/R             ✓
+P  Candle Pattern    Engulfing o Pin Bar rilevato            ✓
+V  Volume            Volume sopra media 20 giorni            ✓
+──────────────────────────────────────────────────────────────────
+                                            Totale: 0-5
+
+```
+
+### Candle Pattern Detection
+
+Il sistema rileva automaticamente due pattern:
+
+**Engulfing** (bullish/bearish): l'ultima candela "avvolge" completamente il body
+della candela precedente. Indica forte pressione direzionale.
+
+**Pin Bar** (bullish/bearish): candela con wick dominante > 2× il body e > 2× il
+wick opposto. Indica rigetto di un livello di prezzo.
+
+### Regola Operativa
+
+```
+
+QS 5  →  Setup perfetto — size standard, alta confidenza
+QS 4  →  Setup buono — size standard
+QS 3  →  Setup mediocre — SKIP (sotto soglia)
+QS 2  →  Setup debole — SKIP
+QS 1  →  Setup pessimo — SKIP
+
+Regola assoluta: trade SOLO con QS >= 4
+
+```
+
+### Visualizzazione
+
+- **Report HTML**: colonna QS nella tabella asset con badge colorato e iniziali
+  dei fattori attivi (es. "4/5 C+T+L+V"). Sezione dedicata con breakdown per asset.
+- **Pine Script**: input "Quality Score (from report)" filtra i segnali sotto la soglia.
+- **Trade Log**: il QS viene registrato per analisi post.
+
+---
+
+## 17. Correlation Filter
+
+### Il Problema
+
+NQ e ES hanno correlazione ~0.95. Andare LONG su entrambi raddoppia il rischio
+su un singolo trade. Se il segnale è sbagliato, si perde 2% invece di 1%.
+
+### Come Funziona
+
+Il sistema calcola una **matrice di correlazione pairwise** basata sui rendimenti
+giornalieri degli ultimi 30 giorni:
+
+```
+
+Calcolo:
+1. Per ogni asset: daily_returns = Close.pct_change()
+2. Ultimi 30 rendimenti giornalieri
+3. Correlazione di Pearson tra tutte le coppie
+
+Esempio matrice:
+         NQ=F    ES=F    EURUSD=X   GC=F
+NQ=F     1.00    0.95    -0.32      -0.15
+ES=F     0.95    1.00    -0.28      -0.12
+EURUSD=X -0.32   -0.28   1.00       0.41
+GC=F     -0.15   -0.12   0.41       1.00
+
+```
+
+### Regole di Filtro
+
+1. **Soglia**: correlazione > 0.7 tra due asset
+2. **Condizione**: entrambi gli asset hanno lo STESSO segnale direzionale
+   (entrambi BULLISH o entrambi BEARISH)
+3. **Azione**: tra i due asset correlati, il sistema **mantiene** quello
+   con Quality Score più alto e **filtra** l'altro
+4. **Segnali NEUTRAL**: non vengono mai filtrati
+
+### Esempio Pratico
+
+```
+
+NQ=F: BULLISH, QS=4
+ES=F: BULLISH, QS=3
+Correlazione NQ-ES: 0.95 (> 0.7)
+
+→ ES=F viene filtrato (QS inferiore)
+→ Report mostra "CORR-SKIP" accanto a ES=F
+→ Il trader opera solo su NQ=F
+
+```
+
+### Visualizzazione nel Report
+
+- **Heatmap**: tabella con celle colorate (rosso > 0.7, giallo > 0.5, grigio)
+- **Warning**: alert quando due asset correlati vanno nella stessa direzione
+- **Auto-select**: indicazione di quale asset è stato scelto e quale filtrato
+
+---
+
+## 18. Trailing Stop Engine
+
+### Il Problema
+
+Il R:R fisso 1:2 esce a 2R anche quando il trade potrebbe correre a 5R o 10R.
+In mercati trending, uscire troppo presto costa più delle perdite.
+
+### Le 3 Modalità di Uscita
+
+Il Pine Script offre 3 modalità selezionabili dall'input "Exit Mode":
+
+**1. Fixed TP (default)**
+
+```
+
+Entry → SL = -1.5 ATR | TP = +3.0 ATR (R:R 1:2)
+Comportamento: uscita automatica al raggiungimento del TP.
+Quando usarlo: mercati in range, movimenti contenuti.
+
+```
+
+**2. Trailing Stop**
+
+```
+
+Entry → SL iniziale = -1.5 ATR
+Dopo +1R: SL si sposta a breakeven (zero risk)
+Dopo +2R: SL trail a +1R dietro il massimo/minimo raggiunto
+Il trade rimane aperto finché il prezzo non ritraccia fino allo SL trailing.
+
+Quando usarlo: mercati trending con movimenti estesi.
+Vantaggio: cattura 5-10R sui trend forti, zero risk dopo +1R.
+
+```
+
+**3. Partial + Trail**
+
+```
+
+Entry → SL iniziale = -1.5 ATR
+A +2R: chiudi 50% della posizione (profitto assicurato)
+Restante 50%: trail con stop ATR-based dietro il prezzo.
+
+Quando usarlo: incertezza sulla durata del trend.
+Vantaggio: combina profitto sicuro con upside illimitato.
+
+```
+
+### Visualizzazione sul Grafico
+
+- **Linea trailing stop dinamica**: verde per LONG, rossa per SHORT, si aggiorna
+  candela per candela
+- **Marcatori R-multiple**: label "+1R", "+2R", "+3R" sul grafico per tracking visivo
+- **Alert**: notifica quando lo SL si sposta a breakeven e quando il trade viene chiuso
+
+### Impatto sulla Performance
+
+Con win-rate 50% e trailing stop, il profit factor passa da ~1.5x (fixed TP) a ~2.5x.
+I pochi trade che corrono 5-10R compensano molte piccole perdite da -1R.
+
+---
+
+## 19. Il Report Giornaliero
 
 ### Struttura del Report HTML
 
@@ -1147,28 +1594,54 @@ estratti dall'LLM.
 Box di allerta se ci sono eventi macro nelle prossime ore
 (dati Fed, CPI, NFP, earnings, ecc.)
 
-**7. Tabella Asset**
-Una riga per ogni asset configurato, con 13 colonne:
+**7. Calendario Economico**
+Tabella eventi high-impact del giorno con orario, importanza e countdown.
+Alert visivo per eventi imminenti (< 2h) e badge "REGIME OVERRIDE" se attivo.
+
+**8. Session Filter**
+Sessione corrente (London/NYSE/Dead Zone), qualità (HIGH/MEDIUM/LOW),
+e countdown alla prossima finestra ad alta qualità.
+
+**9. Tabella Asset (15 colonne)**
+Una riga per ogni asset configurato, con 15 colonne:
 
 - Prezzo corrente e variazione %
 - RSI (valore + label), MACD (label), Bollinger Bands (label + dettaglio),
   Stochastic (%K + label), posizione vs VWAP, EMA Trend, ADX (forza trend)
 - Score tecnico composito (6 indicatori direzionali)
+- MTF Alignment (ALIGNED/PARTIAL/CONFLICTING)
+- Quality Score (1-5) con badge fattori attivi
 - Bias LLM per-asset
 - Segnale Polymarket
-- Hint operativo (LONG / SHORT / Wait / Conflict)
+- Hint operativo (LONG / SHORT / Wait / Conflict / CORR-SKIP)
 - Badge "via twelvedata" se il fallback è stato usato
 
-**8. News Raw (collassabile)**
+**10. Multi-Timeframe Alignment**
+Card per ogni asset con trend EMA20/50 su Weekly, Daily e 1H.
+Badge di allineamento colorato.
+
+**11. Quality Score Breakdown**
+Card per ogni asset con i 5 fattori (C+T+L+P+V) e badge
+TRADEABLE (QS >= 4) o SKIP (QS < 4).
+
+**12. Matrice Correlazione**
+Heatmap pairwise con celle colorate (rosso > 0.7, giallo > 0.5).
+Warning per coppie correlate con same-direction e nota CORR-SKIP.
+
+**13. Key Levels**
+Per ogni asset: PDH/PDL/PDC, PWH/PWL, Pivot Points (PP, R1, R2, S1, S2),
+livelli psicologici con distanza % dal prezzo corrente.
+
+**14. News Raw (collassabile)**
 Tutti i titoli di notizie aggregati con fonte e orario,
 per verifica manuale anti-allucinazione.
 
-**9. Footer**
+**15. Footer**
 Disclaimer legale obbligatorio.
 
 ---
 
-## 13. Routine Operativa Quotidiana
+## 20. Routine Operativa Quotidiana
 
 ### Orario Consigliato (fuso orario italiano, ora legale)
 
@@ -1182,12 +1655,17 @@ Report disponibile in reports/
 
 08:10  Lettura report:
 → Verifica validation_flags (flag rossi = stop)
+→ Controlla calendario economico (eventi HIGH nelle prossime ore?)
+→ Verifica sessione corrente (London/NYSE/Dead Zone)
 → Leggi 3-5 titoli news manualmente (anti-allucinazione)
 → Determina il Regime del giorno (LONG / SHORT / FLAT)
-→ Imposta bias LLM su TradingView
+→ Controlla Quality Score per ogni asset (solo QS >= 4)
+→ Controlla matrice correlazione (no same-direction su asset correlati)
+→ Imposta bias LLM + Quality Score su TradingView
 
 08:15  TradingView:
-→ Analizza struttura grafico (S/R, EMA, VWAP)
+→ Analizza struttura grafico (S/R, EMA, VWAP, Key Levels dal report)
+→ Seleziona Exit Mode (Fixed TP / Trailing / Partial+Trail)
 → Attiva alert per segnale Pine Script
 → Poi chiudi TradingView e fai altro
 
@@ -1213,28 +1691,33 @@ Fine giornata:
 
 ```
 
-╔═══════════════════════════════════════════════════╗
-║         CHECKLIST PRE-ENTRY — Trading Assistant    ║
-╠═══════════════════════════════════════════════════╣
-║  □ Script eseguito senza errori oggi?              ║
-║  □ validation_flags è vuoto nel report?            ║
-║  □ Ho letto 3+ titoli news manualmente?            ║
-║  □ Sentiment LLM coerente con quello che ho letto? ║
-║  □ Tecnici e LLM concordano sulla direzione?       ║
-║  □ Nessun risk event nelle prossime 4 ore?         ║
-║  □ Ho identificato il livello di entry sul grafico?║
-║  □ Ho calcolato Stop Loss (in punti)?              ║
-║  □ Ho calcolato Take Profit (min R:R 1:2)?         ║
-║  □ Ho calcolato la size (max 1% del capitale)?     ║
-╠═══════════════════════════════════════════════════╣
-║  SE ANCHE SOLO 1 RISPOSTA È NO → NON ENTRARE      ║
-╚═══════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════╗
+║         CHECKLIST PRE-ENTRY — Trading Assistant v4.1      ║
+╠══════════════════════════════════════════════════════════╣
+║  □ Script eseguito senza errori oggi?                      ║
+║  □ validation_flags è vuoto nel report?                    ║
+║  □ Nessun evento HIGH nel calendario entro 2 ore?          ║
+║  □ Sessione corrente è HIGH quality (London/NYSE open)?    ║
+║  □ Ho letto 3+ titoli news manualmente?                    ║
+║  □ Sentiment LLM coerente con quello che ho letto?         ║
+║  □ Tecnici e LLM concordano sulla direzione?               ║
+║  □ MTF Alignment è ALIGNED (Weekly+Daily+1H)?              ║
+║  □ Quality Score >= 4 per questo asset?                    ║
+║  □ Asset non filtrato dalla matrice correlazione?          ║
+║  □ Ho identificato il livello di entry sul grafico?        ║
+║  □ Entry vicino a key level (PDH/PDL, Pivot, psicologico)?║
+║  □ Ho calcolato Stop Loss (in punti)?                      ║
+║  □ Ho calcolato Take Profit / selezionato exit mode?       ║
+║  □ Ho calcolato la size (max 1% del capitale)?             ║
+╠══════════════════════════════════════════════════════════╣
+║  SE ANCHE SOLO 1 RISPOSTA È NO → NON ENTRARE              ║
+╚══════════════════════════════════════════════════════════╝
 
 ```
 
 ---
 
-## 14. Validazione e Miglioramento Continuo
+## 21. Validazione e Miglioramento Continuo
 
 ### Il Trade Log
 
@@ -1260,6 +1743,7 @@ llm_score     | Score sentiment dal report (-3 a +3)
 tech_signal   | BULLISH / BEARISH / NEUTRAL
 poly_signal   | BULLISH / BEARISH / NEUTRAL
 direction     | LONG / SHORT / FLAT
+quality_score | Quality Score 0-5 (0 se non disponibile)
 entry_price   | Prezzo di entrata (0 se FLAT)
 exit_price    | Prezzo di uscita (0 se FLAT)
 outcome_pips  | Punti guadagnati/persi (0 se FLAT)
@@ -1297,7 +1781,7 @@ Osserva (trade log) → Analizza (accuracy per asset, per ora, per regime)
 
 ---
 
-## 15. Limitazioni e Rischi del Sistema
+## 22. Limitazioni e Rischi del Sistema
 
 ### Limitazioni Tecniche
 
@@ -1344,6 +1828,6 @@ La disciplina è responsabilità esclusiva del trader.
 
 ---
 
-_Trading Assistant v4.0 — Documentazione interna_
+_Trading Assistant v4.1 — Documentazione interna_
 _Sviluppato per uso personale. Non distribuire senza autorizzazione._
 _Nessuna parte di questo documento costituisce consulenza finanziaria._
