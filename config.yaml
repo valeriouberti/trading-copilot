@@ -27,15 +27,9 @@ rss_feeds:
 # Same as above — imported into DB on first startup only.
 # Manage assets via the web dashboard after initial setup.
 seed_assets:
-  - symbol: NQ=F
-    display_name: NASDAQ 100 Futures
   - symbol: ES=F
-    display_name: S&P 500 Futures
+    display_name: S&P 500
+  - symbol: GC=F
+    display_name: Gold
   - symbol: EURUSD=X
     display_name: EUR/USD
-  - symbol: GC=F
-    display_name: Gold Futures
-  - symbol: AAPL
-    display_name: Apple Inc.
-  - symbol: NVDA
-    display_name: NVIDIA Corporation

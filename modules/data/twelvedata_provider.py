@@ -131,11 +131,16 @@ class TwelveDataProvider(DataProvider):
 
         Much cheaper than a full time_series call when you only need
         the current price for lightweight polling.
+
+        Accepts both canonical (ES, GC, EURUSD) and yfinance-style
+        (ES=F, GC=F, EURUSD=X) symbols.
         """
         if not self._api_key:
             return None
 
-        td_symbol = _TD_SYMBOL_MAP.get(symbol, symbol)
+        # Normalize yfinance-style symbols to canonical
+        canonical = symbol.replace("=F", "").replace("=X", "")
+        td_symbol = _TD_SYMBOL_MAP.get(canonical, canonical)
         params = {
             "symbol": td_symbol,
             "apikey": self._api_key,
