@@ -16,15 +16,20 @@
             <a href="/">Trading Copilot</a>
         </div>
         <div class="nav-links">
-            <a href="/" class="nav-link">Dashboard</a>
-            <a href="/signals" class="nav-link">Signals</a>
-            <a href="/trades" class="nav-link">Trades</a>
-            <a href="/analytics" class="nav-link">Analytics</a>
-            <a href="/settings" class="nav-link">Settings</a>
+            <a href="/" class="nav-link {% if request.url.path == '/' %}nav-active{% endif %}">Dashboard</a>
+            <span class="nav-sep"></span>
+            {% for a in nav_assets %}
+            <a href="/asset/{{ a.symbol }}" class="nav-link nav-asset {% if request.url.path == '/asset/' + a.symbol %}nav-active{% endif %}">{{ a.display_name }}</a>
+            {% endfor %}
+            <span class="nav-sep"></span>
+            <a href="/signals" class="nav-link {% if request.url.path == '/signals' %}nav-active{% endif %}">Signals</a>
+            <a href="/trades" class="nav-link {% if request.url.path == '/trades' %}nav-active{% endif %}">Trades</a>
+            <a href="/analytics" class="nav-link {% if request.url.path == '/analytics' %}nav-active{% endif %}">Analytics</a>
+            <a href="/settings" class="nav-link nav-icon {% if request.url.path == '/settings' %}nav-active{% endif %}" title="Settings">&#9881;</a>
         </div>
         <div class="nav-status">
-            <span class="status-dot"></span>
-            <span class="status-text">Online</span>
+            <span class="status-dot" id="status-dot"></span>
+            <span class="status-text" id="status-text">Connecting...</span>
         </div>
     </nav>
 
@@ -33,12 +38,27 @@
     </main>
 
     <footer class="footer">
-        <span>Trading Copilot v0.1.0</span>
+        <span>Trading Copilot v5.3.0</span>
         <span class="footer-sep">|</span>
         <span>Not financial advice. Trade at your own risk.</span>
     </footer>
 
     <script src="/static/js/websocket.js"></script>
+    <script>
+    // Keep status text in sync with WebSocket state
+    document.addEventListener("ws:connected", function() {
+        var dot = document.getElementById("status-dot");
+        var txt = document.getElementById("status-text");
+        if (dot) dot.style.background = "var(--accent-green)";
+        if (txt) { txt.textContent = "Live"; txt.style.color = "var(--accent-green)"; }
+    });
+    document.addEventListener("ws:disconnected", function() {
+        var dot = document.getElementById("status-dot");
+        var txt = document.getElementById("status-text");
+        if (dot) dot.style.background = "var(--accent-red)";
+        if (txt) { txt.textContent = "Offline"; txt.style.color = "var(--accent-red)"; }
+    });
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

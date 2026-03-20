@@ -142,18 +142,18 @@ app.include_router(ws_router.router, tags=["websocket"])
 # ---------------------------------------------------------------------------
 
 
+async def _page_ctx(request: Request, title: str, **extra) -> dict:
+    """Build common template context with nav_assets for the navbar."""
+    assets = await get_all_assets(request.app.state.session_factory)
+    return {"request": request, "title": title, "nav_assets": assets, **extra}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Render the main dashboard page."""
     assets = await get_all_assets(request.app.state.session_factory)
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "assets": assets,
-            "title": "Trading Copilot",
-        },
-    )
+    ctx = await _page_ctx(request, "Trading Copilot", assets=assets)
+    return templates.TemplateResponse("dashboard.html", ctx)
 
 
 @app.get("/asset/{symbol}", response_class=HTMLResponse)
@@ -164,61 +164,36 @@ async def asset_detail(request: Request, symbol: str):
         (a for a in assets if a["symbol"] == symbol),
         {"symbol": symbol, "display_name": symbol},
     )
-    return templates.TemplateResponse(
-        "asset_detail.html",
-        {
-            "request": request,
-            "asset": asset,
-            "title": f"{asset['display_name']} — Trading Copilot",
-        },
+    ctx = await _page_ctx(
+        request, f"{asset['display_name']} — Trading Copilot", asset=asset
     )
+    return templates.TemplateResponse("asset_detail.html", ctx)
 
 
 @app.get("/trades", response_class=HTMLResponse)
 async def trades_page(request: Request):
     """Render the trade journal page."""
     assets = await get_all_assets(request.app.state.session_factory)
-    return templates.TemplateResponse(
-        "trades.html",
-        {
-            "request": request,
-            "assets": assets,
-            "title": "Trade Journal — Trading Copilot",
-        },
-    )
+    ctx = await _page_ctx(request, "Trade Journal — Trading Copilot", assets=assets)
+    return templates.TemplateResponse("trades.html", ctx)
 
 
 @app.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(request: Request):
     """Render the performance analytics page."""
-    return templates.TemplateResponse(
-        "analytics.html",
-        {
-            "request": request,
-            "title": "Analytics — Trading Copilot",
-        },
-    )
+    ctx = await _page_ctx(request, "Analytics — Trading Copilot")
+    return templates.TemplateResponse("analytics.html", ctx)
 
 
 @app.get("/signals", response_class=HTMLResponse)
 async def signals_page(request: Request):
     """Render the signal history page."""
-    return templates.TemplateResponse(
-        "signals.html",
-        {
-            "request": request,
-            "title": "Signal History — Trading Copilot",
-        },
-    )
+    ctx = await _page_ctx(request, "Signal History — Trading Copilot")
+    return templates.TemplateResponse("signals.html", ctx)
 
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     """Render the settings page."""
-    return templates.TemplateResponse(
-        "settings.html",
-        {
-            "request": request,
-            "title": "Settings — Trading Copilot",
-        },
-    )
+    ctx = await _page_ctx(request, "Settings — Trading Copilot")
+    return templates.TemplateResponse("settings.html", ctx)
