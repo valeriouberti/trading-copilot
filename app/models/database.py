@@ -16,7 +16,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    delete,
     func,
     select,
 )
@@ -64,9 +63,7 @@ class Signal(Base):
 
     trades = relationship("Trade", back_populates="signal")
 
-    __table_args__ = (
-        Index("ix_signals_symbol_ts", "symbol", "timestamp"),
-    )
+    __table_args__ = (Index("ix_signals_symbol_ts", "symbol", "timestamp"),)
 
 
 class Trade(Base):
@@ -134,6 +131,17 @@ class AnalysisCache(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class RssFeed(Base):
+    """RSS news feed sources for sentiment analysis."""
+
+    __tablename__ = "rss_feeds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    url = Column(String(500), nullable=False, unique=True)
+    name = Column(String(100), nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class TelegramConfig(Base):
     """Telegram notification settings (runtime-mutable via Settings UI).
 
@@ -162,10 +170,12 @@ async def seed_assets_from_config(session_factory, config: dict) -> None:
             return
 
         for item in config.get("assets", []):
-            session.add(Asset(
-                symbol=item["symbol"],
-                display_name=item.get("display_name", item["symbol"]),
-            ))
+            session.add(
+                Asset(
+                    symbol=item["symbol"],
+                    display_name=item.get("display_name", item["symbol"]),
+                )
+            )
         await session.commit()
 
 
@@ -175,6 +185,50 @@ async def get_all_assets(session_factory) -> list[dict]:
         result = await session.execute(select(Asset).order_by(Asset.symbol))
         rows = result.scalars().all()
     return [{"symbol": r.symbol, "display_name": r.display_name} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# RSS feed helpers
+# ---------------------------------------------------------------------------
+
+DEFAULT_RSS_FEEDS = [
+    {
+        "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US",
+        "name": "Yahoo Finance NASDAQ",
+    },
+    {
+        "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+        "name": "CNBC Top News",
+    },
+    {
+        "url": "https://www.investing.com/rss/news_14.rss",
+        "name": "Investing.com",
+    },
+    {
+        "url": "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "name": "MarketWatch Top Stories",
+    },
+]
+
+
+async def seed_rss_feeds(session_factory, feeds: list[dict] | None = None) -> None:
+    """Seed RSS feeds table if empty. Uses provided feeds or defaults."""
+    async with session_factory() as session:
+        count = await session.scalar(select(func.count()).select_from(RssFeed))
+        if count and count > 0:
+            return
+
+        for item in feeds or DEFAULT_RSS_FEEDS:
+            session.add(RssFeed(url=item["url"], name=item.get("name", item["url"])))
+        await session.commit()
+
+
+async def get_all_rss_feeds(session_factory) -> list[dict]:
+    """Return all RSS feeds as list of dicts."""
+    async with session_factory() as session:
+        result = await session.execute(select(RssFeed).order_by(RssFeed.id))
+        rows = result.scalars().all()
+    return [{"url": r.url, "name": r.name} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +260,12 @@ async def upsert_telegram_config(
             row.chat_id = chat_id
             row.enabled = enabled
         else:
-            session.add(TelegramConfig(
-                id=1, bot_token=bot_token, chat_id=chat_id, enabled=enabled,
-            ))
+            session.add(
+                TelegramConfig(
+                    id=1,
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    enabled=enabled,
+                )
+            )
         await session.commit()

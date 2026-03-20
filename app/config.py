@@ -2,9 +2,9 @@
 
 Priority chain: env vars > .env file > config.yaml > defaults.
 
-Secrets (API keys, tokens) come ONLY from environment variables.
-Static config (RSS feeds, seed assets) comes from config.yaml.
-Telegram runtime settings are stored in the database.
+config.yaml is OPTIONAL. All settings have sensible defaults.
+Secrets come from env vars. Runtime data (assets, feeds, telegram)
+lives in the database.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     lookback_hours: int = Field(default=16, ge=1, le=168)
     report_language: str = Field(default="italian")
 
-    # ── Static config (loaded from YAML) ──────────────────────────────
+    # ── Seed data (from YAML, used only on first startup) ─────────────
     rss_feeds: list[dict[str, str]] = Field(default_factory=list)
     seed_assets: list[dict[str, str]] = Field(default_factory=list)
 
@@ -67,11 +67,12 @@ def get_settings(yaml_path: str | None = None) -> Settings:
     """Create a Settings instance with YAML values as fallbacks.
 
     Env vars always win over YAML. YAML wins over pydantic defaults.
+    config.yaml is optional — everything has sensible defaults.
     """
     yaml_data = _load_yaml(Path(yaml_path) if yaml_path else None)
     overrides: dict[str, Any] = {}
 
-    # Static lists from YAML (no env var equivalent)
+    # Seed data from YAML (used once on first startup)
     if yaml_data.get("rss_feeds"):
         overrides["rss_feeds"] = yaml_data["rss_feeds"]
     if yaml_data.get("seed_assets"):
@@ -93,7 +94,7 @@ def get_settings(yaml_path: str | None = None) -> Settings:
     if db_url and not os.environ.get("DATABASE_URL"):
         overrides["database_url"] = db_url
 
-    # Telegram from YAML as fallback (for migration — new installs use env only)
+    # Telegram from YAML as fallback (migration from old config)
     tg = yaml_data.get("telegram", {})
     if tg.get("bot_token") and not os.environ.get("TELEGRAM_BOT_TOKEN"):
         overrides["telegram_bot_token"] = tg["bot_token"]
@@ -115,6 +116,9 @@ def to_config_dict(settings: Settings | None = None) -> dict[str, Any]:
 
     Modules like analyzer.py and monitor.py still receive config as a dict.
     This function bridges the typed Settings to the old dict interface.
+
+    Note: rss_feeds in this dict may be empty at this stage —
+    they get populated from the database in server.py lifespan.
     """
     s = settings or get_settings()
     return {

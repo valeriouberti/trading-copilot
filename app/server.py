@@ -23,7 +23,13 @@ from app.api import settings as settings_router
 from app.api import trades as trades_router
 from app.api import websocket as ws_router
 from app.config import get_settings, to_config_dict
-from app.models.database import Base, get_all_assets, seed_assets_from_config
+from app.models.database import (
+    Base,
+    get_all_assets,
+    get_all_rss_feeds,
+    seed_assets_from_config,
+    seed_rss_feeds,
+)
 from app.models.engine import get_engine, get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -47,8 +53,12 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.config = to_config_dict(settings)  # backward compat for modules
 
-    # Seed assets from config.yaml on first run
+    # Seed assets and RSS feeds from config.yaml (or defaults) on first run
     await seed_assets_from_config(app.state.session_factory, app.state.config)
+    await seed_rss_feeds(app.state.session_factory, settings.rss_feeds or None)
+
+    # Load RSS feeds from DB into config dict (source of truth is DB)
+    app.state.config["rss_feeds"] = await get_all_rss_feeds(app.state.session_factory)
 
     # Seed telegram config from env vars into DB (first run only)
     from app.models.database import get_telegram_config, upsert_telegram_config

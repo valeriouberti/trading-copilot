@@ -1,13 +1,18 @@
-# ── Trading Copilot — config.yaml ─────────────────────────────
+# ── Trading Copilot — config.yaml (OPTIONAL) ─────────────────
 #
-# Static configuration only. Secrets and runtime settings belong
-# in environment variables (.env) or the web dashboard (database).
+# This file is OPTIONAL. The app works without it using defaults.
+# Values here are used ONLY for initial seeding on first startup.
+# After that, all data lives in the database.
 #
-# Priority: env vars > .env file > this file > defaults
+# To configure the app, use:
+#   - .env file (or environment variables) for secrets and settings
+#   - Web dashboard for assets, RSS feeds, and Telegram
 # ──────────────────────────────────────────────────────────────
 
-# ── RSS Feeds ────────────────────────────────────────────────
-# News sources for sentiment analysis. Add/remove feeds here.
+# ── Seed RSS Feeds (first-run only) ──────────────────────────
+# Imported into the database on first startup when the rss_feeds
+# table is empty. After that, defaults are used if this file is
+# absent. Changes here have NO effect once the DB has been seeded.
 rss_feeds:
   - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US
     name: Yahoo Finance NASDAQ
@@ -18,17 +23,9 @@ rss_feeds:
   - url: https://feeds.marketwatch.com/marketwatch/topstories/
     name: MarketWatch Top Stories
 
-# ── Analysis Settings ────────────────────────────────────────
-# Override via env vars: GROQ_MODEL, LOOKBACK_HOURS, REPORT_LANGUAGE
-groq_model: llama-3.3-70b-versatile
-lookback_hours: 16
-report_language: italian
-
 # ── Seed Assets (first-run only) ─────────────────────────────
-# Imported into the database on first startup when the assets
-# table is empty. After that, manage assets via the web dashboard
-# (Add/Delete buttons) or the API. Changes here have NO effect
-# once the database has been seeded.
+# Same as above — imported into DB on first startup only.
+# Manage assets via the web dashboard after initial setup.
 seed_assets:
   - symbol: NQ=F
     display_name: NASDAQ 100 Futures
@@ -42,17 +39,3 @@ seed_assets:
     display_name: Apple Inc.
   - symbol: NVDA
     display_name: NVIDIA Corporation
-
-# ── Database ─────────────────────────────────────────────────
-# Override via env var: DATABASE_URL
-# Default: sqlite+aiosqlite:///./trading.db
-# Docker: postgresql+asyncpg://trading:<password>@postgres:5432/trading
-
-# ── Secrets (DO NOT put here) ────────────────────────────────
-# Set these as environment variables or in .env:
-#   GROQ_API_KEY          — Groq LLM API key
-#   TWELVE_DATA_API_KEY   — Twelve Data fallback for price data
-#   TELEGRAM_BOT_TOKEN    — Telegram bot token (@BotFather)
-#   TELEGRAM_CHAT_ID      — Telegram chat ID
-#   TELEGRAM_ENABLED      — Enable Telegram notifications (true/false)
-#   DATABASE_URL          — Database connection string
