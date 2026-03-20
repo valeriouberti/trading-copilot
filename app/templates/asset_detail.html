@@ -114,7 +114,7 @@ document.addEventListener("DOMContentLoaded", function() {
         },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         rightPriceScale: { borderColor: '#30363d' },
-        timeScale: { borderColor: '#30363d', timeVisible: true },
+        timeScale: { borderColor: '#30363d' },
     });
     chart.timeScale().fitContent();
 });
@@ -144,6 +144,7 @@ async function runAnalysis() {
 }
 
 function renderAnalysis(data) {
+    renderChart(data);
     renderSetupBox(data);
     renderRegime(data);
     renderSentiment(data);
@@ -154,6 +155,80 @@ function renderAnalysis(data) {
     renderPolymarket(data);
     renderCalendar(data);
     renderFlags(data);
+}
+
+function renderChart(data) {
+    const chartData = data.analysis && data.analysis.chart;
+    if (!chartData || !chartData.ohlc || !chartData.ohlc.length) return;
+
+    // Remove old chart and recreate to avoid duplicate series
+    const container = document.getElementById("chart-container");
+    container.innerHTML = "";
+    chart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#1c2128' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d' },
+    });
+
+    // Candlestick series
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#3fb950',
+        downColor: '#f85149',
+        borderDownColor: '#f85149',
+        borderUpColor: '#3fb950',
+        wickDownColor: '#f85149',
+        wickUpColor: '#3fb950',
+    });
+    candleSeries.setData(chartData.ohlc);
+
+    // EMA20 overlay
+    if (chartData.ema20 && chartData.ema20.length) {
+        const ema20Series = chart.addLineSeries({
+            color: '#58a6ff',
+            lineWidth: 1,
+            title: 'EMA20',
+        });
+        ema20Series.setData(chartData.ema20);
+    }
+
+    // EMA50 overlay
+    if (chartData.ema50 && chartData.ema50.length) {
+        const ema50Series = chart.addLineSeries({
+            color: '#d2a8ff',
+            lineWidth: 1,
+            title: 'EMA50',
+        });
+        ema50Series.setData(chartData.ema50);
+    }
+
+    // Key level lines
+    const kl = data.analysis && data.analysis.technicals && data.analysis.technicals.key_levels;
+    if (kl) {
+        const levels = [
+            { price: kl.pdh, title: 'PDH', color: '#3fb950' },
+            { price: kl.pdl, title: 'PDL', color: '#f85149' },
+            { price: kl.pdc, title: 'PDC', color: '#8b949e' },
+            { price: kl.pp, title: 'PP', color: '#d29922' },
+            { price: kl.r1, title: 'R1', color: 'rgba(63,185,80,0.5)' },
+            { price: kl.s1, title: 'S1', color: 'rgba(248,81,73,0.5)' },
+        ];
+        levels.forEach(lv => {
+            if (lv.price) {
+                candleSeries.createPriceLine({
+                    price: lv.price,
+                    color: lv.color,
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: lv.title,
+                });
+            }
+        });
+    }
+
+    chart.timeScale().fitContent();
 }
 
 function renderSetupBox(data) {
@@ -387,7 +462,7 @@ function renderKeyLevels(data) {
             ${levelRow("R2", kl.r2)}${levelRow("R1", kl.r1)}${levelRow("PP", kl.pp)}${levelRow("S1", kl.s1)}${levelRow("S2", kl.s2)}
         </div>
         ${kl.pwh ? `<div class="kl-section"><h4>Previous Week</h4>${levelRow("PWH", kl.pwh)}${levelRow("PWL", kl.pwl)}</div>` : ""}
-        ${kl.nearest_level ? `<div class="kl-nearest">Nearest: <strong>${kl.nearest_level.name}</strong> at ${fmt(kl.nearest_level.price)} (${kl.nearest_level.distance_pct.toFixed(2)}%)</div>` : ""}
+        ${kl.nearest_level ? `<div class="kl-nearest">Nearest: <strong>${kl.nearest_level_name}</strong> at ${fmt(kl.nearest_level)} (${kl.nearest_level_dist_pct.toFixed(2)}%)</div>` : ""}
     `;
 }
 

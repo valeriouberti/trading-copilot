@@ -167,6 +167,9 @@ class AssetAnalysis:
     mtf: MTFAnalysis | None = None
     quality_score: QualityScore | None = None
     daily_closes: pd.Series | None = field(default=None, repr=False)
+    ohlc_data: list[dict] | None = field(default=None, repr=False)
+    ema20_data: list[dict] | None = field(default=None, repr=False)
+    ema50_data: list[dict] | None = field(default=None, repr=False)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -940,6 +943,38 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     # Store daily closes for correlation computation
     daily_closes = df_daily["Close"].copy() if not df_daily.empty else None
 
+    # Build OHLC + EMA chart data for the frontend
+    ohlc_data = None
+    ema20_data = None
+    ema50_data = None
+    if not df_daily.empty:
+        try:
+            ohlc_data = []
+            for idx, row in df_daily.iterrows():
+                day_str = idx.strftime("%Y-%m-%d")
+                ohlc_data.append({
+                    "time": day_str,
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                })
+
+            ema20 = ta.ema(df_daily["Close"], length=20)
+            ema50 = ta.ema(df_daily["Close"], length=50)
+
+            if ema20 is not None:
+                ema20_data = []
+                for idx, val in ema20.dropna().items():
+                    ema20_data.append({"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)})
+
+            if ema50 is not None:
+                ema50_data = []
+                for idx, val in ema50.dropna().items():
+                    ema50_data.append({"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)})
+        except Exception as exc:
+            logger.warning("Chart data build failed for %s: %s", symbol, exc)
+
     return AssetAnalysis(
         symbol=symbol,
         display_name=display_name,
@@ -953,6 +988,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         mtf=mtf,
         quality_score=quality,
         daily_closes=daily_closes,
+        ohlc_data=ohlc_data,
+        ema20_data=ema20_data,
+        ema50_data=ema50_data,
     )
 
 

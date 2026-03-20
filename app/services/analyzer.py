@@ -131,6 +131,11 @@ def _format_analysis(analysis: Any) -> dict:
             "mtf": mtf,
             "quality_score": qs,
         },
+        "chart": {
+            "ohlc": getattr(analysis, "ohlc_data", None),
+            "ema20": getattr(analysis, "ema20_data", None),
+            "ema50": getattr(analysis, "ema50_data", None),
+        },
     }
 
 
