@@ -18,7 +18,9 @@ from fastapi.templating import Jinja2Templates
 from app.api import analysis as analysis_router
 from app.api import assets as assets_router
 from app.api import health as health_router
+from app.api import monitor as monitor_router
 from app.api import settings as settings_router
+from app.api import websocket as ws_router
 from app.config import get_database_url, load_config
 from app.models.database import Base
 from app.models.engine import get_engine, get_session_factory
@@ -43,12 +45,20 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = get_session_factory(engine)
     app.state.config = load_config()
 
+    # Initialize background monitor
+    from app.services.monitor import AssetMonitor
+
+    monitor = AssetMonitor(app)
+    app.state.monitor = monitor
+    await monitor.restore_from_db()
+
     db_type = "PostgreSQL" if "postgresql" in database_url else "SQLite"
     logger.info("Trading Copilot started — database: %s", db_type)
 
     yield
 
     # Shutdown
+    await monitor.shutdown()
     await engine.dispose()
     logger.info("Trading Copilot stopped")
 
@@ -71,6 +81,8 @@ app.include_router(health_router.router, prefix="/api", tags=["health"])
 app.include_router(assets_router.router, prefix="/api", tags=["assets"])
 app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
 app.include_router(settings_router.router, prefix="/api", tags=["settings"])
+app.include_router(monitor_router.router, prefix="/api", tags=["monitor"])
+app.include_router(ws_router.router, tags=["websocket"])
 
 
 # ---------------------------------------------------------------------------

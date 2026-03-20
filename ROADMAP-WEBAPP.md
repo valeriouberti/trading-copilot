@@ -911,9 +911,9 @@ cat backup.sql | docker compose exec -T postgres psql -U trading trading
 | 6.3 | Entry/SL/TP calculator | `DONE` | 6.2 |
 | 7.1 | Telegram bot setup | `DONE` | 5.1 |
 | 7.2 | Notification triggers | `DONE` | 7.1 + 6.1 |
-| 8.1 | Background price monitor | `TODO` | 6.1 |
-| 8.2 | Signal detection engine | `TODO` | 8.1 + 6.3 |
-| 8.3 | WebSocket real-time push | `TODO` | 8.2 |
+| 8.1 | Background price monitor | `DONE` | 6.1 |
+| 8.2 | Signal detection engine | `DONE` | 8.1 + 6.3 |
+| 8.3 | WebSocket real-time push | `DONE` | 8.2 |
 | 9.1 | Trade journal UI | `TODO` | 5.2 |
 | 9.2 | Performance analytics | `TODO` | 9.1 |
 | 9.3 | Signal history | `TODO` | 8.2 + 9.1 |

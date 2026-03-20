@@ -11,10 +11,14 @@
         <h1>{{ asset.display_name }}</h1>
         <p class="subtitle">{{ asset.symbol }}</p>
     </div>
-    <div style="display:flex; gap:8px;">
+    <div style="display:flex; gap:8px; align-items:center;">
         <button class="btn btn-primary" id="btn-analyze" onclick="runAnalysis()">
             Analyze
         </button>
+        <button class="btn btn-secondary" id="btn-monitor" onclick="toggleMonitor()">
+            Start Monitor
+        </button>
+        <span id="monitor-badge" class="badge badge-neutral" style="display:none;"></span>
     </div>
 </div>
 
@@ -455,5 +459,118 @@ function biasClass(label) {
     if (l === "BEARISH" || l === "SHORT") return "badge-bearish";
     return "badge-neutral";
 }
+
+// ─── Monitor controls ────────────────────────────────────────
+let monitorActive = false;
+
+async function toggleMonitor() {
+    const btn = document.getElementById("btn-monitor");
+    const badge = document.getElementById("monitor-badge");
+    const action = monitorActive ? "stop" : "start";
+
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/monitor/${action}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: SYMBOL, interval_seconds: 60 }),
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            alert(err.detail || "Monitor action failed");
+            return;
+        }
+        monitorActive = !monitorActive;
+        btn.textContent = monitorActive ? "Stop Monitor" : "Start Monitor";
+        btn.className = monitorActive ? "btn btn-danger" : "btn btn-secondary";
+        badge.style.display = monitorActive ? "inline-block" : "none";
+        badge.textContent = monitorActive ? "LIVE" : "";
+        badge.className = monitorActive ? "badge badge-bullish" : "badge badge-neutral";
+    } catch (e) {
+        alert("Network error");
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Check initial monitor status
+async function checkMonitorStatus() {
+    try {
+        const res = await fetch("/api/monitor/status");
+        const data = await res.json();
+        const mon = (data.monitors || []).find(m => m.symbol === SYMBOL && m.status === "ACTIVE");
+        if (mon) {
+            monitorActive = true;
+            const btn = document.getElementById("btn-monitor");
+            const badge = document.getElementById("monitor-badge");
+            btn.textContent = "Stop Monitor";
+            btn.className = "btn btn-danger";
+            badge.style.display = "inline-block";
+            badge.textContent = "LIVE";
+            badge.className = "badge badge-bullish";
+        }
+    } catch (e) { /* ignore */ }
+}
+
+// ─── WebSocket live updates ──────────────────────────────────
+
+document.addEventListener("ws:price_update", function(e) {
+    const data = e.detail;
+    if (data.symbol !== SYMBOL) return;
+
+    // Update price display if technicals card is visible
+    const priceEl = document.querySelector(".current-price");
+    if (priceEl && data.price) {
+        priceEl.textContent = fmt(data.price);
+    }
+    const changeEl = document.querySelector(".price-change");
+    if (changeEl && data.change_pct !== null && data.change_pct !== undefined) {
+        changeEl.textContent = (data.change_pct >= 0 ? "+" : "") + data.change_pct.toFixed(2) + "%";
+        changeEl.className = "price-change " + (data.change_pct >= 0 ? "price-up" : "price-down");
+    }
+});
+
+document.addEventListener("ws:signal", function(e) {
+    const data = e.detail;
+    if (data.symbol !== SYMBOL) return;
+
+    // Flash the setup box
+    const box = document.getElementById("setup-box");
+    box.style.display = "flex";
+
+    const dirClass = data.direction === "LONG" ? "setup-long" : "setup-short";
+    box.className = `setup-box ${dirClass}`;
+    box.innerHTML = `
+        <div class="setup-direction">
+            <span class="setup-dir-label">${data.direction}</span>
+            <span class="setup-badge badge-go">SIGNAL</span>
+        </div>
+        <div class="setup-levels">
+            <div class="setup-level">
+                <span class="sl-entry">Entry</span>
+                <span class="sl-value">${fmt(data.entry)}</span>
+            </div>
+            <div class="setup-level">
+                <span class="sl-stop">SL</span>
+                <span class="sl-value">${fmt(data.sl)}</span>
+            </div>
+            <div class="setup-level">
+                <span class="sl-tp">TP</span>
+                <span class="sl-value">${fmt(data.tp)}</span>
+            </div>
+        </div>
+        <div class="setup-meta">
+            <span>QS ${data.quality_score}/5</span>
+            <span>MTF ${data.mtf || "N/A"}</span>
+        </div>
+    `;
+
+    // Flash animation
+    box.style.animation = "none";
+    box.offsetHeight; // trigger reflow
+    box.style.animation = "signal-flash 1s ease 3";
+});
+
+document.addEventListener("DOMContentLoaded", checkMonitorStatus);
 </script>
 {% endblock %}

@@ -50,7 +50,11 @@
         </div>
         <div class="info-row">
             <span class="info-label">Monitor</span>
-            <span class="info-value status-inactive">Inactive</span>
+            <span class="info-value" id="monitor-status">checking...</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">WebSocket</span>
+            <span class="info-value" id="ws-status">connecting...</span>
         </div>
     </div>
 </section>
@@ -143,5 +147,38 @@ async function removeAsset(symbol) {
         alert('Network error');
     }
 }
+
+// Fetch monitor status on load
+async function fetchMonitorStatus() {
+    try {
+        const res = await fetch('/api/monitor/status');
+        const data = await res.json();
+        const el = document.getElementById('monitor-status');
+        const active = (data.monitors || []).filter(m => m.status === 'ACTIVE');
+        if (active.length > 0) {
+            el.textContent = active.length + ' active';
+            el.style.color = 'var(--accent-green)';
+        } else {
+            el.textContent = 'Inactive';
+            el.style.color = 'var(--text-muted)';
+        }
+        const wsEl = document.getElementById('ws-status');
+        wsEl.textContent = data.ws_connections + ' clients';
+    } catch (e) {
+        document.getElementById('monitor-status').textContent = 'error';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', fetchMonitorStatus);
+
+// Update WS status indicator
+document.addEventListener('ws:connected', function() {
+    const el = document.getElementById('ws-status');
+    if (el) { el.textContent = 'connected'; el.style.color = 'var(--accent-green)'; }
+});
+document.addEventListener('ws:disconnected', function() {
+    const el = document.getElementById('ws-status');
+    if (el) { el.textContent = 'disconnected'; el.style.color = 'var(--accent-red)'; }
+});
 </script>
 {% endblock %}

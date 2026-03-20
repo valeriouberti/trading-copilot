@@ -872,3 +872,14 @@ body {
 .notif-option .badge {
     margin-left: auto;
 }
+
+/* --- Signal flash animation --- */
+
+@keyframes signal-flash {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 20px 4px rgba(63, 185, 80, 0.4); }
+}
+
+.setup-box[style*="animation"] {
+    transition: box-shadow 0.3s;
+}
