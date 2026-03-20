@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/" class="back-link">&larr; Dashboard</a>
+    <h1>Settings</h1>
+    <p class="subtitle">Configure notifications and integrations</p>
+</div>
+
+<div class="settings-grid" x-data="settingsApp()">
+    <!-- Telegram Configuration -->
+    <div class="card">
+        <h3>Telegram Notifications</h3>
+        <p class="settings-desc">
+            Receive trade signals, regime changes, and calendar alerts on your phone.
+        </p>
+
+        <div class="form-group">
+            <label class="form-label" for="bot_token">Bot Token</label>
+            <input type="password" id="bot_token" class="form-input"
+                   x-model="telegram.bot_token"
+                   placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+            <span class="form-hint">Create a bot via <code>@BotFather</code> on Telegram</span>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" for="chat_id">Chat ID</label>
+            <input type="text" id="chat_id" class="form-input"
+                   x-model="telegram.chat_id"
+                   placeholder="123456789">
+            <span class="form-hint">Send <code>/start</code> to your bot, then use <code>@userinfobot</code> to find your ID</span>
+        </div>
+
+        <div class="form-group">
+            <label class="form-check">
+                <input type="checkbox" x-model="telegram.enabled">
+                <span>Enable Telegram notifications</span>
+            </label>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn btn-primary" @click="saveTelegram()" :disabled="saving">
+                <span x-show="!saving">Save</span>
+                <span x-show="saving">Saving...</span>
+            </button>
+            <button class="btn btn-secondary" @click="testTelegram()" :disabled="testing">
+                <span x-show="!testing">Send Test</span>
+                <span x-show="testing">Sending...</span>
+            </button>
+        </div>
+
+        <div x-show="message" class="settings-msg" :class="messageOk ? 'msg-ok' : 'msg-err'"
+             x-text="message" x-transition></div>
+    </div>
+
+    <!-- Notification Preferences -->
+    <div class="card">
+        <h3>Notification Types</h3>
+        <p class="settings-desc">Choose which notifications to receive.</p>
+
+        <div class="notif-option">
+            <span class="notif-label">Trade Signals</span>
+            <span class="notif-desc">Entry/SL/TP when conditions align</span>
+            <span class="badge badge-bullish">Active</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Regime Changes</span>
+            <span class="notif-desc">LONG/SHORT/NEUTRAL transitions</span>
+            <span class="badge badge-bullish">Active</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Calendar Alerts</span>
+            <span class="notif-desc">High-impact events within 2 hours</span>
+            <span class="badge badge-bullish">Active</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Monitor Status</span>
+            <span class="notif-desc">Background monitor start/stop</span>
+            <span class="badge badge-neutral">Phase 8</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function settingsApp() {
+    return {
+        telegram: { bot_token: '', chat_id: '', enabled: false },
+        saving: false,
+        testing: false,
+        message: '',
+        messageOk: false,
+
+        async init() {
+            try {
+                const res = await fetch('/api/settings/telegram');
+                const data = await res.json();
+                this.telegram.chat_id = data.chat_id || '';
+                this.telegram.enabled = data.enabled || false;
+                // Don't populate bot_token — it's masked on the server
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+            }
+        },
+
+        async saveTelegram() {
+            this.saving = true;
+            this.message = '';
+            try {
+                const res = await fetch('/api/settings/telegram', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.telegram),
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    this.message = 'Settings saved!';
+                    this.messageOk = true;
+                } else {
+                    this.message = data.detail || 'Save failed';
+                    this.messageOk = false;
+                }
+            } catch (e) {
+                this.message = 'Network error';
+                this.messageOk = false;
+            }
+            this.saving = false;
+            setTimeout(() => this.message = '', 4000);
+        },
+
+        async testTelegram() {
+            this.testing = true;
+            this.message = '';
+            try {
+                const res = await fetch('/api/telegram/test', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    this.message = 'Test message sent!';
+                    this.messageOk = true;
+                } else {
+                    this.message = data.detail || 'Test failed';
+                    this.messageOk = false;
+                }
+            } catch (e) {
+                this.message = 'Network error';
+                this.messageOk = false;
+            }
+            this.testing = false;
+            setTimeout(() => this.message = '', 4000);
+        },
+    };
+}
+</script>
+{% endblock %}
