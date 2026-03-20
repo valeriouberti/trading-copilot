@@ -74,7 +74,10 @@ def get_settings(yaml_path: str | None = None) -> Settings:
     # Static lists from YAML (no env var equivalent)
     if yaml_data.get("rss_feeds"):
         overrides["rss_feeds"] = yaml_data["rss_feeds"]
-    if yaml_data.get("assets"):
+    if yaml_data.get("seed_assets"):
+        overrides["seed_assets"] = yaml_data["seed_assets"]
+    elif yaml_data.get("assets"):
+        # Backward compat: old config.yaml used "assets" key
         overrides["seed_assets"] = yaml_data["assets"]
 
     # YAML fallbacks — only apply if env var is NOT set

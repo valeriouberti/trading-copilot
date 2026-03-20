@@ -133,10 +133,14 @@ def load_config(path: str) -> dict:
         print(f"ERROR: File '{path}' is empty or invalid.")
         sys.exit(1)
 
+    # Normalize: support both "seed_assets" (new) and "assets" (old)
+    if "seed_assets" in config and "assets" not in config:
+        config["assets"] = config.pop("seed_assets")
+
     # Validate required keys
     errors: list[str] = []
     if not config.get("assets"):
-        errors.append("'assets' missing or empty")
+        errors.append("'assets' (or 'seed_assets') missing or empty")
     else:
         for i, asset in enumerate(config["assets"]):
             if not asset.get("symbol"):
