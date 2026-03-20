@@ -11,9 +11,12 @@ import pytest
 
 from modules.price_data import (
     AssetAnalysis,
+    KeyLevels,
     TechnicalSignal,
     _analyze_single_asset,
+    _compute_key_levels,
     _fetch_twelvedata,
+    _psych_step,
     analyze_assets,
 )
 
@@ -514,3 +517,136 @@ class TestDataSource:
         assert len(df) == 2
         assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
         assert df["Close"].iloc[-1] == 100.5  # Sorted ascending, latest is last
+
+
+class TestPsychStep:
+    def test_forex(self) -> None:
+        assert _psych_step(1.08) == 0.01
+
+    def test_gold(self) -> None:
+        assert _psych_step(3000) == 100
+
+    def test_es_futures(self) -> None:
+        assert _psych_step(5800) == 100
+
+    def test_nq_futures(self) -> None:
+        assert _psych_step(21000) == 500
+
+
+class TestComputeKeyLevels:
+    def test_pivot_points_formula(self) -> None:
+        """Verify classic pivot point calculation."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        pdh, pdl, pdc = kl.pdh, kl.pdl, kl.pdc
+        expected_pp = (pdh + pdl + pdc) / 3
+        assert abs(kl.pp - expected_pp) < 0.01
+        assert abs(kl.r1 - (2 * kl.pp - pdl)) < 0.01
+        assert abs(kl.s1 - (2 * kl.pp - pdh)) < 0.01
+        assert abs(kl.r2 - (kl.pp + (pdh - pdl))) < 0.01
+        assert abs(kl.s2 - (kl.pp - (pdh - pdl))) < 0.01
+
+    def test_previous_day_values(self) -> None:
+        """PDH/PDL/PDC come from the second-to-last row."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        assert kl.pdh == float(df["High"].iloc[-2])
+        assert kl.pdl == float(df["Low"].iloc[-2])
+        assert kl.pdc == float(df["Close"].iloc[-2])
+
+    def test_psychological_levels_bracket_price(self) -> None:
+        """Psych levels should bracket the current price."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        assert kl.psych_below is not None
+        assert kl.psych_above is not None
+        assert kl.psych_below < price
+        assert kl.psych_above >= price
+
+    def test_weekly_levels_present(self) -> None:
+        """Weekly high/low should be computed from 60 days of data."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        assert kl.pwh is not None
+        assert kl.pwl is not None
+        assert kl.pwh >= kl.pwl
+
+    def test_nearest_level_computed(self) -> None:
+        """Nearest level should be identified with distance."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        assert kl.nearest_level is not None
+        assert kl.nearest_level_name != ""
+        assert kl.nearest_level_dist_pct is not None
+
+    def test_all_levels_returns_pairs(self) -> None:
+        """all_levels() should return (name, value) tuples."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+
+        pairs = kl.all_levels()
+        assert len(pairs) >= 8  # PDH, PDL, PDC, PP, R1, R2, S1, S2, psych...
+        for name, val in pairs:
+            assert isinstance(name, str)
+            assert isinstance(val, float)
+
+    def test_insufficient_data(self) -> None:
+        """With only 1 row, should return empty KeyLevels."""
+        df = _make_ohlcv_df(1, "up")
+        kl = _compute_key_levels(df, 100.0)
+        assert kl.pdh is None
+        assert kl.pp is None
+
+    def test_to_dict(self) -> None:
+        """KeyLevels serialization."""
+        df = _make_ohlcv_df(100, "up")
+        price = float(df["Close"].iloc[-1])
+        kl = _compute_key_levels(df, price)
+        d = kl.to_dict()
+        assert "pdh" in d
+        assert "pp" in d
+        assert "nearest_level" in d
+
+
+class TestKeyLevelsInAnalysis:
+    def test_key_levels_present_in_analysis(self) -> None:
+        """Verify key_levels is populated in AssetAnalysis."""
+        daily_df = _make_ohlcv_df(100, "up")
+        intraday_df = _make_5m_df(200)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history = MagicMock(side_effect=_mock_ticker_side_effect(daily_df, intraday_df))
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            result = _analyze_single_asset("TEST=F", "Test")
+
+        assert result.key_levels is not None
+        assert result.key_levels.pdh is not None
+        assert result.key_levels.pp is not None
+
+    def test_key_levels_in_to_dict(self) -> None:
+        """Verify key_levels appears in serialized output."""
+        daily_df = _make_ohlcv_df(100, "up")
+        intraday_df = _make_5m_df(200)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history = MagicMock(side_effect=_mock_ticker_side_effect(daily_df, intraday_df))
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            result = _analyze_single_asset("TEST=F", "Test")
+
+        d = result.to_dict()
+        assert "key_levels" in d
+        assert d["key_levels"] is not None
+        assert "pdh" in d["key_levels"]

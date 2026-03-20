@@ -254,6 +254,193 @@ def _build_regime_section(regime: str, regime_reason: str) -> str:
     </div>"""
 
 
+def _build_calendar_section(calendar_data: Any | None) -> str:
+    """Build the HTML section for the economic calendar."""
+    if not calendar_data:
+        return ""
+
+    events_today = getattr(calendar_data, "events_today", [])
+    high_impact = getattr(calendar_data, "high_impact_today", [])
+    override = getattr(calendar_data, "regime_override", False)
+    override_reason = getattr(calendar_data, "override_reason", "")
+    next_hi = getattr(calendar_data, "next_high_impact", None)
+    hours_to = getattr(calendar_data, "hours_to_next", None)
+
+    if not events_today:
+        return """
+        <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
+            <h2 style="margin:0 0 12px;color:#f1f5f9;">Economic Calendar</h2>
+            <p style="color:#86efac;">No economic events scheduled today.</p>
+        </div>"""
+
+    # Override warning
+    override_html = ""
+    if override:
+        override_html = f"""
+        <div style="background:#7f1d1d;border:1px solid #dc2626;border-radius:8px;padding:12px;margin-bottom:16px;">
+            <span style="color:#fca5a5;font-weight:bold;">&#9888; REGIME OVERRIDE: {override_reason}</span>
+        </div>"""
+
+    # Next high-impact countdown
+    countdown_html = ""
+    if next_hi and hours_to is not None:
+        if hours_to < 1:
+            time_str = f"{int(hours_to * 60)} min"
+        else:
+            time_str = f"{hours_to:.1f}h"
+        urgency_color = "#ef4444" if hours_to <= 2 else "#f59e0b" if hours_to <= 4 else "#22c55e"
+        countdown_html = f"""
+        <div style="text-align:center;margin-bottom:16px;">
+            <span style="color:{urgency_color};font-size:1.3em;font-weight:bold;">
+                Next: {next_hi.title} ({next_hi.country}) in {time_str}
+            </span>
+        </div>"""
+
+    # Event rows
+    event_rows = ""
+    for e in events_today:
+        impact_colors = {"High": "#ef4444", "Medium": "#f59e0b", "Low": "#6b7280"}
+        impact_color = impact_colors.get(e.impact, "#6b7280")
+        hours = e.hours_away
+        if hours < 0:
+            time_cell = '<span style="color:#6b7280;">Passed</span>'
+        elif hours < 1:
+            time_cell = f'<span style="color:#ef4444;font-weight:bold;">{int(hours * 60)}m</span>'
+        else:
+            time_cell = f'<span style="color:#cbd5e1;">{hours:.1f}h</span>'
+
+        event_rows += f"""
+            <tr>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;color:#d1d5db;">{e.title}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;">{e.country}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;">
+                    <span style="color:{impact_color};font-weight:bold;">{e.impact}</span></td>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;text-align:center;">{time_cell}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;color:#9ca3af;">{e.forecast}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #374151;color:#9ca3af;">{e.previous}</td>
+            </tr>"""
+
+    border_color = "#dc2626" if high_impact else "#374151"
+    return f"""
+    <!-- ECONOMIC CALENDAR -->
+    <div style="background:#1e293b;border:2px solid {border_color};border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 12px;color:#f1f5f9;">Economic Calendar ({len(events_today)} events, {len(high_impact)} high-impact)</h2>
+        {override_html}
+        {countdown_html}
+        <table style="width:100%;border-collapse:collapse;color:#e2e8f0;font-size:0.9em;">
+            <thead>
+                <tr style="border-bottom:2px solid #374151;">
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Event</th>
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Country</th>
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Impact</th>
+                    <th style="padding:8px 10px;text-align:center;color:#94a3b8;">In</th>
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Forecast</th>
+                    <th style="padding:8px 10px;text-align:left;color:#94a3b8;">Previous</th>
+                </tr>
+            </thead>
+            <tbody>
+                {event_rows}
+            </tbody>
+        </table>
+    </div>"""
+
+
+def _build_key_levels_section(asset_analyses: list[Any]) -> str:
+    """Build the HTML section for key S/R levels."""
+    has_levels = any(
+        getattr(a, "key_levels", None) is not None
+        and getattr(a, "error", None) is None
+        for a in asset_analyses
+    )
+    if not has_levels:
+        return ""
+
+    cards = ""
+    for a in asset_analyses:
+        kl = getattr(a, "key_levels", None)
+        if not kl or getattr(a, "error", None):
+            continue
+
+        price = getattr(a, "price", None)
+        if not price:
+            continue
+
+        # Build level rows, sorted by value
+        all_levels = kl.all_levels()
+        all_levels.sort(key=lambda nv: nv[1], reverse=True)
+
+        level_rows = ""
+        for name, val in all_levels:
+            dist_pct = ((price - val) / price) * 100
+            if abs(dist_pct) < 0.3:
+                row_bg = "background:#374151;"
+                dist_color = "#f59e0b"
+                dist_label = "AT LEVEL"
+            elif dist_pct > 0:
+                row_bg = ""
+                dist_color = "#22c55e"
+                dist_label = f"{dist_pct:+.2f}%"
+            else:
+                row_bg = ""
+                dist_color = "#ef4444"
+                dist_label = f"{dist_pct:+.2f}%"
+
+            # Highlight nearest level
+            is_nearest = (kl.nearest_level is not None and abs(val - kl.nearest_level) < 0.001)
+            name_style = "font-weight:bold;color:#f1f5f9;" if is_nearest else "color:#94a3b8;"
+
+            level_rows += f"""
+                <tr style="{row_bg}">
+                    <td style="padding:4px 8px;border-bottom:1px solid #1f2937;">
+                        <span style="{name_style}">{name}</span></td>
+                    <td style="padding:4px 8px;border-bottom:1px solid #1f2937;text-align:right;color:#cbd5e1;">
+                        {val:,.2f}</td>
+                    <td style="padding:4px 8px;border-bottom:1px solid #1f2937;text-align:right;">
+                        <span style="color:{dist_color};">{dist_label}</span></td>
+                </tr>"""
+
+        # Price position indicator
+        nearest_info = ""
+        if kl.nearest_level_name and kl.nearest_level_dist_pct is not None:
+            dist = abs(kl.nearest_level_dist_pct)
+            if dist < 0.3:
+                warn_color = "#ef4444"
+                warn_text = f"AT {kl.nearest_level_name} ({kl.nearest_level:,.2f})"
+            elif dist < 0.7:
+                warn_color = "#f59e0b"
+                warn_text = f"Near {kl.nearest_level_name} ({dist:.2f}% away)"
+            else:
+                warn_color = "#22c55e"
+                warn_text = f"Clear of levels (nearest: {kl.nearest_level_name} at {dist:.2f}%)"
+            nearest_info = f'<div style="color:{warn_color};font-size:0.85em;margin-top:8px;">{warn_text}</div>'
+
+        cards += f"""
+            <div style="background:#0f172a;border:1px solid #374151;border-radius:8px;padding:16px;min-width:250px;flex:1;">
+                <h3 style="margin:0 0 8px;color:#f1f5f9;font-size:1em;">{a.display_name}
+                    <span style="color:#9ca3af;font-size:0.85em;"> @ {price:,.2f}</span></h3>
+                <table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+                    <thead>
+                        <tr>
+                            <th style="padding:4px 8px;text-align:left;color:#64748b;">Level</th>
+                            <th style="padding:4px 8px;text-align:right;color:#64748b;">Price</th>
+                            <th style="padding:4px 8px;text-align:right;color:#64748b;">Dist.</th>
+                        </tr>
+                    </thead>
+                    <tbody>{level_rows}</tbody>
+                </table>
+                {nearest_info}
+            </div>"""
+
+    return f"""
+    <!-- KEY LEVELS -->
+    <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 16px;color:#f1f5f9;">Key Levels (S/R)</h2>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            {cards}
+        </div>
+    </div>"""
+
+
 def generate_report(
     sentiment: Any,
     asset_analyses: list[Any],
@@ -263,6 +450,7 @@ def generate_report(
     validation_flags: list[str] | None = None,
     regime: str = "NEUTRAL",
     regime_reason: str = "",
+    calendar_data: Any | None = None,
 ) -> str:
     """Generate the HTML report and return the file path.
 
@@ -273,6 +461,7 @@ def generate_report(
         output_dir: Directory to save the report.
         poly_data: Optional Polymarket data from get_polymarket_context().
         validation_flags: Validation flags including Polymarket ones.
+        calendar_data: Optional CalendarData from economic calendar.
 
     Returns:
         Absolute path to the generated HTML file.
@@ -473,6 +662,8 @@ def generate_report(
     <!-- RISK EVENTS -->
     {risk_html}
 
+    {_build_calendar_section(calendar_data)}
+
     <!-- ASSETS TABLE -->
     <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;overflow-x:auto;">
         <h2 style="margin:0 0 16px;color:#f1f5f9;">Asset Analysis</h2>
@@ -499,6 +690,8 @@ def generate_report(
             </tbody>
         </table>
     </div>
+
+    {_build_key_levels_section(asset_analyses)}
 
     <!-- RAW NEWS -->
     <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
@@ -548,6 +741,7 @@ def print_terminal_summary(
     regime: str = "NEUTRAL",
     regime_reason: str = "",
     validation_flags: list[str] | None = None,
+    calendar_data: Any | None = None,
 ) -> None:
     """Print a compact ASCII summary to the terminal."""
     session = get_market_session()
@@ -608,7 +802,16 @@ def print_terminal_summary(
         price_str = f"{a.price:,.2f}" if a.price else "N/A"
         a_bias = asset_biases.get(a.symbol, bias)
         hint = _action_hint(a.composite_score, a_bias)
-        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {hint:<20}")
+
+        # Key level proximity note
+        kl = getattr(a, "key_levels", None)
+        level_note = ""
+        if kl and kl.nearest_level_name and kl.nearest_level_dist_pct is not None:
+            dist = abs(kl.nearest_level_dist_pct)
+            if dist < 0.5:
+                level_note = f" [!{kl.nearest_level_name} {dist:.1f}%]"
+
+        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {hint:<20}{level_note}")
 
     print(f"\n  News analyzed: {news_count}")
 
@@ -617,6 +820,22 @@ def print_terminal_summary(
         p_conf = poly_data.get("confidence", 50)
         p_count = poly_data.get("market_count", 0)
         print(f"  POLYMARKET: {p_sig} ({p_conf:.0f}%) — {p_count} markets analyzed")
+
+    # Calendar summary
+    if calendar_data:
+        hi_events = getattr(calendar_data, "high_impact_today", [])
+        override = getattr(calendar_data, "regime_override", False)
+        next_hi = getattr(calendar_data, "next_high_impact", None)
+        if hi_events:
+            print(f"\n  CALENDAR: {len(hi_events)} high-impact events today")
+            if next_hi:
+                hours = next_hi.hours_away
+                time_str = f"{int(hours * 60)}m" if hours < 1 else f"{hours:.1f}h"
+                print(f"    Next: {next_hi.title} ({next_hi.country}) in {time_str}")
+            if override:
+                print(f"    !! REGIME OVERRIDE — event imminent")
+        else:
+            print(f"\n  CALENDAR: No high-impact events today")
 
     print("=" * 70)
     print("  For informational use only. Not financial advice.")

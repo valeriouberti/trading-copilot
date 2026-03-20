@@ -48,6 +48,9 @@ _TD_INTERVAL_MAP: dict[str, str] = {
 }
 
 
+import math
+
+
 @dataclass
 class TechnicalSignal:
     """A single technical indicator result."""
@@ -55,6 +58,49 @@ class TechnicalSignal:
     value: float | None
     label: str  # "BULLISH", "BEARISH", or "NEUTRAL"
     detail: str  # Human-readable explanation
+
+
+@dataclass
+class KeyLevels:
+    """Key support/resistance levels for an asset."""
+    pdh: float | None = None   # Previous Day High
+    pdl: float | None = None   # Previous Day Low
+    pdc: float | None = None   # Previous Day Close
+    pwh: float | None = None   # Previous Week High
+    pwl: float | None = None   # Previous Week Low
+    pp: float | None = None    # Pivot Point
+    r1: float | None = None    # Resistance 1
+    r2: float | None = None    # Resistance 2
+    s1: float | None = None    # Support 1
+    s2: float | None = None    # Support 2
+    psych_above: float | None = None  # Nearest psychological level above
+    psych_below: float | None = None  # Nearest psychological level below
+    nearest_level: float | None = None       # Closest level to current price
+    nearest_level_name: str = ""             # Name of closest level
+    nearest_level_dist_pct: float | None = None  # Distance % to closest level
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pdh": self.pdh, "pdl": self.pdl, "pdc": self.pdc,
+            "pwh": self.pwh, "pwl": self.pwl,
+            "pp": self.pp, "r1": self.r1, "r2": self.r2,
+            "s1": self.s1, "s2": self.s2,
+            "psych_above": self.psych_above, "psych_below": self.psych_below,
+            "nearest_level": self.nearest_level,
+            "nearest_level_name": self.nearest_level_name,
+            "nearest_level_dist_pct": self.nearest_level_dist_pct,
+        }
+
+    def all_levels(self) -> list[tuple[str, float]]:
+        """Return all non-None levels as (name, value) pairs."""
+        pairs = [
+            ("PDH", self.pdh), ("PDL", self.pdl), ("PDC", self.pdc),
+            ("PWH", self.pwh), ("PWL", self.pwl),
+            ("PP", self.pp), ("R1", self.r1), ("R2", self.r2),
+            ("S1", self.s1), ("S2", self.s2),
+            ("Psych", self.psych_above), ("Psych", self.psych_below),
+        ]
+        return [(n, v) for n, v in pairs if v is not None]
 
 
 @dataclass
@@ -68,6 +114,7 @@ class AssetAnalysis:
     composite_score: str = "NEUTRAL"
     confidence_pct: float = 50.0
     data_source: str = "yfinance"
+    key_levels: KeyLevels | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +127,7 @@ class AssetAnalysis:
             "composite_score": self.composite_score,
             "confidence_pct": self.confidence_pct,
             "data_source": self.data_source,
+            "key_levels": self.key_levels.to_dict() if self.key_levels else None,
             "error": self.error,
         }
 
@@ -248,6 +296,89 @@ def _fetch_intraday(symbol: str) -> tuple[pd.DataFrame, str]:
         return df, "twelvedata"
 
     return pd.DataFrame(), "none"
+
+
+# ---------------------------------------------------------------------------
+# Key Levels (Support / Resistance)
+# ---------------------------------------------------------------------------
+
+def _psych_step(price: float) -> float:
+    """Determine psychological level step size based on price magnitude."""
+    if price < 2:
+        return 0.01     # Forex (EURUSD ~1.08)
+    elif price < 20:
+        return 0.5
+    elif price < 200:
+        return 10
+    elif price < 2000:
+        return 50
+    elif price < 6000:
+        return 100       # ES (~5800)
+    elif price < 25000:
+        return 500       # NQ (~21000)
+    else:
+        return 1000
+
+
+def _compute_key_levels(df_daily: pd.DataFrame, current_price: float) -> KeyLevels:
+    """Compute key S/R levels from daily OHLCV data.
+
+    Calculates:
+    - Previous Day High/Low/Close (PDH/PDL/PDC)
+    - Previous Week High/Low (PWH/PWL)
+    - Classic Pivot Points (PP, R1, R2, S1, S2)
+    - Nearest psychological (round-number) levels
+    - Nearest overall level and distance %
+    """
+    levels = KeyLevels()
+
+    if len(df_daily) < 2:
+        return levels
+
+    # --- Previous Day ---
+    prev_day = df_daily.iloc[-2]
+    levels.pdh = float(prev_day["High"])
+    levels.pdl = float(prev_day["Low"])
+    levels.pdc = float(prev_day["Close"])
+
+    # --- Classic Pivot Points ---
+    levels.pp = (levels.pdh + levels.pdl + levels.pdc) / 3
+    levels.r1 = 2 * levels.pp - levels.pdl
+    levels.r2 = levels.pp + (levels.pdh - levels.pdl)
+    levels.s1 = 2 * levels.pp - levels.pdh
+    levels.s2 = levels.pp - (levels.pdh - levels.pdl)
+
+    # --- Previous Week High/Low ---
+    try:
+        weekly = df_daily.resample("W").agg({"High": "max", "Low": "min"})
+        weekly = weekly.dropna()
+        if len(weekly) >= 2:
+            levels.pwh = float(weekly["High"].iloc[-2])
+            levels.pwl = float(weekly["Low"].iloc[-2])
+    except Exception as exc:
+        logger.warning("Weekly levels calculation failed: %s", exc)
+
+    # --- Psychological Levels ---
+    step = _psych_step(current_price)
+    levels.psych_below = float(math.floor(current_price / step) * step)
+    levels.psych_above = float(levels.psych_below + step)
+    # Avoid duplicates: if price IS the round number, shift
+    if abs(current_price - levels.psych_below) < step * 0.001:
+        levels.psych_below = float(levels.psych_below - step)
+
+    # --- Find Nearest Level ---
+    all_named = levels.all_levels()
+    if all_named and current_price:
+        closest_name, closest_val = min(
+            all_named, key=lambda nv: abs(nv[1] - current_price)
+        )
+        levels.nearest_level = closest_val
+        levels.nearest_level_name = closest_name
+        levels.nearest_level_dist_pct = round(
+            ((current_price - closest_val) / current_price) * 100, 2
+        )
+
+    return levels
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +614,13 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         composite = "NEUTRAL"
         confidence = 50.0
 
+    # --- Key Levels ---
+    try:
+        key_levels = _compute_key_levels(df_daily, current_price)
+    except Exception as exc:
+        logger.warning("Key levels failed for %s: %s", symbol, exc)
+        key_levels = KeyLevels()
+
     return AssetAnalysis(
         symbol=symbol,
         display_name=display_name,
@@ -492,6 +630,7 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         composite_score=composite,
         confidence_pct=round(confidence, 1),
         data_source=daily_source,
+        key_levels=key_levels,
     )
 
 

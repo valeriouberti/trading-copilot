@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 load_dotenv()
 
+from modules.economic_calendar import fetch_calendar
 from modules.hallucination_guard import validate, validate_polymarket_consistency, determine_regime
 from modules.news_fetcher import fetch_news
 from modules.polymarket import get_polymarket_context
@@ -182,11 +183,12 @@ def main() -> None:
         print("ERROR: No assets configured. Check config.yaml.")
         sys.exit(1)
 
-    # 2. Parallel I/O: fetch news, price data, and Polymarket simultaneously
-    print("[1/5] Fetching data in parallel (news + technicals + Polymarket)...")
+    # 2. Parallel I/O: fetch news, price data, Polymarket, and calendar
+    print("[1/5] Fetching data in parallel (news + technicals + Polymarket + calendar)...")
     news: list = []
     asset_analyses: list = []
     poly_data: dict | None = None
+    calendar_data = None
 
     def _fetch_news_task():
         return fetch_news(feeds, lookback_hours, assets=assets)
@@ -199,10 +201,14 @@ def main() -> None:
             return None
         return get_polymarket_context(assets, groq_model=groq_model)
 
+    def _fetch_calendar_task():
+        return fetch_calendar()
+
     tasks = {
         "news": _fetch_news_task,
         "technicals": _fetch_technicals_task,
         "polymarket": _fetch_polymarket_task,
+        "calendar": _fetch_calendar_task,
     }
 
     progress = tqdm(total=len(tasks), desc="  Data", unit="src", leave=False)
@@ -224,15 +230,23 @@ def main() -> None:
     news = results.get("news", [])
     asset_analyses = results.get("technicals", [])
     poly_data = results.get("polymarket")
+    calendar_data = results.get("calendar")
 
     ok_count = sum(1 for a in asset_analyses if not getattr(a, "error", True))
     print(f"      News: {len(news)} articles | Technicals: {ok_count}/{len(assets)} assets", end="")
     if poly_data and poly_data.get("market_count", 0) > 0:
         print(f" | Polymarket: {poly_data['market_count']} markets ({poly_data.get('signal', 'N/A')})")
     elif args.no_polymarket:
-        print(" | Polymarket: SKIPPED")
+        print(" | Polymarket: SKIPPED", end="")
     else:
-        print(" | Polymarket: N/A")
+        print(" | Polymarket: N/A", end="")
+
+    # Calendar summary
+    if calendar_data and getattr(calendar_data, "high_impact_today", []):
+        hi_count = len(calendar_data.high_impact_today)
+        print(f" | Calendar: {hi_count} high-impact")
+    else:
+        print(" | Calendar: clear")
 
     # 3. Sentiment analysis
     if args.no_llm:
@@ -289,6 +303,18 @@ def main() -> None:
 
     # 4b. Determine daily regime
     regime, regime_reason = determine_regime(sentiment, asset_analyses, validation_flags)
+
+    # 4c. Calendar regime override — force NEUTRAL if high-impact event imminent
+    if calendar_data and getattr(calendar_data, "regime_override", False):
+        if regime != "NEUTRAL":
+            original_regime = regime
+            regime = "NEUTRAL"
+            regime_reason = (
+                f"{calendar_data.override_reason} "
+                f"(was {original_regime}: {regime_reason})"
+            )
+            print(f"      CALENDAR OVERRIDE: {original_regime} → NEUTRAL")
+
     print(f"      REGIME: {regime} — {regime_reason}")
 
     # 5. Generate report
@@ -304,6 +330,7 @@ def main() -> None:
             validation_flags=validation_flags,
             regime=regime,
             regime_reason=regime_reason,
+            calendar_data=calendar_data,
         )
         print(f"      Report saved: {report_path}")
     except Exception as exc:
@@ -349,6 +376,7 @@ def main() -> None:
         sentiment, asset_analyses, len(news),
         poly_data=poly_data, regime=regime, regime_reason=regime_reason,
         validation_flags=validation_flags,
+        calendar_data=calendar_data,
     )
 
     # 7. Open in browser
