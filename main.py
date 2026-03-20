@@ -28,7 +28,7 @@ from modules.hallucination_guard import (
 )
 from modules.news_fetcher import fetch_news
 from modules.polymarket import get_polymarket_context
-from modules.price_data import analyze_assets
+from modules.price_data import analyze_assets, compute_correlation_matrix, filter_correlated_assets
 from modules.report import generate_report, print_terminal_summary
 from modules.sentiment import analyze_sentiment
 from modules.trade_log import log_flat_day, log_trade, print_accuracy_report
@@ -330,6 +330,12 @@ def main() -> None:
 
     print(f"      REGIME: {regime} — {regime_reason}")
 
+    # 4d. Correlation filter
+    corr_matrix = compute_correlation_matrix(asset_analyses)
+    filtered_symbols = filter_correlated_assets(asset_analyses, corr_matrix)
+    if filtered_symbols:
+        print(f"      CORR-SKIP: {', '.join(filtered_symbols)} (correlated same-direction)")
+
     # 5. Generate report
     print("[4/5] Generating report...")
     try:
@@ -344,6 +350,8 @@ def main() -> None:
             regime=regime,
             regime_reason=regime_reason,
             calendar_data=calendar_data,
+            corr_matrix=corr_matrix,
+            filtered_symbols=filtered_symbols,
         )
         print(f"      Report saved: {report_path}")
     except Exception as exc:
@@ -394,6 +402,8 @@ def main() -> None:
         regime_reason=regime_reason,
         validation_flags=validation_flags,
         calendar_data=calendar_data,
+        corr_matrix=corr_matrix,
+        filtered_symbols=filtered_symbols,
     )
 
     # 7. Open in browser

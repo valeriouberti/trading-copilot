@@ -196,4 +196,18 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — All phases DONE*
+## Next: Web App
+
+Tutte le fasi CLI sono completate. Il prossimo step e' la trasformazione in
+web dashboard per trading real-time.
+
+Vedi **[ROADMAP-WEBAPP.md](ROADMAP-WEBAPP.md)** per il piano completo:
+- Phase 5: FastAPI + Dashboard
+- Phase 6: Single-Asset Analysis Page
+- Phase 7: Telegram Notifications
+- Phase 8: Real-Time Monitor
+- Phase 9: Trade Journal & Analytics
+
+---
+
+*Ultimo aggiornamento: 20 Marzo 2026 — CLI phases DONE, Web App roadmap created*
