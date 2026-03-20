@@ -30,6 +30,11 @@ i_tp_mult = input.float(3.0, "TP Multiplier (× ATR)", minval=1.0, maxval=10.0, 
 i_risk_pct = input.float(1.0, "Risk % per Trade", minval=0.1, maxval=5.0, step=0.1, group="Risk Management")
 i_capital = input.float(5000, "Capital (€)", minval=100, group="Risk Management")
 
+// Exit mode settings
+i_exit_mode = input.string("Trailing Stop", "Exit Mode", options=["Fixed TP", "Trailing Stop", "Partial + Trail"], tooltip="Fixed TP: exit 100% at TP.\nTrailing Stop: BE at +1R, trail at +2R.\nPartial + Trail: 50% at +2R, trail rest with ATR stop.", group="Trailing Stop")
+i_trail_atr_mult = input.float(2.0, "Trail ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, tooltip="ATR multiplier for trailing stop distance after +2R (used in Partial + Trail mode).", group="Trailing Stop")
+i_show_trail = input.bool(true, "Show Trailing Stop Line", tooltip="Show the dynamic trailing stop level on the chart.", group="Trailing Stop")
+
 // Display settings
 i_show_signals = input.bool(true, "Show Entry Arrows", group="Display")
 i_show_sl_tp = input.bool(true, "Show SL/TP Lines on Entry", group="Display")
@@ -141,7 +146,7 @@ if in_short and not bearish_structure
     in_short := false
 
 // ─────────────────────────────────────────────────────────────────────
-// SL / TP CALCULATIONS
+// SL / TP CALCULATIONS + TRAILING STOP ENGINE
 // ─────────────────────────────────────────────────────────────────────
 
 var float entry_price = na
@@ -149,19 +154,149 @@ var float sl_price = na
 var float tp_price = na
 var float position_size = na
 
+// Trailing stop state
+var float one_r = na             // 1R = initial risk distance (always positive)
+var float trail_sl = na          // current trailing stop level
+var int trail_stage = 0          // 0=initial SL, 1=breakeven, 2=trailing
+var bool partial_taken = false   // whether 50% partial TP was taken (Partial+Trail mode)
+var float max_favorable = na     // highest high (long) or lowest low (short) since entry
+var bool trail_active = false    // is trailing mode active?
+
+// Exit detection
+var bool hit_sl = false
+var bool hit_tp = false
+var bool hit_trail = false
+
+hit_sl := false
+hit_tp := false
+hit_trail := false
+
+// ── Initialize on LONG entry ──
 if long_entry
     entry_price := close
     sl_price := close - atr * i_sl_mult
-    tp_price := close + atr * i_tp_mult
-    sl_dist = close - sl_price
+    one_r := close - sl_price
+    trail_sl := sl_price
+    trail_stage := 0
+    partial_taken := false
+    max_favorable := high
+    trail_active := i_exit_mode != "Fixed TP"
+    if i_exit_mode == "Fixed TP"
+        tp_price := close + atr * i_tp_mult
+    else
+        tp_price := na  // no fixed TP in trailing modes
+    sl_dist = one_r
     position_size := sl_dist > 0 ? (i_capital * i_risk_pct / 100) / sl_dist : 0
 
+// ── Initialize on SHORT entry ──
 if short_entry
     entry_price := close
     sl_price := close + atr * i_sl_mult
-    tp_price := close - atr * i_tp_mult
-    sl_dist = sl_price - close
+    one_r := sl_price - close
+    trail_sl := sl_price
+    trail_stage := 0
+    partial_taken := false
+    max_favorable := low
+    trail_active := i_exit_mode != "Fixed TP"
+    if i_exit_mode == "Fixed TP"
+        tp_price := close - atr * i_tp_mult
+    else
+        tp_price := na
+    sl_dist = one_r
     position_size := sl_dist > 0 ? (i_capital * i_risk_pct / 100) / sl_dist : 0
+
+// ── Trailing stop logic (runs every bar while in position) ──
+if in_long and trail_active and not na(entry_price) and not na(one_r) and one_r > 0
+    // Track maximum favorable excursion
+    max_favorable := math.max(nz(max_favorable, high), high)
+    current_r = (max_favorable - entry_price) / one_r
+
+    // Stage 0 → 1: Price reached +1R → move SL to breakeven
+    if trail_stage == 0 and current_r >= 1.0
+        trail_stage := 1
+        trail_sl := entry_price
+
+    // Stage 1 → 2: Price reached +2R → start trailing
+    if trail_stage == 1 and current_r >= 2.0
+        trail_stage := 2
+        if i_exit_mode == "Partial + Trail"
+            partial_taken := true
+            // In Partial+Trail, trail with ATR-based distance
+            trail_sl := math.max(nz(trail_sl), max_favorable - atr * i_trail_atr_mult)
+        else
+            // In Trailing Stop mode, trail at 1R behind the high
+            trail_sl := math.max(nz(trail_sl), max_favorable - one_r)
+
+    // Stage 2: Keep trailing — SL only moves up, never down
+    if trail_stage == 2
+        if i_exit_mode == "Partial + Trail"
+            trail_sl := math.max(nz(trail_sl), max_favorable - atr * i_trail_atr_mult)
+        else
+            trail_sl := math.max(nz(trail_sl), max_favorable - one_r)
+
+    // Check if trailing stop was hit
+    if low <= trail_sl
+        hit_trail := true
+        in_long := false
+
+if in_short and trail_active and not na(entry_price) and not na(one_r) and one_r > 0
+    // Track maximum favorable excursion (lowest low for shorts)
+    max_favorable := math.min(nz(max_favorable, low), low)
+    current_r = (entry_price - max_favorable) / one_r
+
+    // Stage 0 → 1: Price reached +1R → move SL to breakeven
+    if trail_stage == 0 and current_r >= 1.0
+        trail_stage := 1
+        trail_sl := entry_price
+
+    // Stage 1 → 2: Price reached +2R → start trailing
+    if trail_stage == 1 and current_r >= 2.0
+        trail_stage := 2
+        if i_exit_mode == "Partial + Trail"
+            partial_taken := true
+            trail_sl := math.min(nz(trail_sl), max_favorable + atr * i_trail_atr_mult)
+        else
+            trail_sl := math.min(nz(trail_sl), max_favorable + one_r)
+
+    // Stage 2: Keep trailing — SL only moves down, never up
+    if trail_stage == 2
+        if i_exit_mode == "Partial + Trail"
+            trail_sl := math.min(nz(trail_sl), max_favorable + atr * i_trail_atr_mult)
+        else
+            trail_sl := math.min(nz(trail_sl), max_favorable + one_r)
+
+    // Check if trailing stop was hit
+    if high >= trail_sl
+        hit_trail := true
+        in_short := false
+
+// ── Fixed TP / Fixed SL exit detection ──
+if in_long and i_exit_mode == "Fixed TP" and not na(tp_price)
+    if high >= tp_price
+        hit_tp := true
+        in_long := false
+    if low <= sl_price
+        hit_sl := true
+        in_long := false
+
+if in_short and i_exit_mode == "Fixed TP" and not na(tp_price)
+    if low <= tp_price
+        hit_tp := true
+        in_short := false
+    if high >= sl_price
+        hit_sl := true
+        in_short := false
+
+// ── Initial SL hit in trailing modes (before +1R breakeven) ──
+if in_long and trail_active and trail_stage == 0 and not na(trail_sl)
+    if low <= trail_sl
+        hit_sl := true
+        in_long := false
+
+if in_short and trail_active and trail_stage == 0 and not na(trail_sl)
+    if high >= trail_sl
+        hit_sl := true
+        in_short := false
 
 // ─────────────────────────────────────────────────────────────────────
 // PLOTTING — EMAs, VWAP, Background
@@ -190,33 +325,147 @@ plotshape(i_show_signals and long_entry, "LONG Entry", shape.triangleup, locatio
 plotshape(i_show_signals and short_entry, "SHORT Entry", shape.triangledown, location.abovebar, color.new(#ef4444, 0), size=size.normal, text="SHORT")
 
 // ─────────────────────────────────────────────────────────────────────
-// PLOTTING — SL/TP Lines (drawn on entry, persist until structure break)
+// PLOTTING — Exit Markers
+// ─────────────────────────────────────────────────────────────────────
+
+plotshape(hit_tp, "TP Hit", shape.xcross, location.abovebar, color.new(#22c55e, 0), size=size.small, text="TP")
+plotshape(hit_sl, "SL Hit", shape.xcross, location.belowbar, color.new(#ef4444, 0), size=size.small, text="SL")
+plotshape(hit_trail, "Trail Exit", shape.xcross, location.abovebar, color.new(#f59e0b, 0), size=size.small, text="TRAIL")
+
+// Partial TP marker (50% exit at +2R in Partial+Trail mode)
+plotshape(i_exit_mode == "Partial + Trail" and partial_taken and trail_stage == 2 and trail_stage[1] == 1, "Partial TP", shape.flag, location.abovebar, color.new(#8b5cf6, 0), size=size.small, text="50%")
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — SL/TP/Trail Lines (dynamic, update every bar)
 // ─────────────────────────────────────────────────────────────────────
 
 var line sl_line = na
 var line tp_line = na
 var line entry_line = na
+var line trail_line = na
 var label sl_label = na
 var label tp_label = na
+var label trail_label = na
 
-if (long_entry or short_entry) and i_show_sl_tp
-    // Clean up previous lines
+// Breakeven marker line
+var line be_line = na
+var label be_label = na
+
+// Clean up all lines on new entry or exit
+should_draw = (in_long or in_short) and i_show_sl_tp and not na(entry_price)
+
+if (long_entry or short_entry or hit_sl or hit_tp or hit_trail) and i_show_sl_tp
     if not na(sl_line)
         line.delete(sl_line)
     if not na(tp_line)
         line.delete(tp_line)
     if not na(entry_line)
         line.delete(entry_line)
+    if not na(trail_line)
+        line.delete(trail_line)
     if not na(sl_label)
         label.delete(sl_label)
     if not na(tp_label)
         label.delete(tp_label)
+    if not na(trail_label)
+        label.delete(trail_label)
+    if not na(be_line)
+        line.delete(be_line)
+    if not na(be_label)
+        label.delete(be_label)
 
+// Draw lines on entry
+if (long_entry or short_entry) and i_show_sl_tp
     entry_line := line.new(bar_index, entry_price, bar_index + 50, entry_price, color=color.new(#ffffff, 30), style=line.style_dashed, width=1)
-    sl_line := line.new(bar_index, sl_price, bar_index + 50, sl_price, color=color.new(#ef4444, 0), style=line.style_solid, width=2)
-    tp_line := line.new(bar_index, tp_price, bar_index + 50, tp_price, color=color.new(#22c55e, 0), style=line.style_solid, width=2)
-    sl_label := label.new(bar_index + 52, sl_price, "SL " + str.tostring(sl_price, format.mintick), color=color.new(#ef4444, 80), textcolor=#ef4444, style=label.style_label_left, size=size.small)
-    tp_label := label.new(bar_index + 52, tp_price, "TP " + str.tostring(tp_price, format.mintick), color=color.new(#22c55e, 80), textcolor=#22c55e, style=label.style_label_left, size=size.small)
+
+    if i_exit_mode == "Fixed TP" and not na(tp_price)
+        // Fixed mode: show static SL and TP
+        sl_line := line.new(bar_index, sl_price, bar_index + 50, sl_price, color=color.new(#ef4444, 0), style=line.style_solid, width=2)
+        tp_line := line.new(bar_index, tp_price, bar_index + 50, tp_price, color=color.new(#22c55e, 0), style=line.style_solid, width=2)
+        sl_label := label.new(bar_index + 52, sl_price, "SL " + str.tostring(sl_price, format.mintick), color=color.new(#ef4444, 80), textcolor=#ef4444, style=label.style_label_left, size=size.small)
+        tp_label := label.new(bar_index + 52, tp_price, "TP " + str.tostring(tp_price, format.mintick), color=color.new(#22c55e, 80), textcolor=#22c55e, style=label.style_label_left, size=size.small)
+    else
+        // Trailing modes: show initial SL + breakeven reference
+        sl_line := line.new(bar_index, trail_sl, bar_index + 50, trail_sl, color=color.new(#ef4444, 0), style=line.style_solid, width=2)
+        sl_label := label.new(bar_index + 52, trail_sl, "SL " + str.tostring(trail_sl, format.mintick), color=color.new(#ef4444, 80), textcolor=#ef4444, style=label.style_label_left, size=size.small)
+        // Breakeven reference line (dashed, subtle)
+        be_line := line.new(bar_index, entry_price, bar_index + 50, entry_price, color=color.new(#eab308, 60), style=line.style_dotted, width=1)
+        be_label := label.new(bar_index + 52, entry_price, "BE", color=color.new(#eab308, 80), textcolor=#eab308, style=label.style_label_left, size=size.tiny)
+
+// Update trailing stop line dynamically every bar (trailing modes only)
+if should_draw and trail_active and not (long_entry or short_entry)
+    // Delete old trail line and redraw at current level
+    if not na(trail_line)
+        line.delete(trail_line)
+    if not na(trail_label)
+        label.delete(trail_label)
+    if not na(sl_line)
+        line.delete(sl_line)
+    if not na(sl_label)
+        label.delete(sl_label)
+
+    // Color changes by stage: red=initial, yellow=breakeven, orange=trailing
+    trail_col = trail_stage == 0 ? #ef4444 : trail_stage == 1 ? #eab308 : #f97316
+    stage_txt = trail_stage == 0 ? "SL" : trail_stage == 1 ? "BE" : "TRAIL"
+    r_txt = not na(one_r) and one_r > 0 ? " (" + str.tostring((trail_sl - entry_price) / one_r, "+#.1") + "R)" : ""
+    if in_short and not na(one_r) and one_r > 0
+        r_txt := " (" + str.tostring((entry_price - trail_sl) / one_r, "+#.1") + "R)"
+
+    trail_line := line.new(bar_index - 20, trail_sl, bar_index + 10, trail_sl, color=color.new(trail_col, 0), style=trail_stage >= 2 ? line.style_solid : line.style_dashed, width=2)
+    trail_label := label.new(bar_index + 12, trail_sl, stage_txt + " " + str.tostring(trail_sl, format.mintick) + r_txt, color=color.new(trail_col, 80), textcolor=trail_col, style=label.style_label_left, size=size.small)
+
+// ── R-multiple reference lines (+1R, +2R, +3R) for trailing modes ──
+var line r1_line = na
+var line r2_line = na
+var line r3_line = na
+var label r1_label = na
+var label r2_label = na
+var label r3_label = na
+
+if (long_entry or short_entry) and trail_active and i_show_sl_tp
+    if not na(r1_line)
+        line.delete(r1_line)
+    if not na(r2_line)
+        line.delete(r2_line)
+    if not na(r3_line)
+        line.delete(r3_line)
+    if not na(r1_label)
+        label.delete(r1_label)
+    if not na(r2_label)
+        label.delete(r2_label)
+    if not na(r3_label)
+        label.delete(r3_label)
+
+    if in_long and not na(one_r)
+        r1_lvl = entry_price + one_r
+        r2_lvl = entry_price + 2 * one_r
+        r3_lvl = entry_price + 3 * one_r
+        r1_line := line.new(bar_index, r1_lvl, bar_index + 50, r1_lvl, color=color.new(#22c55e, 70), style=line.style_dotted, width=1)
+        r2_line := line.new(bar_index, r2_lvl, bar_index + 50, r2_lvl, color=color.new(#22c55e, 60), style=line.style_dotted, width=1)
+        r3_line := line.new(bar_index, r3_lvl, bar_index + 50, r3_lvl, color=color.new(#22c55e, 50), style=line.style_dotted, width=1)
+        r1_label := label.new(bar_index + 52, r1_lvl, "+1R", color=color.new(#22c55e, 90), textcolor=color.new(#22c55e, 50), style=label.style_label_left, size=size.tiny)
+        r2_label := label.new(bar_index + 52, r2_lvl, "+2R", color=color.new(#22c55e, 90), textcolor=color.new(#22c55e, 50), style=label.style_label_left, size=size.tiny)
+        r3_label := label.new(bar_index + 52, r3_lvl, "+3R", color=color.new(#22c55e, 90), textcolor=color.new(#22c55e, 50), style=label.style_label_left, size=size.tiny)
+
+    if in_short and not na(one_r)
+        r1_lvl = entry_price - one_r
+        r2_lvl = entry_price - 2 * one_r
+        r3_lvl = entry_price - 3 * one_r
+        r1_line := line.new(bar_index, r1_lvl, bar_index + 50, r1_lvl, color=color.new(#ef4444, 70), style=line.style_dotted, width=1)
+        r2_line := line.new(bar_index, r2_lvl, bar_index + 50, r2_lvl, color=color.new(#ef4444, 60), style=line.style_dotted, width=1)
+        r3_line := line.new(bar_index, r3_lvl, bar_index + 50, r3_lvl, color=color.new(#ef4444, 50), style=line.style_dotted, width=1)
+        r1_label := label.new(bar_index + 52, r1_lvl, "+1R", color=color.new(#ef4444, 90), textcolor=color.new(#ef4444, 50), style=label.style_label_left, size=size.tiny)
+        r2_label := label.new(bar_index + 52, r2_lvl, "+2R", color=color.new(#ef4444, 90), textcolor=color.new(#ef4444, 50), style=label.style_label_left, size=size.tiny)
+        r3_label := label.new(bar_index + 52, r3_lvl, "+3R", color=color.new(#ef4444, 90), textcolor=color.new(#ef4444, 50), style=label.style_label_left, size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────
+// PLOTTING — Trailing Stop as continuous plot line
+// ─────────────────────────────────────────────────────────────────────
+
+// Continuous trail SL plot (visible when in position with trailing active)
+trail_plot_val = (in_long or in_short) and trail_active and not na(trail_sl) and i_show_trail ? trail_sl : na
+trail_plot_col = trail_stage == 0 ? color.new(#ef4444, 30) : trail_stage == 1 ? color.new(#eab308, 30) : color.new(#f97316, 0)
+plot(trail_plot_val, "Trailing Stop", color=trail_plot_col, linewidth=2, style=plot.style_stepline)
 
 // ─────────────────────────────────────────────────────────────────────
 // PLOTTING — Pre-condition dots (structure ready but no pullback yet)
@@ -238,6 +487,13 @@ alertcondition(short_entry, "SHORT Entry Signal", "Trading Copilot: SHORT entry 
 alertcondition(long_ready and touched_ema, "LONG Pullback Touch", "Trading Copilot: Price touching EMA20 — watch for bounce (LONG regime)")
 alertcondition(short_ready and touched_ema, "SHORT Pullback Touch", "Trading Copilot: Price touching EMA20 — watch for rejection (SHORT regime)")
 
+// Trailing stop alerts
+alertcondition(trail_stage == 1 and trail_stage[1] == 0, "Breakeven Reached", "Trading Copilot: +1R reached — SL moved to breakeven (zero risk)")
+alertcondition(trail_stage == 2 and trail_stage[1] == 1, "Trailing Active", "Trading Copilot: +2R reached — trailing stop activated")
+alertcondition(hit_trail, "Trail Stop Hit", "Trading Copilot: Trailing stop hit — position closed")
+alertcondition(hit_tp, "Fixed TP Hit", "Trading Copilot: Fixed TP target reached — position closed")
+alertcondition(hit_sl, "SL Hit", "Trading Copilot: Stop loss hit — position closed")
+
 // ─────────────────────────────────────────────────────────────────────
 // INFO TABLE
 // ─────────────────────────────────────────────────────────────────────
@@ -251,7 +507,8 @@ if barstate.islast and i_show_table
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-    var table info = table.new(t_pos, 2, 14, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
+    // Extra rows for trailing info: +4 rows (exit mode, trail stage, current R, trail SL)
+    var table info = table.new(t_pos, 2, 18, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
 
     // Header
     table.cell(info, 0, 0, "TRADING COPILOT", text_color=#ffffff, text_size=size.normal, bgcolor=color.new(#3b82f6, 20), text_halign=text.align_center)
@@ -305,7 +562,7 @@ if barstate.islast and i_show_table
     table.cell(info, 0, 9, "ATR(" + str.tostring(i_atr_len) + ")", text_color=#9ca3af, text_size=size.small)
     table.cell(info, 1, 9, str.tostring(atr, format.mintick) + " (" + str.tostring(atr_pct, "#.2") + "%)", text_color=#ffffff, text_size=size.small)
 
-    // Separator
+    // Separator — Risk
     table.cell(info, 0, 10, "── RISK ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
     table.merge_cells(info, 0, 10, 1, 10)
 
@@ -314,12 +571,48 @@ if barstate.islast and i_show_table
     table.cell(info, 0, 11, "SL Distance", text_color=#9ca3af, text_size=size.small)
     table.cell(info, 1, 11, str.tostring(sl_dist, format.mintick) + " pts", text_color=#ef4444, text_size=size.small)
 
-    // TP distance
-    tp_dist = atr * i_tp_mult
-    table.cell(info, 0, 12, "TP Distance", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 12, str.tostring(tp_dist, format.mintick) + " pts", text_color=#22c55e, text_size=size.small)
+    // TP distance / Exit mode
+    if i_exit_mode == "Fixed TP"
+        tp_dist = atr * i_tp_mult
+        table.cell(info, 0, 12, "TP Distance", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 12, str.tostring(tp_dist, format.mintick) + " pts", text_color=#22c55e, text_size=size.small)
+    else
+        table.cell(info, 0, 12, "TP Mode", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 12, "TRAILING", text_color=#f97316, text_size=size.small)
 
     // R:R ratio
-    rr = i_sl_mult > 0 ? i_tp_mult / i_sl_mult : 0
+    rr = i_exit_mode == "Fixed TP" and i_sl_mult > 0 ? i_tp_mult / i_sl_mult : 0
+    rr_txt = i_exit_mode == "Fixed TP" ? "1:" + str.tostring(rr, "#.1") : "OPEN"
     table.cell(info, 0, 13, "R:R", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 13, "1:" + str.tostring(rr, "#.1"), text_color=#ffffff, text_size=size.small)
+    table.cell(info, 1, 13, rr_txt, text_color=#ffffff, text_size=size.small)
+
+    // Separator — Trailing Stop
+    table.cell(info, 0, 14, "── TRAIL ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 14, 1, 14)
+
+    // Exit mode
+    mode_col = i_exit_mode == "Fixed TP" ? #ffffff : i_exit_mode == "Trailing Stop" ? #f97316 : #8b5cf6
+    table.cell(info, 0, 15, "Exit Mode", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 15, i_exit_mode, text_color=mode_col, text_size=size.small)
+
+    // Trail stage (only meaningful when in position)
+    if (in_long or in_short) and trail_active
+        stage_col = trail_stage == 0 ? #ef4444 : trail_stage == 1 ? #eab308 : #f97316
+        stage_text = trail_stage == 0 ? "INITIAL" : trail_stage == 1 ? "BREAKEVEN" : "TRAILING"
+        table.cell(info, 0, 16, "Trail Stage", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 16, stage_text, text_color=stage_col, text_size=size.small)
+
+        // Current R-multiple
+        curr_r = 0.0
+        if in_long and not na(entry_price) and not na(one_r) and one_r > 0
+            curr_r := (close - entry_price) / one_r
+        if in_short and not na(entry_price) and not na(one_r) and one_r > 0
+            curr_r := (entry_price - close) / one_r
+        r_col = curr_r >= 2.0 ? #22c55e : curr_r >= 1.0 ? #eab308 : curr_r >= 0 ? #ffffff : #ef4444
+        table.cell(info, 0, 17, "Current R", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 17, str.tostring(curr_r, "+#.1") + "R", text_color=r_col, text_size=size.small)
+    else
+        table.cell(info, 0, 16, "Trail Stage", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 16, "—", text_color=#6b7280, text_size=size.small)
+        table.cell(info, 0, 17, "Current R", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 17, "—", text_color=#6b7280, text_size=size.small)

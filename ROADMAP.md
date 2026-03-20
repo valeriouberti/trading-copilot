@@ -67,11 +67,11 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 **Problema:** Il R:R fisso 1:2 esce a 2R anche quando il trade potrebbe correre a 5R o 10R. In mercati trending, uscire troppo presto costa piu' delle perdite.
 
 **Cosa implementare:**
-- [ ] Dopo +1R: SL si sposta a breakeven (zero risk)
-- [ ] Dopo +2R: SL trail a +1R dietro il prezzo
-- [ ] Opzione partial TP: 50% a 2R, trail rimanente con ATR-based stop
-- [ ] Toggle nel Pine Script per scegliere tra TP fisso e trailing
-- [ ] Visualizzazione dinamica della trailing stop line sul grafico
+- [x] Dopo +1R: SL si sposta a breakeven (zero risk)
+- [x] Dopo +2R: SL trail a +1R dietro il prezzo
+- [x] Opzione partial TP: 50% a 2R, trail rimanente con ATR-based stop
+- [x] Toggle nel Pine Script per scegliere tra TP fisso e trailing
+- [x] Visualizzazione dinamica della trailing stop line sul grafico
 
 **Impatto atteso:** Con win-rate 50% e trailing, il profit factor passa da ~1.5x a ~2.5x. I pochi trade che corrono 5-10R compensano molte piccole perdite.
 
@@ -188,7 +188,7 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 |-------|---------|--------|------|
 | 1.1 | Key Levels | `DONE` | PDH/PDL/PDC, PWH/PWL, Pivots, Psych levels, nearest level proximity |
 | 1.2 | Calendario Economico | `DONE` | Forex Factory API, regime override entro 2h, sezione report HTML |
-| 2.1 | Trailing Stop | `TODO` | |
+| 2.1 | Trailing Stop | `DONE` | 3 exit modes (Fixed TP, Trailing Stop, Partial+Trail), BE at +1R, trail at +2R, dynamic SL line, R-multiple markers, exit alerts |
 | 3.1 | Multi-Timeframe | `TODO` | |
 | 3.2 | Session Filter | `TODO` | |
 | 4.1 | Quality Score | `TODO` | |
