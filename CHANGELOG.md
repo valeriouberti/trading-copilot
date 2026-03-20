@@ -4,6 +4,49 @@ Storico delle modifiche al progetto, dalla versione CLI alla web dashboard.
 
 ---
 
+## v5.2.0 — 20 Marzo 2026
+
+### Production-Ready Configuration
+
+Refactoring completo della gestione configurazione per ambienti di produzione.
+
+#### 12.1 Pydantic Settings
+- `app/config.py` riscritto con `pydantic-settings` (BaseSettings)
+- Configurazione tipizzata e validata con Pydantic v2
+- Priorita': env vars > `.env` file > `config.yaml` > defaults Pydantic
+- `config.yaml` e' ora **opzionale** — l'app funziona senza con defaults ragionevoli
+- Aggiunta dipendenza `pydantic-settings>=2.0.0`
+- **Files**: `app/config.py`, `requirements.txt`
+
+#### 12.2 Secrets in Environment Variables
+- Rimossi secrets da `config.yaml` (Telegram bot token, chat ID)
+- Tutti i secrets esclusivamente da env vars: `GROQ_API_KEY`, `TWELVE_DATA_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `DATABASE_URL`
+- App settings sovrascrivibili via env: `GROQ_MODEL`, `LOOKBACK_HOURS`, `REPORT_LANGUAGE`
+- `.env.example` aggiornato come unico riferimento configurazione
+- **Files**: `config.yaml`, `.env.example`
+
+#### 12.3 Telegram Settings in Database
+- Nuova tabella `TelegramConfig` in SQLAlchemy ORM (singleton, id=1)
+- Settings page salva/legge da database (non piu' scrittura su `config.yaml`)
+- Seed automatico da env vars al primo avvio (se DB vuoto)
+- `get_notifier_from_db()` per il monitor (legge config aggiornata dal DB)
+- Rimosso `save_config()` e `reload_config()` — nessuna scrittura su YAML
+- **Files**: `app/models/database.py`, `app/api/settings.py`, `app/services/notifier.py`, `app/services/monitor.py`
+
+#### 12.4 RSS Feeds in Database
+- Nuova tabella `RssFeed` in SQLAlchemy ORM
+- Seed da `config.yaml` (se presente) o da `DEFAULT_RSS_FEEDS` hardcoded
+- RSS feeds caricati dal DB in `app.state.config` al startup
+- `config.yaml` rinominato key `assets` → `seed_assets` (backward compat mantenuta)
+- **Files**: `app/models/database.py`, `app/server.py`, `app/config.py`
+
+#### 12.5 Documentazione
+- README riscritto: sezione configurazione, tabella env vars, config.yaml opzionale
+- CHANGELOG aggiornato con v5.2.0
+- ROADMAP aggiornato con Phase 12
+
+---
+
 ## v5.1.0 — 20 Marzo 2026
 
 ### Asset in Database + News/Polymarket per Asset + Chart Fix
@@ -13,7 +56,6 @@ Storico delle modifiche al progetto, dalla versione CLI alla web dashboard.
 - Seed automatico da `config.yaml` al primo avvio (tabella vuota → import)
 - CRUD asset via database (non piu' scrittura su `config.yaml`)
 - Dashboard, asset detail, trades caricano asset dal DB
-- `config.yaml` mantiene solo: rss_feeds, groq_model, database, telegram
 - **Files**: `app/models/database.py`, `app/api/assets.py`, `app/server.py`, `app/config.py`
 
 #### 11.2 News per Asset
@@ -239,4 +281,4 @@ Tutti i moduli CLI (`modules/`) restano invariati — il web app e' un layer sop
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — v5.1.0*
+*Ultimo aggiornamento: 20 Marzo 2026 — v5.2.0*

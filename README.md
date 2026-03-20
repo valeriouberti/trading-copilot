@@ -30,7 +30,8 @@ source venv/bin/activate
 
 pip install -r requirements.txt
 
-export GROQ_API_KEY="gsk_la_tua_chiave_qui"
+cp .env.example .env
+# Modifica .env con le tue API key
 
 python run_webapp.py
 # Apri http://localhost:8000
@@ -54,52 +55,60 @@ python main.py
 
 ---
 
-## Setup Dettagliato
+## Configurazione
 
-### 1. Clona il repository e crea un ambiente virtuale
+### Approccio
 
-```bash
-git clone <url-del-repo>
-cd trading-assistant
+La configurazione segue le best practice per ambienti di produzione:
 
-python3 -m venv venv
-source venv/bin/activate  # Linux/macOS
-# oppure: venv\Scripts\activate  # Windows
+| Tipo | Dove | Esempio |
+|------|------|---------|
+| Secrets e API keys | `.env` (env vars) | `GROQ_API_KEY`, `TELEGRAM_BOT_TOKEN` |
+| Dati runtime | Database | Asset, RSS feeds, Telegram settings |
+| Seed iniziale | `config.yaml` (opzionale) | Asset e feed RSS per il primo avvio |
+| App settings | `.env` o defaults | `GROQ_MODEL`, `LOOKBACK_HOURS` |
+
+**`config.yaml` e' opzionale.** Senza di esso, l'app usa defaults ragionevoli (4 feed RSS, modello Groq standard). Gli asset si aggiungono dalla dashboard.
+
+### Priorita' configurazione
+
+```
+env vars > .env file > config.yaml > defaults Pydantic
 ```
 
-### 2. Installa le dipendenze
+### Setup minimo
+
+Copia `.env.example` in `.env` e imposta almeno `GROQ_API_KEY`:
 
 ```bash
-pip install -r requirements.txt
+cp .env.example .env
 ```
 
-### 3. Configura le API key
+```env
+# .env
+GROQ_API_KEY=gsk_la_tua_chiave_qui
 
-**Groq (consigliata):** Registrati su [console.groq.com](https://console.groq.com/) e crea una API key gratuita.
-
-```bash
-export GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Linux/macOS
-# oppure: set GROQ_API_KEY=gsk_la_tua_chiave_qui  # Windows CMD
+# Opzionale
+TWELVE_DATA_API_KEY=la_tua_chiave_qui
+TELEGRAM_BOT_TOKEN=il_tuo_bot_token
+TELEGRAM_CHAT_ID=il_tuo_chat_id
 ```
 
-> **Nota:** Se non imposti la chiave Groq, il sistema usa automaticamente FinBERT come fallback (richiede il download del modello al primo avvio, circa 400MB).
+> **Nota:** Se non imposti `GROQ_API_KEY`, il sistema usa automaticamente FinBERT come fallback (richiede il download del modello al primo avvio, circa 400MB).
 
-**Twelve Data (opzionale):** Fallback per i dati di prezzo quando yfinance non e' disponibile. Registrati su [twelvedata.com](https://twelvedata.com/) per una API key gratuita (800 richieste/giorno).
+### Variabili d'ambiente disponibili
 
-```bash
-export TWELVE_DATA_API_KEY="la_tua_chiave_qui"
-```
-
-**Telegram (opzionale):** Per ricevere notifiche dei segnali sul telefono. Crea un bot con [@BotFather](https://t.me/BotFather).
-
-```bash
-export TELEGRAM_BOT_TOKEN="il_tuo_bot_token"
-export TELEGRAM_CHAT_ID="il_tuo_chat_id"
-```
-
-> Il Telegram bot puo' essere configurato anche dalla pagina Settings della web dashboard.
-
-Per rendere le chiavi permanenti, aggiungile al tuo `.bashrc`, `.zshrc` o profilo di sistema.
+| Variabile | Default | Descrizione |
+|-----------|---------|-------------|
+| `DATABASE_URL` | `sqlite+aiosqlite:///./trading.db` | URL database async |
+| `GROQ_API_KEY` | *(vuoto)* | Groq LLM API key |
+| `TWELVE_DATA_API_KEY` | *(vuoto)* | Twelve Data fallback per dati prezzo |
+| `TELEGRAM_BOT_TOKEN` | *(vuoto)* | Telegram bot token (seed in DB al primo avvio) |
+| `TELEGRAM_CHAT_ID` | *(vuoto)* | Telegram chat ID |
+| `TELEGRAM_ENABLED` | `false` | Abilita notifiche Telegram |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Modello Groq da usare |
+| `LOOKBACK_HOURS` | `16` | Ore di lookback per le notizie |
+| `REPORT_LANGUAGE` | `italian` | Lingua del report CLI |
 
 ---
 
@@ -108,7 +117,7 @@ Per rendere le chiavi permanenti, aggiungile al tuo `.bashrc`, `.zshrc` o profil
 ### Avvio
 
 ```bash
-# Locale con SQLite (zero config)
+# Locale con SQLite (zero config, serve solo .env)
 python run_webapp.py
 
 # Oppure con Docker + PostgreSQL
@@ -150,7 +159,7 @@ Apri **http://localhost:8000** nel browser.
 | GET | `/api/signals` | Storico segnali |
 | PUT | `/api/signals/{id}/outcome` | Aggiorna outcome segnale |
 | GET | `/api/signals/analytics` | Analytics segnali |
-| GET/PUT | `/api/settings/telegram` | Configurazione Telegram |
+| GET/PUT | `/api/settings/telegram` | Configurazione Telegram (salvata in DB) |
 | POST | `/api/telegram/test` | Invia messaggio di test |
 | WS | `/ws/signals` | WebSocket push real-time |
 
@@ -225,6 +234,8 @@ python main.py --no-browser
 python main.py --config my_config.yaml
 ```
 
+> **Nota:** Il CLI usa `config.yaml` per asset e feed RSS (non il database). Per la web dashboard, tutto e' nel database.
+
 ---
 
 ## Docker
@@ -259,20 +270,19 @@ cat backup.sql | docker compose exec -T postgres psql -U trading trading
 Il sistema supporta due backend:
 
 - **SQLite** (default locale) — Zero setup, `python run_webapp.py` e funziona
-- **PostgreSQL** (Docker) — Concurrent access, analytics query potenti, JSONB
+- **PostgreSQL** (Docker) — Concurrent access, analytics query potenti
 
-Configurazione in `config.yaml`:
+Configurazione via variabile d'ambiente in `.env`:
 
-```yaml
-database:
-  # SQLite (default)
-  url: "sqlite+aiosqlite:///./trading.db"
+```env
+# SQLite (default — non serve impostare nulla)
+# DATABASE_URL=sqlite+aiosqlite:///./trading.db
 
-  # PostgreSQL (Docker)
-  # url: "postgresql+asyncpg://trading:trading@localhost:5432/trading"
+# PostgreSQL (Docker)
+DATABASE_URL=postgresql+asyncpg://trading:password@localhost:5432/trading
 ```
 
-Le tabelle vengono create automaticamente al primo avvio. Gli asset vengono importati da `config.yaml` nel DB al primo avvio (seed). Migrazioni gestite da Alembic.
+Le tabelle vengono create automaticamente al primo avvio. Asset e RSS feeds vengono importati da `config.yaml` (se presente) o da defaults nel primo avvio. Migrazioni gestite da Alembic.
 
 ---
 
@@ -314,8 +324,6 @@ Le tabelle vengono create automaticamente al primo avvio. Gli asset vengono impo
 
 **Via Web Dashboard:** Dalla dashboard, clicca "Add Asset", inserisci il simbolo Yahoo Finance. Il sistema valida il simbolo automaticamente via yfinance e lo salva nel database.
 
-> **Nota:** Gli asset sono gestiti nel database (tabella `assets`). Al primo avvio, gli asset vengono importati da `config.yaml` nel DB. Dopo il seed iniziale, tutte le operazioni CRUD avvengono via database.
-
 I simboli seguono la convenzione Yahoo Finance:
 
 - Futures: `ES=F`, `NQ=F`, `GC=F`, `CL=F`
@@ -346,23 +354,23 @@ python main.py --no-polymarket
 trading-assistant/
 ├── main.py                          # Entry point CLI
 ├── run_webapp.py                    # Entry point Web Dashboard
-├── config.yaml                      # Configurazione (feed RSS, database, telegram, seed asset)
+├── .env.example                     # Template variabili d'ambiente (UNICO file config richiesto)
+├── config.yaml                      # Seed data opzionale (primo avvio)
 ├── Dockerfile                       # Container image multi-stage
 ├── docker-compose.yml               # App + PostgreSQL stack
-├── .env.example                     # Template variabili d'ambiente
 ├── alembic.ini                      # Configurazione migrazioni
 ├── requirements.txt                 # Dipendenze Python
 │
 ├── app/                             # Web Dashboard (FastAPI)
 │   ├── server.py                    # FastAPI app + lifespan
-│   ├── config.py                    # Gestione configurazione
+│   ├── config.py                    # Pydantic Settings (env vars + YAML fallback)
 │   ├── api/
 │   │   ├── health.py                # GET /api/health
-│   │   ├── assets.py                # CRUD asset
+│   │   ├── assets.py                # CRUD asset (database)
 │   │   ├── analysis.py              # Analisi singolo asset
 │   │   ├── monitor.py               # Start/stop/status monitor
 │   │   ├── trades.py                # Trade journal + analytics + signals
-│   │   ├── settings.py              # Configurazione Telegram
+│   │   ├── settings.py              # Configurazione Telegram (database)
 │   │   └── websocket.py             # WebSocket /ws/signals
 │   ├── services/
 │   │   ├── analyzer.py              # Wrapper async dei moduli esistenti
@@ -370,21 +378,10 @@ trading-assistant/
 │   │   ├── monitor.py               # Background polling (APScheduler)
 │   │   └── notifier.py              # Telegram + WebSocket push
 │   ├── models/
-│   │   ├── database.py              # SQLAlchemy ORM (Asset, Signal, Trade, etc.)
+│   │   ├── database.py              # SQLAlchemy ORM (Asset, RssFeed, Signal, Trade, etc.)
 │   │   └── engine.py                # Engine factory (SQLite / PostgreSQL)
 │   ├── templates/                   # Jinja2 HTML (7 pagine)
-│   │   ├── base.html                # Layout base (nav, footer, dark theme)
-│   │   ├── dashboard.html           # Lista asset + monitor
-│   │   ├── asset_detail.html        # Grafico + analisi + setup
-│   │   ├── trades.html              # Trade journal
-│   │   ├── analytics.html           # Performance analytics
-│   │   ├── signals.html             # Storico segnali
-│   │   └── settings.html            # Configurazione Telegram
-│   └── static/
-│       ├── css/style.css            # Dark theme CSS
-│       └── js/
-│           ├── app.js               # HTMX + Alpine.js init
-│           └── websocket.js         # Client WebSocket auto-reconnect
+│   └── static/                      # CSS dark theme + JS (HTMX, Alpine.js, WebSocket)
 │
 ├── modules/                         # Engine CLI (invariato)
 │   ├── news_fetcher.py              # Aggregatore notizie RSS
@@ -398,9 +395,6 @@ trading-assistant/
 │   └── trade_log.py                 # Registro trade CSV
 │
 ├── alembic/                         # Migrazioni database
-│   ├── env.py                       # Async migration env
-│   └── versions/                    # Migration scripts
-│
 ├── tradingview/
 │   └── trading_copilot.pine         # Pine Script v6
 │
@@ -414,7 +408,7 @@ trading-assistant/
 
 | Problema | Soluzione |
 |----------|-----------|
-| `GROQ_API_KEY non impostata` | Esporta la variabile d'ambiente (vedi Setup punto 3) |
+| `GROQ_API_KEY non impostata` | Crea `.env` da `.env.example` e imposta la chiave |
 | `No data returned for symbol` | Verifica il simbolo su Yahoo Finance. Configura `TWELVE_DATA_API_KEY` come fallback |
 | `Rate limit exceeded` | Aspetta qualche minuto, Groq free tier ha limiti |
 | `FinBERT download lento` | Normale al primo avvio, il modello viene cachato |
@@ -422,6 +416,7 @@ trading-assistant/
 | Errore connessione PostgreSQL | Verifica che `docker compose up postgres` sia running |
 | WebSocket non si connette | Controlla che il browser supporti WS e non ci siano proxy |
 | Monitor non rileva segnali | Verifica che l'asset abbia dati recenti su yfinance |
+| `config.yaml` non trovato | Normale — il file e' opzionale. Usa `.env` per la configurazione |
 
 ---
 

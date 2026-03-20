@@ -218,8 +218,20 @@ Tutte le fasi webapp sono state implementate (17 sub-fasi).
 | 11.3 | TradingView Chart | `DONE` | Candlestick + EMA20/50 + key levels, caricamento auto, endpoint `/api/chart/{symbol}` |
 | 11.4 | Pulizia docs | `DONE` | Rimosso ROADMAP-WEBAPP.md e docs/Main.md, aggiornati README/CHANGELOG/ROADMAP |
 
+---
+
+## Phase 12 — Production Config (v5.2.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| 12.1 | Pydantic Settings | `DONE` | `pydantic-settings` con validazione tipizzata, env vars > YAML > defaults |
+| 12.2 | Secrets in Env Vars | `DONE` | Rimossi secrets da YAML, tutti via `.env` o env vars |
+| 12.3 | Telegram in Database | `DONE` | Tabella `TelegramConfig`, Settings page salva in DB, rimosso `save_config()` |
+| 12.4 | RSS Feeds in Database | `DONE` | Tabella `RssFeed`, seed da YAML o defaults, `config.yaml` opzionale |
+| 12.5 | Documentazione | `DONE` | README, CHANGELOG, ROADMAP aggiornati |
+
 Vedi **[CHANGELOG.md](CHANGELOG.md)** per lo storico completo delle modifiche.
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — v5.1.0*
+*Ultimo aggiornamento: 20 Marzo 2026 — v5.2.0*
