@@ -1,52 +1,201 @@
 {% extends "base.html" %}
 
+{% block head %}
+<style>
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+@media (max-width: 900px) {
+    .overview-grid { grid-template-columns: 1fr; }
+}
+.overview-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+.overview-card:hover {
+    border-color: var(--accent-blue);
+    box-shadow: var(--shadow);
+    transform: translateY(-2px);
+}
+.overview-card.loading { opacity: 0.6; }
+.ov-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+.ov-symbol {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--accent-blue);
+}
+.ov-name {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 2px;
+}
+.ov-price-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.ov-price {
+    font-size: 24px;
+    font-weight: 700;
+    font-family: "SF Mono", "Fira Code", monospace;
+}
+.ov-change {
+    font-size: 14px;
+    font-weight: 600;
+    font-family: "SF Mono", "Fira Code", monospace;
+}
+.ov-indicators {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 16px;
+    font-size: 13px;
+}
+.ov-ind-row {
+    display: flex;
+    justify-content: space-between;
+}
+.ov-ind-label { color: var(--text-muted); }
+.ov-ind-value { font-weight: 600; font-family: "SF Mono", "Fira Code", monospace; }
+.ov-verdict {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+}
+.ov-verdict-skip {
+    background: rgba(139, 148, 158, 0.08);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+.ov-verdict-go {
+    background: rgba(63, 185, 80, 0.1);
+    color: var(--accent-green);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+}
+.ov-verdict-short {
+    background: rgba(248, 81, 73, 0.1);
+    color: var(--accent-red);
+    border: 1px solid rgba(248, 81, 73, 0.3);
+}
+.ov-loading-text {
+    color: var(--text-muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 40px 0;
+}
+/* Monitor bar */
+.monitor-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding: 16px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.monitor-bar-info {
+    flex: 1;
+    display: flex;
+    gap: 24px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.monitor-bar-info span { font-family: "SF Mono", "Fira Code", monospace; }
+.monitor-bar-info .val { color: var(--text-primary); font-weight: 600; }
+/* Budget widget */
+.budget-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding: 12px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 13px;
+}
+.budget-track {
+    flex: 1;
+    height: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.budget-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent-blue);
+    transition: width 0.5s;
+}
+.budget-text { color: var(--text-secondary); font-family: "SF Mono", "Fira Code", monospace; white-space: nowrap; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header" style="display:flex; align-items:center; justify-content:space-between;">
     <div>
-        <h1>Dashboard</h1>
-        <p class="subtitle">Select an asset to analyze</p>
+        <h1>Trading Dashboard</h1>
+        <p class="subtitle" id="dash-subtitle">Loading analysis for 3 assets...</p>
     </div>
-    <button class="btn btn-success" onclick="document.getElementById('add-modal').style.display='flex'">
-        + Add Asset
-    </button>
+    <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" id="btn-analyze-all" onclick="analyzeAll()">
+            Analyze All
+        </button>
+        <button class="btn btn-success" id="btn-monitor-all" onclick="toggleMonitorAll()">
+            Start Monitor
+        </button>
+    </div>
 </div>
 
-<section class="assets-grid">
+<!-- Credit Budget -->
+<div class="budget-bar" id="budget-bar" style="display:none;">
+    <span style="color:var(--text-muted);">Twelve Data Credits</span>
+    <div class="budget-track"><div class="budget-fill" id="budget-fill"></div></div>
+    <span class="budget-text" id="budget-text"></span>
+</div>
+
+<!-- Asset Overview Cards -->
+<div class="overview-grid" id="overview-grid">
     {% for asset in assets %}
-    <div class="asset-card" x-data="{ hover: false, confirming: false }" @mouseenter="hover = true" @mouseleave="hover = false; confirming = false">
-        <div class="asset-symbol">{{ asset.symbol }}</div>
-        <div class="asset-name">{{ asset.display_name }}</div>
-        <div class="asset-actions" style="display:flex; gap:8px;">
-            <a href="/asset/{{ asset.symbol }}" class="btn btn-primary" style="flex:1;">
-                Analyze
-            </a>
-            <template x-if="!confirming">
-                <button class="btn btn-secondary" @click="confirming = true" style="padding:8px 12px;" title="Remove">
-                    &times;
-                </button>
-            </template>
-            <template x-if="confirming">
-                <button class="btn btn-danger" @click="removeAsset('{{ asset.symbol }}')" style="padding:8px 12px; font-size:12px;">
-                    Remove?
-                </button>
-            </template>
+    <div class="overview-card loading" id="card-{{ asset.symbol | replace('=', '_') }}" onclick="window.location='/asset/{{ asset.symbol }}'">
+        <div class="ov-header">
+            <div>
+                <div class="ov-symbol">{{ asset.symbol }}</div>
+                <div class="ov-name">{{ asset.display_name }}</div>
+            </div>
+            <span class="badge badge-neutral" id="regime-{{ asset.symbol | replace('=', '_') }}">...</span>
         </div>
+        <div class="ov-loading-text" id="loader-{{ asset.symbol | replace('=', '_') }}">Analyzing...</div>
+        <div id="data-{{ asset.symbol | replace('=', '_') }}" style="display:none;"></div>
     </div>
     {% endfor %}
-</section>
+</div>
 
+<!-- System Status -->
 <section class="info-section">
     <div class="info-card">
         <h3>System Status</h3>
         <div class="info-row">
-            <span class="info-label">Assets configured</span>
-            <span class="info-value" id="asset-count">{{ assets | length }}</span>
-        </div>
-        <div class="info-row">
-            <span class="info-label">Database</span>
-            <span class="info-value" hx-get="/api/health" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
-                checking...
-            </span>
+            <span class="info-label">Assets</span>
+            <span class="info-value">{{ assets | length }}</span>
         </div>
         <div class="info-row">
             <span class="info-label">Monitor</span>
@@ -56,129 +205,197 @@
             <span class="info-label">WebSocket</span>
             <span class="info-value" id="ws-status">connecting...</span>
         </div>
+        <div class="info-row">
+            <span class="info-label">Credits Today</span>
+            <span class="info-value" id="credits-status">...</span>
+        </div>
     </div>
 </section>
-
-<!-- Add Asset Modal -->
-<div id="add-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this) this.style.display='none'">
-    <div class="modal-box" x-data="addAssetForm()">
-        <h2>Add Asset</h2>
-        <p class="subtitle" style="margin-bottom:20px;">Enter a ticker symbol (e.g. AAPL, BTC-USD, CL=F)</p>
-
-        <div class="form-group">
-            <label class="form-label" for="new-symbol">Symbol</label>
-            <input type="text" id="new-symbol" class="form-input"
-                   x-model="symbol" placeholder="AAPL" @keyup.enter="submit()"
-                   style="text-transform:uppercase;">
-        </div>
-
-        <div class="form-group">
-            <label class="form-label" for="new-name">Display Name <span class="form-hint">(optional — auto-detected)</span></label>
-            <input type="text" id="new-name" class="form-input"
-                   x-model="displayName" placeholder="Apple Inc.">
-        </div>
-
-        <div x-show="error" class="settings-msg msg-err" x-text="error" x-transition></div>
-
-        <div class="form-actions" style="margin-top:20px;">
-            <button class="btn btn-success" @click="submit()" :disabled="loading">
-                <span x-show="!loading">Add Asset</span>
-                <span x-show="loading">Validating...</span>
-            </button>
-            <button class="btn btn-secondary" onclick="document.getElementById('add-modal').style.display='none'">
-                Cancel
-            </button>
-        </div>
-    </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function addAssetForm() {
-    return {
-        symbol: '',
-        displayName: '',
-        loading: false,
-        error: '',
+const ASSETS = {{ assets | tojson }};
+let monitorRunning = false;
+let analysisResults = {};
 
-        async submit() {
-            if (!this.symbol.trim()) {
-                this.error = 'Symbol is required';
-                return;
-            }
-            this.loading = true;
-            this.error = '';
-            try {
-                const res = await fetch('/api/assets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        symbol: this.symbol.trim().toUpperCase(),
-                        display_name: this.displayName.trim(),
-                    }),
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    window.location.reload();
-                } else {
-                    this.error = data.detail || 'Failed to add asset';
-                }
-            } catch (e) {
-                this.error = 'Network error';
-            }
-            this.loading = false;
-        }
-    };
-}
+// ─── Auto-analyze all on load ─────────────────────────────────
+document.addEventListener("DOMContentLoaded", function() {
+    analyzeAll();
+    fetchMonitorStatus();
+    fetchBudget();
+});
 
-async function removeAsset(symbol) {
-    try {
-        const res = await fetch('/api/assets/' + encodeURIComponent(symbol), {
-            method: 'DELETE',
-        });
-        if (res.ok) {
-            window.location.reload();
-        } else {
-            const data = await res.json();
-            alert(data.detail || 'Failed to remove asset');
-        }
-    } catch (e) {
-        alert('Network error');
+async function analyzeAll() {
+    const btn = document.getElementById("btn-analyze-all");
+    btn.disabled = true;
+    btn.textContent = "Analyzing...";
+
+    const promises = ASSETS.map(a => analyzeOne(a.symbol, a.display_name));
+    await Promise.allSettled(promises);
+
+    btn.disabled = false;
+    btn.textContent = "Analyze All";
+
+    // Update subtitle
+    const tradeable = Object.values(analysisResults).filter(r => r && r.setup && r.setup.tradeable).length;
+    const sub = document.getElementById("dash-subtitle");
+    if (tradeable > 0) {
+        sub.textContent = `${tradeable} tradeable signal${tradeable > 1 ? "s" : ""} found`;
+        sub.style.color = "var(--accent-green)";
+    } else {
+        sub.textContent = "No tradeable signals — flat day";
+        sub.style.color = "var(--text-secondary)";
     }
 }
 
-// Fetch monitor status on load
+async function analyzeOne(symbol, displayName) {
+    const safe = symbol.replace(/=/g, "_");
+    const card = document.getElementById("card-" + safe);
+    const loader = document.getElementById("loader-" + safe);
+    const dataDiv = document.getElementById("data-" + safe);
+    const regimeBadge = document.getElementById("regime-" + safe);
+
+    try {
+        const resp = await fetch(`/api/analyze/${encodeURIComponent(symbol)}?skip_polymarket=true`, { method: "POST" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        analysisResults[symbol] = data;
+
+        // Regime badge
+        const regime = data.regime || "NEUTRAL";
+        regimeBadge.textContent = regime;
+        regimeBadge.className = "badge " + (regime === "LONG" ? "badge-bullish" : regime === "SHORT" ? "badge-bearish" : "badge-neutral");
+
+        // Price
+        const price = data.analysis && data.analysis.price;
+        const tech = data.analysis && data.analysis.technicals;
+        const setup = data.setup || {};
+        const qs = tech && tech.quality_score ? tech.quality_score.total : 0;
+
+        let html = `<div class="ov-price-row">
+            <span class="ov-price">${fmt(price && price.current)}</span>
+            <span class="ov-change ${price && price.change_pct >= 0 ? 'price-up' : 'price-down'}">
+                ${price ? (price.change_pct >= 0 ? "+" : "") + price.change_pct.toFixed(2) + "%" : ""}
+            </span>
+        </div>`;
+
+        html += `<div class="ov-indicators">
+            <div class="ov-ind-row"><span class="ov-ind-label">Composite</span><span class="ov-ind-value">${tech ? tech.composite_score : "-"}</span></div>
+            <div class="ov-ind-row"><span class="ov-ind-label">QS</span><span class="ov-ind-value">${qs}/5</span></div>
+            <div class="ov-ind-row"><span class="ov-ind-label">RSI</span><span class="ov-ind-value">${tech && tech.signals && tech.signals.rsi ? tech.signals.rsi.value.toFixed(1) : "-"}</span></div>
+            <div class="ov-ind-row"><span class="ov-ind-label">ADX</span><span class="ov-ind-value">${tech && tech.signals && tech.signals.adx ? tech.signals.adx.value.toFixed(1) : "-"}</span></div>
+            <div class="ov-ind-row"><span class="ov-ind-label">MTF</span><span class="ov-ind-value">${tech && tech.mtf ? tech.mtf.alignment : "-"}</span></div>
+            <div class="ov-ind-row"><span class="ov-ind-label">ATR</span><span class="ov-ind-value">${setup.atr || "-"}</span></div>
+        </div>`;
+
+        // Verdict
+        if (setup.tradeable) {
+            const cls = setup.direction === "SHORT" ? "ov-verdict-short" : "ov-verdict-go";
+            html += `<div class="ov-verdict ${cls}">${setup.direction} — Entry ${fmt(setup.entry_price)} | SL ${fmt(setup.stop_loss)} | TP ${fmt(setup.take_profit)} | R:R ${setup.risk_reward}</div>`;
+        } else {
+            html += `<div class="ov-verdict ov-verdict-skip">SKIP — ${setup.reason || regime}</div>`;
+        }
+
+        loader.style.display = "none";
+        dataDiv.innerHTML = html;
+        dataDiv.style.display = "block";
+        card.classList.remove("loading");
+    } catch (err) {
+        loader.textContent = "Failed: " + err.message;
+        card.classList.remove("loading");
+    }
+}
+
+// ─── Monitor All ──────────────────────────────────────────────
+async function toggleMonitorAll() {
+    const btn = document.getElementById("btn-monitor-all");
+    const action = monitorRunning ? "stop" : "start";
+    btn.disabled = true;
+
+    try {
+        for (const asset of ASSETS) {
+            await fetch(`/api/monitor/${action}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbol: asset.symbol }),
+            });
+        }
+        monitorRunning = !monitorRunning;
+        btn.textContent = monitorRunning ? "Stop Monitor" : "Start Monitor";
+        btn.className = monitorRunning ? "btn btn-danger" : "btn btn-success";
+        fetchMonitorStatus();
+        if (monitorRunning) fetchBudget();
+    } catch (e) {
+        alert("Monitor error: " + e.message);
+    }
+    btn.disabled = false;
+}
+
+// ─── Status helpers ───────────────────────────────────────────
 async function fetchMonitorStatus() {
     try {
-        const res = await fetch('/api/monitor/status');
+        const res = await fetch("/api/monitor/status");
         const data = await res.json();
-        const el = document.getElementById('monitor-status');
-        const active = (data.monitors || []).filter(m => m.status === 'ACTIVE');
+        const active = (data.monitors || []).filter(m => m.status === "ACTIVE");
+        const el = document.getElementById("monitor-status");
         if (active.length > 0) {
-            el.textContent = active.length + ' active';
-            el.style.color = 'var(--accent-green)';
+            el.textContent = active.length + "/" + ASSETS.length + " active";
+            el.style.color = "var(--accent-green)";
+            monitorRunning = active.length === ASSETS.length;
+            const btn = document.getElementById("btn-monitor-all");
+            if (monitorRunning) {
+                btn.textContent = "Stop Monitor";
+                btn.className = "btn btn-danger";
+            }
         } else {
-            el.textContent = 'Inactive';
-            el.style.color = 'var(--text-muted)';
+            el.textContent = "Inactive";
+            el.style.color = "var(--text-muted)";
         }
-        const wsEl = document.getElementById('ws-status');
-        wsEl.textContent = data.ws_connections + ' clients';
-    } catch (e) {
-        document.getElementById('monitor-status').textContent = 'error';
-    }
+    } catch (e) {}
 }
 
-document.addEventListener('DOMContentLoaded', fetchMonitorStatus);
+async function fetchBudget() {
+    try {
+        const res = await fetch("/api/monitor/budget");
+        const data = await res.json();
+        const bar = document.getElementById("budget-bar");
+        const fill = document.getElementById("budget-fill");
+        const text = document.getElementById("budget-text");
+        const credits = document.getElementById("credits-status");
 
-// Update WS status indicator
-document.addEventListener('ws:connected', function() {
-    const el = document.getElementById('ws-status');
-    if (el) { el.textContent = 'connected'; el.style.color = 'var(--accent-green)'; }
+        bar.style.display = "flex";
+        const pct = data.pct_used || 0;
+        fill.style.width = pct + "%";
+        fill.style.background = pct > 80 ? "var(--accent-red)" : pct > 50 ? "var(--accent-yellow)" : "var(--accent-blue)";
+        text.textContent = `${data.used || 0} / ${data.limit || 750} used`;
+        credits.textContent = `${data.remaining || 0} remaining`;
+    } catch (e) {}
+}
+
+function fmt(n) {
+    if (n === null || n === undefined) return "-";
+    return typeof n === "number" ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n;
+}
+
+// ─── WebSocket live price updates ─────────────────────────────
+document.addEventListener("ws:price_update", function(e) {
+    const d = e.detail;
+    // Find card and update price
+    const safe = d.symbol.replace(/=/g, "_");
+    const card = document.getElementById("card-" + safe);
+    if (!card) return;
+    const priceEl = card.querySelector(".ov-price");
+    if (priceEl && d.price) priceEl.textContent = fmt(d.price);
 });
-document.addEventListener('ws:disconnected', function() {
-    const el = document.getElementById('ws-status');
-    if (el) { el.textContent = 'disconnected'; el.style.color = 'var(--accent-red)'; }
+
+document.addEventListener("ws:connected", function() {
+    const el = document.getElementById("ws-status");
+    if (el) { el.textContent = "connected"; el.style.color = "var(--accent-green)"; }
+});
+document.addEventListener("ws:disconnected", function() {
+    const el = document.getElementById("ws-status");
+    if (el) { el.textContent = "disconnected"; el.style.color = "var(--accent-red)"; }
 });
 </script>
 {% endblock %}

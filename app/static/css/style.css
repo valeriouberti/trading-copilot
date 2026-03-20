@@ -660,6 +660,17 @@ body {
 
 .driver-item:last-child { border-bottom: none; }
 
+/* --- News card --- */
+
+.news-item {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.news-item:last-child { border-bottom: none; }
+
 /* --- Flags --- */
 
 .flag-item {

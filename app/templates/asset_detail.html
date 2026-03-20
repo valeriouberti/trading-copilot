@@ -77,6 +77,16 @@
             <div id="calendar-content"></div>
         </div>
 
+        <div class="card" id="thesis-card" style="display:none;">
+            <h3>Trade Thesis</h3>
+            <div id="thesis-content"></div>
+        </div>
+
+        <div class="card" id="news-card" style="display:none;">
+            <h3>News Summary</h3>
+            <div id="news-content"></div>
+        </div>
+
         <div class="card" id="flags-card" style="display:none;">
             <h3>Validation Flags</h3>
             <div id="flags-content"></div>
@@ -100,7 +110,7 @@ const SYMBOL = "{{ asset.symbol }}";
 let chart = null;
 let analysisData = null;
 
-// Initialize chart and load price data immediately
+// Initialize chart and auto-run analysis on load
 document.addEventListener("DOMContentLoaded", function() {
     const container = document.getElementById("chart-container");
     chart = LightweightCharts.createChart(container, {
@@ -117,19 +127,9 @@ document.addEventListener("DOMContentLoaded", function() {
         timeScale: { borderColor: '#30363d' },
     });
     chart.timeScale().fitContent();
-    loadInitialChart();
+    // Auto-analyze on page load
+    runAnalysis();
 });
-
-async function loadInitialChart() {
-    try {
-        const resp = await fetch(`/api/chart/${encodeURIComponent(SYMBOL)}`);
-        if (!resp.ok) return;
-        const data = await resp.json();
-        renderChart({ analysis: { chart: data.chart } });
-    } catch (e) {
-        console.warn("Initial chart load failed:", e);
-    }
-}
 
 async function runAnalysis() {
     const btn = document.getElementById("btn-analyze");
@@ -164,6 +164,8 @@ function renderAnalysis(data) {
     renderQuality(data);
     renderMTF(data);
     renderKeyLevels(data);
+    renderThesis(data);
+    renderNews(data);
     renderPolymarket(data);
     renderCalendar(data);
     renderFlags(data);
@@ -520,6 +522,49 @@ function renderCalendar(data) {
     content.innerHTML = html;
 }
 
+function renderThesis(data) {
+    const card = document.getElementById("thesis-card");
+    const content = document.getElementById("thesis-content");
+    if (!data.trade_thesis) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    const t = data.trade_thesis;
+    const dirCls = t.direction === "LONG" ? "badge-bullish" : t.direction === "SHORT" ? "badge-bearish" : "badge-neutral";
+
+    let html = `
+        <div style="text-align:center; margin-bottom:12px;">
+            <span class="badge ${dirCls}" style="font-size:14px; padding:4px 12px;">${t.direction}</span>
+        </div>
+        <p style="font-size:14px; margin-bottom:12px;">${t.entry_reason}</p>
+    `;
+
+    if (t.confluence && t.confluence.length) {
+        html += '<div style="margin-bottom:10px;"><strong style="color:var(--text-secondary);font-size:12px;text-transform:uppercase;">Confluence</strong>';
+        t.confluence.forEach(c => {
+            html += `<div class="driver-item">${c}</div>`;
+        });
+        html += '</div>';
+    }
+
+    html += `<div class="info-row"><span>Key Risk</span><span style="color:var(--accent-red);">${t.key_risk}</span></div>`;
+    html += `<div class="info-row"><span>Invalidation</span><span style="color:var(--text-muted);">${t.invalidation}</span></div>`;
+
+    content.innerHTML = html;
+}
+
+function renderNews(data) {
+    const card = document.getElementById("news-card");
+    const content = document.getElementById("news-content");
+    if (!data.news_summary || !data.news_summary.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    let html = `<p style="color:var(--text-muted);font-size:12px;margin-bottom:8px;">${data.news_count || 0} articles analyzed</p>`;
+    data.news_summary.forEach(item => {
+        html += `<div class="driver-item">${item}</div>`;
+    });
+    content.innerHTML = html;
+}
+
 function renderFlags(data) {
     const card = document.getElementById("flags-card");
     const content = document.getElementById("flags-content");
@@ -560,7 +605,7 @@ async function toggleMonitor() {
         const res = await fetch(`/api/monitor/${action}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ symbol: SYMBOL, interval_seconds: 60 }),
+            body: JSON.stringify({ symbol: SYMBOL }),
         });
         if (!res.ok) {
             const err = await res.json();
