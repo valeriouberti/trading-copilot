@@ -1,17 +1,17 @@
-"""Settings API endpoints — Telegram configuration and test."""
+"""Settings API endpoints — Telegram configuration (persisted to database)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.config import reload_config, save_config
+from app.models.database import get_telegram_config, upsert_telegram_config
 from app.services.notifier import TelegramNotifier
 
 router = APIRouter()
 
 
-class TelegramConfig(BaseModel):
+class TelegramConfigBody(BaseModel):
     bot_token: str = ""
     chat_id: str = ""
     enabled: bool = False
@@ -20,8 +20,7 @@ class TelegramConfig(BaseModel):
 @router.get("/settings/telegram")
 async def get_telegram_settings(request: Request):
     """Return current Telegram configuration (token masked)."""
-    config = request.app.state.config
-    tg = config.get("telegram", {})
+    tg = await get_telegram_config(request.app.state.session_factory)
     token = tg.get("bot_token", "")
     masked = f"...{token[-8:]}" if len(token) > 8 else ("set" if token else "")
     return {
@@ -32,19 +31,21 @@ async def get_telegram_settings(request: Request):
 
 
 @router.put("/settings/telegram")
-async def update_telegram_settings(request: Request, body: TelegramConfig):
-    """Update Telegram configuration in config.yaml."""
-    config = request.app.state.config
+async def update_telegram_settings(request: Request, body: TelegramConfigBody):
+    """Update Telegram configuration in database."""
+    await upsert_telegram_config(
+        request.app.state.session_factory,
+        body.bot_token,
+        body.chat_id,
+        body.enabled,
+    )
 
-    if "telegram" not in config:
-        config["telegram"] = {}
-
-    config["telegram"]["bot_token"] = body.bot_token
-    config["telegram"]["chat_id"] = body.chat_id
-    config["telegram"]["enabled"] = body.enabled
-
-    save_config(config)
-    request.app.state.config = reload_config()
+    # Update in-memory config dict for notifier
+    request.app.state.config["telegram"] = {
+        "bot_token": body.bot_token,
+        "chat_id": body.chat_id,
+        "enabled": body.enabled,
+    }
 
     return {"message": "Telegram settings updated", "enabled": body.enabled}
 
@@ -52,8 +53,7 @@ async def update_telegram_settings(request: Request, body: TelegramConfig):
 @router.post("/telegram/test")
 async def test_telegram(request: Request):
     """Send a test message to the configured Telegram chat."""
-    config = request.app.state.config
-    tg = config.get("telegram", {})
+    tg = await get_telegram_config(request.app.state.session_factory)
 
     if not tg.get("bot_token") or not tg.get("chat_id"):
         raise HTTPException(

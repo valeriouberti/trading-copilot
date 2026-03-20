@@ -290,14 +290,12 @@ class AssetMonitor:
     async def _notify_telegram(self, symbol: str, analysis: dict, detection) -> None:
         """Send signal to Telegram if configured."""
         try:
-            from app.services.notifier import get_notifier
-
-            config = self.app.state.config
-            notifier = get_notifier(config)
-            if not notifier.enabled:
-                return
+            from app.services.notifier import get_notifier_from_db
 
             session_factory = self.app.state.session_factory
+            notifier = await get_notifier_from_db(session_factory)
+            if not notifier.enabled:
+                return
             async with session_factory() as db_session:
                 await notifier.send_signal(
                     symbol=symbol,

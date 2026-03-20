@@ -245,8 +245,20 @@ class TelegramNotifier:
 
 
 def get_notifier(config: dict) -> TelegramNotifier:
-    """Create a TelegramNotifier from config."""
+    """Create a TelegramNotifier from config dict (in-memory cache)."""
     tg = config.get("telegram", {})
+    return TelegramNotifier(
+        bot_token=tg.get("bot_token", ""),
+        chat_id=str(tg.get("chat_id", "")),
+        enabled=tg.get("enabled", False),
+    )
+
+
+async def get_notifier_from_db(session_factory) -> TelegramNotifier:
+    """Create a TelegramNotifier from database settings."""
+    from app.models.database import get_telegram_config
+
+    tg = await get_telegram_config(session_factory)
     return TelegramNotifier(
         bot_token=tg.get("bot_token", ""),
         chat_id=str(tg.get("chat_id", "")),

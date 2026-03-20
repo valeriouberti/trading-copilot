@@ -7,6 +7,7 @@ The engine is selected at runtime from config.yaml or DATABASE_URL env var.
 from __future__ import annotations
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -133,6 +134,21 @@ class AnalysisCache(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class TelegramConfig(Base):
+    """Telegram notification settings (runtime-mutable via Settings UI).
+
+    Singleton row (id=1). Values here override environment variable defaults.
+    """
+
+    __tablename__ = "telegram_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    bot_token = Column(String(200), nullable=False, default="")
+    chat_id = Column(String(50), nullable=False, default="")
+    enabled = Column(Boolean, nullable=False, default=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------------------------------------------------------------------------
 # Asset helpers
 # ---------------------------------------------------------------------------
@@ -159,3 +175,38 @@ async def get_all_assets(session_factory) -> list[dict]:
         result = await session.execute(select(Asset).order_by(Asset.symbol))
         rows = result.scalars().all()
     return [{"symbol": r.symbol, "display_name": r.display_name} for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Telegram config helpers
+# ---------------------------------------------------------------------------
+
+
+async def get_telegram_config(session_factory) -> dict:
+    """Return telegram config from DB, or empty defaults if not set."""
+    async with session_factory() as session:
+        row = await session.get(TelegramConfig, 1)
+    if row:
+        return {
+            "bot_token": row.bot_token,
+            "chat_id": row.chat_id,
+            "enabled": row.enabled,
+        }
+    return {"bot_token": "", "chat_id": "", "enabled": False}
+
+
+async def upsert_telegram_config(
+    session_factory, bot_token: str, chat_id: str, enabled: bool
+) -> None:
+    """Insert or update the singleton telegram config row."""
+    async with session_factory() as session:
+        row = await session.get(TelegramConfig, 1)
+        if row:
+            row.bot_token = bot_token
+            row.chat_id = chat_id
+            row.enabled = enabled
+        else:
+            session.add(TelegramConfig(
+                id=1, bot_token=bot_token, chat_id=chat_id, enabled=enabled,
+            ))
+        await session.commit()

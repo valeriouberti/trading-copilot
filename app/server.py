@@ -22,7 +22,7 @@ from app.api import monitor as monitor_router
 from app.api import settings as settings_router
 from app.api import trades as trades_router
 from app.api import websocket as ws_router
-from app.config import get_database_url, load_config
+from app.config import get_settings, to_config_dict
 from app.models.database import Base, get_all_assets, seed_assets_from_config
 from app.models.engine import get_engine, get_session_factory
 
@@ -35,8 +35,8 @@ APP_DIR = Path(__file__).resolve().parent
 async def lifespan(app: FastAPI):
     """Manage startup and shutdown resources."""
     # Startup
-    database_url = get_database_url()
-    engine = get_engine(database_url)
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
 
     # Auto-create tables if they don't exist
     async with engine.begin() as conn:
@@ -44,10 +44,23 @@ async def lifespan(app: FastAPI):
 
     app.state.engine = engine
     app.state.session_factory = get_session_factory(engine)
-    app.state.config = load_config()
+    app.state.settings = settings
+    app.state.config = to_config_dict(settings)  # backward compat for modules
 
     # Seed assets from config.yaml on first run
     await seed_assets_from_config(app.state.session_factory, app.state.config)
+
+    # Seed telegram config from env vars into DB (first run only)
+    from app.models.database import get_telegram_config, upsert_telegram_config
+
+    tg_db = await get_telegram_config(app.state.session_factory)
+    if not tg_db["bot_token"] and settings.telegram_bot_token:
+        await upsert_telegram_config(
+            app.state.session_factory,
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+            settings.telegram_enabled,
+        )
 
     # Initialize background monitor
     from app.services.monitor import AssetMonitor
@@ -56,7 +69,7 @@ async def lifespan(app: FastAPI):
     app.state.monitor = monitor
     await monitor.restore_from_db()
 
-    db_type = "PostgreSQL" if "postgresql" in database_url else "SQLite"
+    db_type = "PostgreSQL" if "postgresql" in settings.database_url else "SQLite"
     logger.info("Trading Copilot started — database: %s", db_type)
 
     yield

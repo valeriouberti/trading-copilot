@@ -25,7 +25,7 @@ lookback_hours: 16
 report_language: italian
 database:
   url: sqlite+aiosqlite:///./trading.db
-telegram:
-  bot_token: ""
-  chat_id: ""
-  enabled: false
+
+# Telegram settings are configured via environment variables
+# (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED)
+# or via the Settings page in the web dashboard (stored in database).
