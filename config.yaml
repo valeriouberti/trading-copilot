@@ -1,31 +1,31 @@
 assets:
-- symbol: NQ=F
-  display_name: NASDAQ 100 Futures
-- symbol: ES=F
-  display_name: S&P 500 Futures
-- symbol: EURUSD=X
-  display_name: EUR/USD
-- symbol: GC=F
-  display_name: Gold Futures
-- symbol: AAPL
-  display_name: Apple Inc.
-- symbol: NVDA
-  display_name: NVIDIA Corporation
+  - symbol: NQ=F
+    display_name: NASDAQ 100 Futures
+  - symbol: ES=F
+    display_name: S&P 500 Futures
+  - symbol: EURUSD=X
+    display_name: EUR/USD
+  - symbol: GC=F
+    display_name: Gold Futures
+  - symbol: AAPL
+    display_name: Apple Inc.
+  - symbol: NVDA
+    display_name: NVIDIA Corporation
 rss_feeds:
-- url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US
-  name: Yahoo Finance NASDAQ
-- url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
-  name: CNBC Top News
-- url: https://www.investing.com/rss/news_14.rss
-  name: Investing.com
-- url: https://feeds.marketwatch.com/marketwatch/topstories/
-  name: MarketWatch Top Stories
+  - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US
+    name: Yahoo Finance NASDAQ
+  - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
+    name: CNBC Top News
+  - url: https://www.investing.com/rss/news_14.rss
+    name: Investing.com
+  - url: https://feeds.marketwatch.com/marketwatch/topstories/
+    name: MarketWatch Top Stories
 groq_model: llama-3.3-70b-versatile
 lookback_hours: 16
 report_language: italian
 database:
   url: sqlite+aiosqlite:///./trading.db
 telegram:
-  bot_token: 8195585532:AAEICwqg6KI4Gei5jceSlv5-dUBoaw7GUW8
-  chat_id: '5154950441'
+  bot_token: ""
+  chat_id: ""
   enabled: false
