@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <p class="subtitle">Select an asset to analyze</p>
+</div>
+
+<section class="assets-grid">
+    {% for asset in assets %}
+    <div class="asset-card" x-data="{ hover: false }" @mouseenter="hover = true" @mouseleave="hover = false">
+        <div class="asset-symbol">{{ asset.symbol }}</div>
+        <div class="asset-name">{{ asset.display_name }}</div>
+        <div class="asset-actions">
+            <a href="/asset/{{ asset.symbol }}" class="btn btn-primary">
+                Analyze
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</section>
+
+<section class="info-section">
+    <div class="info-card">
+        <h3>System Status</h3>
+        <div class="info-row">
+            <span class="info-label">Assets configured</span>
+            <span class="info-value">{{ assets | length }}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Database</span>
+            <span class="info-value" hx-get="/api/health" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+                checking...
+            </span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Monitor</span>
+            <span class="info-value status-inactive">Inactive</span>
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -24,3 +24,16 @@ rss_feeds:
 groq_model: "llama-3.3-70b-versatile"
 lookback_hours: 16
 report_language: "italian"
+
+# Database configuration
+database:
+  # SQLite (default, zero setup)
+  url: "sqlite+aiosqlite:///./trading.db"
+  # PostgreSQL (uncomment for Docker):
+  # url: "postgresql+asyncpg://trading:trading@localhost:5432/trading"
+
+# Telegram notifications (configure in Phase 7)
+telegram:
+  bot_token: ""
+  chat_id: ""
+  enabled: false
