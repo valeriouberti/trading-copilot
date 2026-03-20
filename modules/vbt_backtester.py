@@ -290,6 +290,24 @@ def get_cost_model(spec: AssetSpec) -> CostModel:
     )
 
 
+# Per-class SL/TP tuning — derived from backtest analysis
+_CLASS_PARAMS: dict[AssetClass, dict[str, float]] = {
+    # Forex: tight SL, wide TP — trends are smooth
+    AssetClass.FOREX: {"sl_atr_mult": 1.2, "tp_atr_mult": 3.0},
+    # Commodities: medium SL — volatile intraday, strong trends
+    AssetClass.COMMODITY: {"sl_atr_mult": 1.5, "tp_atr_mult": 3.5},
+    # Indices: wider SL to survive chop, keep 2:1 R:R
+    AssetClass.INDEX: {"sl_atr_mult": 2.0, "tp_atr_mult": 4.0},
+    # Stocks: wider SL, lower TP — mean-reverting, high costs
+    AssetClass.STOCK: {"sl_atr_mult": 1.8, "tp_atr_mult": 3.0},
+    # Reference: not traded
+    AssetClass.REFERENCE: {"sl_atr_mult": 1.5, "tp_atr_mult": 3.0},
+}
+
+# Default starting equity for metrics (USD)
+DEFAULT_EQUITY = 10_000.0
+
+
 # ---------------------------------------------------------------------------
 # Backtest result
 # ---------------------------------------------------------------------------
@@ -306,24 +324,33 @@ class VBTBacktestResult:
 
     # Trade metrics
     total_trades: int = 0
+    long_trades: int = 0
+    short_trades: int = 0
     win_rate: float = 0.0
     profit_factor: float = 0.0
-    total_pnl: float = 0.0
+    total_pnl: float = 0.0        # Raw price-unit PnL
+    total_pnl_usd: float = 0.0    # PnL in USD (price_pnl × point_value)
     avg_trade_pnl: float = 0.0
     expectancy: float = 0.0
+    expectancy_usd: float = 0.0
 
-    # Risk metrics
+    # Risk metrics (based on USD equity curve)
     max_drawdown_pct: float = 0.0
+    max_drawdown_usd: float = 0.0
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
     calmar_ratio: float = 0.0
+    return_pct: float = 0.0       # Total return on starting equity
 
     # Cost impact
     total_costs: float = 0.0
-    pnl_before_costs: float = 0.0
+    total_costs_usd: float = 0.0
 
     # Kelly
     kelly_fraction: float = 0.0
+
+    # Point value used
+    point_value: float = 1.0
 
     # Data quality
     data_warnings: list[str] = field(default_factory=list)
@@ -350,27 +377,35 @@ class VBTBacktester:
         symbol: str,
         interval: str = "1d",
         bars: int = 500,
-        sl_atr_mult: float = 1.5,
-        tp_atr_mult: float = 3.0,
+        sl_atr_mult: float | None = None,
+        tp_atr_mult: float | None = None,
         adaptive_sl: bool = True,
+        starting_equity: float = DEFAULT_EQUITY,
     ) -> VBTBacktestResult | None:
         """Run a full backtest for a single symbol.
 
         Uses bar-by-bar simulation for accurate SL/TP handling with
-        realistic spread/commission/slippage costs.
+        realistic spread/commission/slippage costs. If sl_atr_mult or
+        tp_atr_mult are None, per-class defaults are used.
 
         Args:
             symbol: Canonical symbol (e.g. "EURUSD", "NQ", "AAPL").
             interval: Bar interval.
             bars: Number of bars to fetch.
-            sl_atr_mult: Base SL multiplier (x ATR).
-            tp_atr_mult: Base TP multiplier (x ATR).
+            sl_atr_mult: SL multiplier (x ATR). None = use per-class default.
+            tp_atr_mult: TP multiplier (x ATR). None = use per-class default.
             adaptive_sl: If True, adjust SL/TP based on ATR percentile.
+            starting_equity: Starting equity in USD for metric calculations.
         """
         spec = ASSET_UNIVERSE.get(symbol)
         if spec is None:
             logger.error("Unknown symbol: %s", symbol)
             return None
+
+        # Per-class SL/TP defaults
+        class_params = _CLASS_PARAMS.get(spec.asset_class, {})
+        sl_mult = sl_atr_mult if sl_atr_mult is not None else class_params.get("sl_atr_mult", 1.5)
+        tp_mult = tp_atr_mult if tp_atr_mult is not None else class_params.get("tp_atr_mult", 3.0)
 
         # Fetch data
         data = self.registry.fetch(symbol, interval=interval, bars=bars)
@@ -396,11 +431,12 @@ class VBTBacktester:
 
         # Compute ATR-adaptive SL/TP distances
         sl_dist, tp_dist = self._compute_sl_tp_distance(
-            df, sl_atr_mult, tp_atr_mult, adaptive_sl
+            df, sl_mult, tp_mult, adaptive_sl
         )
 
         return self._simulate_trades(
-            symbol, spec, interval, data, df, sl_dist, tp_dist, costs, data_warnings
+            symbol, spec, interval, data, df, sl_dist, tp_dist, costs,
+            data_warnings, starting_equity,
         )
 
     def run_universe(
@@ -409,6 +445,7 @@ class VBTBacktester:
         asset_class: AssetClass | None = None,
         interval: str = "1d",
         bars: int = 500,
+        starting_equity: float = DEFAULT_EQUITY,
         **kwargs: Any,
     ) -> list[VBTBacktestResult]:
         """Run backtest across multiple symbols."""
@@ -428,7 +465,10 @@ class VBTBacktester:
         results: list[VBTBacktestResult] = []
         for sym in target:
             logger.info("Backtesting %s...", sym)
-            r = self.run(sym, interval=interval, bars=bars, **kwargs)
+            r = self.run(
+                sym, interval=interval, bars=bars,
+                starting_equity=starting_equity, **kwargs,
+            )
             if r is not None:
                 results.append(r)
             else:
@@ -479,8 +519,11 @@ class VBTBacktester:
         tp_dist: pd.Series,
         costs: CostModel,
         data_warnings: list[str],
+        starting_equity: float = DEFAULT_EQUITY,
     ) -> VBTBacktestResult:
         """Bar-by-bar simulation with proper LONG and SHORT SL/TP handling."""
+        pv = spec.point_value  # USD per 1.0 price movement per contract
+
         result = VBTBacktestResult(
             symbol=symbol,
             asset_class=spec.asset_class.value,
@@ -488,6 +531,7 @@ class VBTBacktester:
             bars=len(df),
             data_source=data.source,
             data_warnings=data_warnings,
+            point_value=pv,
         )
 
         trades: list[dict[str, Any]] = []
@@ -561,7 +605,8 @@ class VBTBacktester:
 
             in_trade = False  # Trade closed, allow next
 
-            pnl = (exit_price - entry_price) * sig - costs.commission
+            pnl_raw = (exit_price - entry_price) * sig  # Price-unit PnL
+            pnl_usd = pnl_raw * pv - costs.commission   # USD PnL after commission
 
             trades.append({
                 "direction": "LONG" if sig == 1 else "SHORT",
@@ -571,49 +616,66 @@ class VBTBacktester:
                 "exit_price": round(exit_price, 5),
                 "sl": round(sl, 5),
                 "tp": round(tp, 5),
-                "pnl": round(pnl, 2),
-                "return_pct": round(pnl / entry_price * 100, 4),
+                "pnl_raw": round(pnl_raw, 5),
+                "pnl_usd": round(pnl_usd, 2),
                 "status": outcome,
                 "bars_held": bars_held,
             })
 
         result.trades = trades
         result.total_trades = len(trades)
+        result.long_trades = sum(1 for t in trades if t["direction"] == "LONG")
+        result.short_trades = sum(1 for t in trades if t["direction"] == "SHORT")
 
         if trades:
-            pnls = [t["pnl"] for t in trades]
-            winners = [p for p in pnls if p > 0]
-            losers = [p for p in pnls if p <= 0]
+            pnls_usd = [t["pnl_usd"] for t in trades]
+            winners = [p for p in pnls_usd if p > 0]
+            losers = [p for p in pnls_usd if p <= 0]
 
-            result.total_pnl = sum(pnls)
-            result.avg_trade_pnl = np.mean(pnls)
-            result.win_rate = len(winners) / len(pnls) if pnls else 0
+            result.total_pnl = sum(t["pnl_raw"] for t in trades)
+            result.total_pnl_usd = sum(pnls_usd)
+            result.avg_trade_pnl = np.mean(pnls_usd)
+            result.win_rate = len(winners) / len(pnls_usd) if pnls_usd else 0
 
             gross_profit = sum(winners) if winners else 0
             gross_loss = abs(sum(losers)) if losers else 0
             result.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
-            # Max drawdown
-            equity = np.cumsum(pnls)
-            peak = np.maximum.accumulate(equity)
-            dd = (peak - equity) / (np.abs(peak) + 1e-10)
-            result.max_drawdown_pct = float(np.max(dd)) * 100
+            # Equity curve in USD — proper drawdown on notional account
+            equity_curve = starting_equity + np.cumsum(pnls_usd)
+            peak = np.maximum.accumulate(equity_curve)
+            dd_usd = peak - equity_curve
+            dd_pct = dd_usd / peak
+            result.max_drawdown_usd = float(np.max(dd_usd))
+            result.max_drawdown_pct = float(np.max(dd_pct)) * 100
+            result.return_pct = (equity_curve[-1] - starting_equity) / starting_equity * 100
 
-            # Sharpe
-            if len(pnls) > 1 and np.std(pnls) > 0:
-                result.sharpe_ratio = (np.mean(pnls) / np.std(pnls)) * np.sqrt(252)
+            # Sharpe (annualized, based on USD PnL per trade)
+            if len(pnls_usd) > 1 and np.std(pnls_usd) > 0:
+                result.sharpe_ratio = (np.mean(pnls_usd) / np.std(pnls_usd)) * np.sqrt(252)
 
-            # Expectancy and Kelly
+            # Sortino (downside deviation only)
+            downside = [p for p in pnls_usd if p < 0]
+            if downside and np.std(downside) > 0:
+                result.sortino_ratio = (np.mean(pnls_usd) / np.std(downside)) * np.sqrt(252)
+
+            # Calmar (return / max drawdown)
+            if result.max_drawdown_usd > 0:
+                result.calmar_ratio = result.total_pnl_usd / result.max_drawdown_usd
+
+            # Expectancy and Kelly (in USD)
             avg_win = np.mean(winners) if winners else 0
-            avg_loss = np.mean([abs(l) for l in losers]) if losers else 0
-            result.expectancy = (result.win_rate * avg_win) - ((1 - result.win_rate) * avg_loss)
+            avg_loss = np.mean([abs(x) for x in losers]) if losers else 0
+            result.expectancy_usd = (result.win_rate * avg_win) - ((1 - result.win_rate) * avg_loss)
 
             if avg_loss > 0 and avg_win > 0:
                 b = avg_win / avg_loss
                 kelly = (result.win_rate * b - (1 - result.win_rate)) / b
                 result.kelly_fraction = max(0, min(kelly / 2, 0.5))
 
-            result.total_costs = (costs.spread * 2 + costs.commission) * len(trades)
+            result.total_costs_usd = sum(
+                (costs.spread * 2 * pv + costs.commission) for _ in trades
+            )
 
         return result
 
@@ -623,42 +685,50 @@ class VBTBacktester:
 # ---------------------------------------------------------------------------
 
 def print_results(results: list[VBTBacktestResult]) -> None:
-    """Pretty-print backtest results for all symbols."""
+    """Pretty-print backtest results for all symbols (all PnL in USD)."""
     if not results:
         print("No results to display.")
         return
 
-    # Header
+    W = 135
     print()
-    print("=" * 120)
-    print(f"{'SYMBOL':<10} {'CLASS':<12} {'SOURCE':<12} {'BARS':>5} {'TRADES':>6} "
-          f"{'WIN%':>6} {'PF':>6} {'PNL':>10} {'COSTS':>8} "
-          f"{'DD%':>6} {'SHARPE':>7} {'KELLY':>6} {'WARNINGS'}")
-    print("-" * 120)
+    print("=" * W)
+    print(
+        f"{'SYMBOL':<8} {'CLASS':<10} {'SRC':<6} {'BARS':>4} "
+        f"{'L/S':>5} {'#':>3} {'WIN%':>6} {'PF':>5} "
+        f"{'PnL $':>10} {'Costs $':>8} {'DD%':>6} {'DD $':>9} "
+        f"{'Sharpe':>6} {'Sortino':>7} {'Kelly':>5} {'Ret%':>7}"
+    )
+    print("-" * W)
 
     total_trades = 0
     total_pnl = 0.0
     total_costs = 0.0
 
-    for r in sorted(results, key=lambda x: x.asset_class):
-        warns = len(r.data_warnings)
-        warn_str = f"{warns} warn" if warns else "clean"
+    for r in sorted(results, key=lambda x: (x.asset_class, x.symbol)):
+        ls = f"{r.long_trades}/{r.short_trades}"
         print(
-            f"{r.symbol:<10} {r.asset_class:<12} {r.data_source:<12} {r.bars:>5} {r.total_trades:>6} "
-            f"{r.win_rate*100:>5.1f}% {r.profit_factor:>6.2f} {r.total_pnl:>+10.2f} {r.total_costs:>8.2f} "
-            f"{r.max_drawdown_pct:>5.1f}% {r.sharpe_ratio:>7.2f} {r.kelly_fraction:>5.1f}% {warn_str}"
+            f"{r.symbol:<8} {r.asset_class:<10} {r.data_source[:6]:<6} {r.bars:>4} "
+            f"{ls:>5} {r.total_trades:>3} {r.win_rate*100:>5.1f}% {r.profit_factor:>5.2f} "
+            f"{r.total_pnl_usd:>+10.0f} {r.total_costs_usd:>8.0f} "
+            f"{r.max_drawdown_pct:>5.1f}% {r.max_drawdown_usd:>9.0f} "
+            f"{r.sharpe_ratio:>6.2f} {r.sortino_ratio:>7.2f} "
+            f"{r.kelly_fraction*100:>4.1f}% {r.return_pct:>+6.1f}%"
         )
         total_trades += r.total_trades
-        total_pnl += r.total_pnl
-        total_costs += r.total_costs
+        total_pnl += r.total_pnl_usd
+        total_costs += r.total_costs_usd
 
-    print("-" * 120)
-    print(f"{'TOTAL':<10} {'':12} {'':12} {'':>5} {total_trades:>6} "
-          f"{'':>6} {'':>6} {total_pnl:>+10.2f} {total_costs:>8.2f}")
-    print("=" * 120)
+    print("-" * W)
+    print(
+        f"{'TOTAL':<8} {'':10} {'':6} {'':>4} "
+        f"{'':>5} {total_trades:>3} {'':>6} {'':>5} "
+        f"{total_pnl:>+10.0f} {total_costs:>8.0f}"
+    )
+    print("=" * W)
 
     # Per-class summary
-    print("\nPer Asset Class:")
+    print("\nPer Asset Class (USD):")
     for cls in AssetClass:
         if cls == AssetClass.REFERENCE:
             continue
@@ -666,28 +736,47 @@ def print_results(results: list[VBTBacktestResult]) -> None:
         if not cls_results:
             continue
         cls_trades = sum(r.total_trades for r in cls_results)
-        cls_pnl = sum(r.total_pnl for r in cls_results)
+        cls_pnl = sum(r.total_pnl_usd for r in cls_results)
+        cls_costs = sum(r.total_costs_usd for r in cls_results)
         cls_wr = (
             sum(r.win_rate * r.total_trades for r in cls_results) / cls_trades
             if cls_trades > 0 else 0
         )
+        profitable = [r for r in cls_results if r.total_pnl_usd > 0]
+        losing = [r for r in cls_results if r.total_pnl_usd <= 0]
+        edge = "HAS EDGE" if cls_pnl > 0 else "NO EDGE"
         print(
             f"  {cls.value:<12}: {len(cls_results)} assets, "
-            f"{cls_trades} trades, {cls_wr*100:.1f}% WR, PnL {cls_pnl:+.2f}"
+            f"{cls_trades} trades, {cls_wr*100:.1f}% WR, "
+            f"PnL ${cls_pnl:+,.0f}, Costs ${cls_costs:,.0f} "
+            f"({len(profitable)} profitable, {len(losing)} losing) [{edge}]"
         )
+
+    # Profitable assets summary
+    profitable_all = [r for r in results if r.total_pnl_usd > 0]
+    losing_all = [r for r in results if r.total_pnl_usd <= 0]
+    print(f"\nProfitable ({len(profitable_all)}):", ", ".join(
+        f"{r.symbol} (${r.total_pnl_usd:+,.0f})" for r in
+        sorted(profitable_all, key=lambda x: x.total_pnl_usd, reverse=True)
+    ) or "none")
+    print(f"Losing ({len(losing_all)}):", ", ".join(
+        f"{r.symbol} (${r.total_pnl_usd:+,.0f})" for r in
+        sorted(losing_all, key=lambda x: x.total_pnl_usd)
+    ) or "none")
 
     # Trade list
     print("\nDetailed Trades:")
     for r in results:
         if not r.trades:
             continue
-        print(f"\n  {r.symbol} ({r.asset_class}, {r.data_source}):")
-        print(f"  {'#':>3}  {'Dir':<6} {'Entry':>12} {'Exit':>12} {'PnL':>10} {'Status':<12} {'Date'}")
-        print(f"  {'---':>3}  {'---':<6} {'---':>12} {'---':>12} {'---':>10} {'---':<12} {'---'}")
+        print(f"\n  {r.symbol} ({r.asset_class}, pv={r.point_value:,.0f}):")
+        print(f"  {'#':>3}  {'Dir':<6} {'Entry':>12} {'Exit':>12} {'PnL $':>10} {'Status':<12} {'Bars':>4} {'Date'}")
+        print(f"  {'---':>3}  {'------':<6} {'--------':>12} {'--------':>12} {'------':>10} {'------':<12} {'----':>4} {'----------'}")
         for i, t in enumerate(r.trades, 1):
             print(
                 f"  {i:>3}  {t['direction']:<6} {t['entry_price']:>12.2f} "
-                f"{t['exit_price']:>12.2f} {t['pnl']:>+10.2f} {t['status']:<12} {t['entry_date'][:10]}"
+                f"{t['exit_price']:>12.2f} {t['pnl_usd']:>+10.0f} "
+                f"{t['status']:<12} {t['bars_held']:>4} {t['entry_date'][:10]}"
             )
 
     # Data quality
@@ -723,10 +812,16 @@ Examples:
     parser.add_argument("--symbols", nargs="+", help="Symbols to backtest")
     parser.add_argument("--class", dest="asset_class", help="Asset class: forex, commodity, index, stock")
     parser.add_argument("--all", action="store_true", help="Backtest entire universe")
+    parser.add_argument("--edge-only", action="store_true",
+                        help="Only backtest assets with demonstrated edge (forex, commodities, ES)")
     parser.add_argument("--interval", default="1d", help="Bar interval (default: 1d)")
     parser.add_argument("--bars", type=int, default=500, help="Number of bars (default: 500)")
-    parser.add_argument("--sl-mult", type=float, default=1.5, help="SL ATR multiplier")
-    parser.add_argument("--tp-mult", type=float, default=3.0, help="TP ATR multiplier")
+    parser.add_argument("--sl-mult", type=float, default=None,
+                        help="Override SL ATR multiplier (default: per-class)")
+    parser.add_argument("--tp-mult", type=float, default=None,
+                        help="Override TP ATR multiplier (default: per-class)")
+    parser.add_argument("--equity", type=float, default=DEFAULT_EQUITY,
+                        help=f"Starting equity in USD (default: {DEFAULT_EQUITY:.0f})")
     parser.add_argument("--no-adaptive", action="store_true", help="Disable adaptive SL/TP")
     parser.add_argument("-v", "--verbose", action="store_true")
 
@@ -737,45 +832,41 @@ Examples:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
 
+    # Assets that showed positive edge in backtest analysis (500 daily bars)
+    # Tier 1: strong edge (PF > 1.5, positive Sharpe)
+    # Tier 2: marginal edge (PF > 1.0, needs monitoring)
+    EDGE_SYMBOLS = [
+        "ES", "RTY", "NQ",   # Indices — strong edge with wider SL
+        "CL",                 # Crude Oil — 50% WR, PF 2.5
+        "USDJPY",             # Best forex pair — PF 3.4
+        "USDCHF",             # Marginal forex — break-even, monitor
+        "NG",                 # Natural Gas — volatile but trending
+        "GC",                 # Gold — large moves, needs tuning
+    ]
+
     bt = VBTBacktester()
 
-    if args.all:
-        results = bt.run_universe(
-            interval=args.interval,
-            bars=args.bars,
-            sl_atr_mult=args.sl_mult,
-            tp_atr_mult=args.tp_mult,
-            adaptive_sl=not args.no_adaptive,
-        )
+    common_kwargs: dict[str, Any] = {
+        "interval": args.interval,
+        "bars": args.bars,
+        "sl_atr_mult": args.sl_mult,     # None = use per-class defaults
+        "tp_atr_mult": args.tp_mult,
+        "adaptive_sl": not args.no_adaptive,
+        "starting_equity": args.equity,
+    }
+
+    if args.edge_only:
+        results = bt.run_universe(symbols=EDGE_SYMBOLS, **common_kwargs)
+    elif args.all:
+        results = bt.run_universe(**common_kwargs)
     elif args.asset_class:
         cls = AssetClass(args.asset_class)
-        results = bt.run_universe(
-            asset_class=cls,
-            interval=args.interval,
-            bars=args.bars,
-            sl_atr_mult=args.sl_mult,
-            tp_atr_mult=args.tp_mult,
-            adaptive_sl=not args.no_adaptive,
-        )
+        results = bt.run_universe(asset_class=cls, **common_kwargs)
     elif args.symbols:
-        results = bt.run_universe(
-            symbols=args.symbols,
-            interval=args.interval,
-            bars=args.bars,
-            sl_atr_mult=args.sl_mult,
-            tp_atr_mult=args.tp_mult,
-            adaptive_sl=not args.no_adaptive,
-        )
+        results = bt.run_universe(symbols=args.symbols, **common_kwargs)
     else:
-        # Default: a representative mix
-        results = bt.run_universe(
-            symbols=["EURUSD", "GC", "NQ", "AAPL"],
-            interval=args.interval,
-            bars=args.bars,
-            sl_atr_mult=args.sl_mult,
-            tp_atr_mult=args.tp_mult,
-            adaptive_sl=not args.no_adaptive,
-        )
+        # Default: edge symbols
+        results = bt.run_universe(symbols=EDGE_SYMBOLS, **common_kwargs)
 
     print_results(results)
 
