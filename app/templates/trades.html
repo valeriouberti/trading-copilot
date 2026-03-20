@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header" style="display:flex; align-items:center; justify-content:space-between;">
+    <div>
+        <h1>Trade Journal</h1>
+        <p class="subtitle">Record and track your trades</p>
+    </div>
+    <div style="display:flex; gap:8px;">
+        <button class="btn btn-success" onclick="document.getElementById('trade-modal').style.display='flex'">
+            + New Trade
+        </button>
+        <button class="btn btn-secondary" onclick="importCsv()">Import CSV</button>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="filters-bar" x-data="{ symbol: '', direction: '' }">
+    <select class="form-input filter-select" x-model="symbol" @change="filterTrades()">
+        <option value="">All Assets</option>
+        {% for asset in assets %}
+        <option value="{{ asset.symbol }}">{{ asset.symbol }}</option>
+        {% endfor %}
+    </select>
+    <select class="form-input filter-select" x-model="direction" @change="filterTrades()">
+        <option value="">All Directions</option>
+        <option value="LONG">LONG</option>
+        <option value="SHORT">SHORT</option>
+    </select>
+    <span class="filter-count" id="trade-count"></span>
+</div>
+
+<!-- Trades table -->
+<div class="card" style="overflow-x:auto;">
+    <table class="trades-table" id="trades-table">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Asset</th>
+                <th>Dir</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>QS</th>
+                <th>Regime</th>
+                <th>P&L</th>
+                <th>R</th>
+                <th>Notes</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody id="trades-body">
+            <tr><td colspan="13" class="empty-state">Loading trades...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- New Trade Modal -->
+<div id="trade-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-box" style="max-width:560px;" x-data="tradeForm()">
+        <h2>Record Trade</h2>
+        <p class="subtitle" style="margin-bottom:16px;">Enter trade details</p>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label class="form-label">Symbol</label>
+                <select class="form-input" x-model="form.symbol">
+                    {% for asset in assets %}
+                    <option value="{{ asset.symbol }}">{{ asset.symbol }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Direction</label>
+                <select class="form-input" x-model="form.direction">
+                    <option value="LONG">LONG</option>
+                    <option value="SHORT">SHORT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Entry Price</label>
+                <input type="number" step="any" class="form-input" x-model.number="form.entry_price">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Exit Price <span class="form-hint">(optional)</span></label>
+                <input type="number" step="any" class="form-input" x-model.number="form.exit_price" placeholder="Leave empty if open">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Stop Loss</label>
+                <input type="number" step="any" class="form-input" x-model.number="form.stop_loss">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Take Profit</label>
+                <input type="number" step="any" class="form-input" x-model.number="form.take_profit">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Quality Score</label>
+                <select class="form-input" x-model.number="form.quality_score">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Regime</label>
+                <select class="form-input" x-model="form.regime">
+                    <option value="">N/A</option>
+                    <option value="LONG">LONG</option>
+                    <option value="SHORT">SHORT</option>
+                    <option value="NEUTRAL">NEUTRAL</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Notes</label>
+            <textarea class="form-input" x-model="form.notes" rows="2" style="resize:vertical;"></textarea>
+        </div>
+
+        <div x-show="error" class="settings-msg msg-err" x-text="error" x-transition></div>
+
+        <div class="form-actions" style="margin-top:16px;">
+            <button class="btn btn-success" @click="submit()" :disabled="saving">
+                <span x-show="!saving">Save Trade</span>
+                <span x-show="saving">Saving...</span>
+            </button>
+            <button class="btn btn-secondary" onclick="document.getElementById('trade-modal').style.display='none'">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Close Trade Modal -->
+<div id="close-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-box" x-data="closeForm()">
+        <h2>Close Trade</h2>
+        <div class="form-group">
+            <label class="form-label">Exit Price</label>
+            <input type="number" step="any" class="form-input" x-model.number="exitPrice">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Notes</label>
+            <textarea class="form-input" x-model="notes" rows="2" style="resize:vertical;"></textarea>
+        </div>
+        <div class="form-actions" style="margin-top:16px;">
+            <button class="btn btn-success" @click="submit()">Close Trade</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('close-modal').style.display='none'">Cancel</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allTrades = [];
+
+async function loadTrades(symbol, direction) {
+    let url = '/api/trades?limit=200';
+    if (symbol) url += '&symbol=' + encodeURIComponent(symbol);
+    if (direction) url += '&direction=' + encodeURIComponent(direction);
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        allTrades = data.trades || [];
+        renderTrades(allTrades);
+        document.getElementById('trade-count').textContent = data.total + ' trades';
+    } catch (e) { console.error(e); }
+}
+
+function renderTrades(trades) {
+    const tbody = document.getElementById('trades-body');
+    if (!trades.length) {
+        tbody.innerHTML = '<tr><td colspan="13" class="empty-state">No trades recorded yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = trades.map(t => {
+        const date = t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '-';
+        const pnlClass = (t.outcome_pips || 0) > 0 ? 'price-up' : (t.outcome_pips || 0) < 0 ? 'price-down' : '';
+        const dirBadge = t.direction === 'LONG' ? 'badge-bullish' : 'badge-bearish';
+        const isOpen = t.exit_price === null;
+        return `<tr>
+            <td>${date}</td>
+            <td><strong>${t.symbol}</strong></td>
+            <td><span class="badge ${dirBadge}">${t.direction}</span></td>
+            <td class="mono">${fmt(t.entry_price)}</td>
+            <td class="mono">${t.exit_price !== null ? fmt(t.exit_price) : '<span class="badge badge-neutral">OPEN</span>'}</td>
+            <td class="mono">${fmt(t.stop_loss)}</td>
+            <td class="mono">${fmt(t.take_profit)}</td>
+            <td>${t.quality_score || 0}</td>
+            <td>${t.regime || '-'}</td>
+            <td class="mono ${pnlClass}">${t.outcome_pips !== null ? (t.outcome_pips > 0 ? '+' : '') + t.outcome_pips.toFixed(2) : '-'}</td>
+            <td class="mono ${pnlClass}">${t.r_multiple !== null ? (t.r_multiple > 0 ? '+' : '') + t.r_multiple.toFixed(2) + 'R' : '-'}</td>
+            <td class="detail-text">${t.notes || ''}</td>
+            <td>${isOpen ? '<button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="openCloseModal(' + t.id + ')">Close</button>' : ''}</td>
+        </tr>`;
+    }).join('');
+}
+
+function filterTrades() {
+    const symbol = document.querySelector('[x-model=symbol]')?.value || '';
+    const direction = document.querySelector('[x-model=direction]')?.value || '';
+    loadTrades(symbol, direction);
+}
+
+function fmt(n) {
+    if (n === null || n === undefined) return '-';
+    return typeof n === 'number' ? n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : n;
+}
+
+function tradeForm() {
+    return {
+        form: {
+            symbol: '{{ assets[0].symbol if assets else "" }}',
+            direction: 'LONG',
+            entry_price: null,
+            exit_price: null,
+            stop_loss: null,
+            take_profit: null,
+            quality_score: 0,
+            regime: '',
+            notes: '',
+        },
+        saving: false, error: '',
+        async submit() {
+            if (!this.form.entry_price) { this.error = 'Entry price required'; return; }
+            this.saving = true; this.error = '';
+            try {
+                const body = {...this.form};
+                if (!body.exit_price) body.exit_price = null;
+                const res = await fetch('/api/trades', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) {
+                    document.getElementById('trade-modal').style.display = 'none';
+                    loadTrades();
+                } else {
+                    const d = await res.json();
+                    this.error = d.detail || 'Failed';
+                }
+            } catch (e) { this.error = 'Network error'; }
+            this.saving = false;
+        }
+    };
+}
+
+let closeTradeId = null;
+function openCloseModal(id) {
+    closeTradeId = id;
+    document.getElementById('close-modal').style.display = 'flex';
+}
+
+function closeForm() {
+    return {
+        exitPrice: null, notes: '',
+        async submit() {
+            if (!this.exitPrice) return;
+            const res = await fetch('/api/trades/' + closeTradeId, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ exit_price: this.exitPrice, notes: this.notes }),
+            });
+            if (res.ok) {
+                document.getElementById('close-modal').style.display = 'none';
+                loadTrades();
+            }
+        }
+    };
+}
+
+async function importCsv() {
+    if (!confirm('Import trades from trade_log.csv?')) return;
+    const res = await fetch('/api/trades/import-csv', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) { alert('Imported ' + data.imported + ' trades'); loadTrades(); }
+    else alert(data.detail || 'Import failed');
+}
+
+document.addEventListener('DOMContentLoaded', () => loadTrades());
+</script>
+{% endblock %}

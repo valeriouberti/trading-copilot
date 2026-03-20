@@ -914,9 +914,9 @@ cat backup.sql | docker compose exec -T postgres psql -U trading trading
 | 8.1 | Background price monitor | `DONE` | 6.1 |
 | 8.2 | Signal detection engine | `DONE` | 8.1 + 6.3 |
 | 8.3 | WebSocket real-time push | `DONE` | 8.2 |
-| 9.1 | Trade journal UI | `TODO` | 5.2 |
-| 9.2 | Performance analytics | `TODO` | 9.1 |
-| 9.3 | Signal history | `TODO` | 8.2 + 9.1 |
+| 9.1 | Trade journal UI | `DONE` | 5.2 |
+| 9.2 | Performance analytics | `DONE` | 9.1 |
+| 9.3 | Signal history | `DONE` | 8.2 + 9.1 |
 | 10.1 | Dockerfile | `DONE` | 5.1 |
 | 10.2 | Docker Compose + PostgreSQL | `DONE` | 10.1 |
 | 10.3 | Alembic migrations | `DONE` | 5.1 |

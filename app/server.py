@@ -20,6 +20,7 @@ from app.api import assets as assets_router
 from app.api import health as health_router
 from app.api import monitor as monitor_router
 from app.api import settings as settings_router
+from app.api import trades as trades_router
 from app.api import websocket as ws_router
 from app.config import get_database_url, load_config
 from app.models.database import Base
@@ -82,6 +83,7 @@ app.include_router(assets_router.router, prefix="/api", tags=["assets"])
 app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
 app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(monitor_router.router, prefix="/api", tags=["monitor"])
+app.include_router(trades_router.router, prefix="/api", tags=["trades"])
 app.include_router(ws_router.router, tags=["websocket"])
 
 
@@ -120,6 +122,45 @@ async def asset_detail(request: Request, symbol: str):
             "request": request,
             "asset": asset,
             "title": f"{asset['display_name']} — Trading Copilot",
+        },
+    )
+
+
+@app.get("/trades", response_class=HTMLResponse)
+async def trades_page(request: Request):
+    """Render the trade journal page."""
+    config = request.app.state.config
+    assets = config.get("assets", [])
+    return templates.TemplateResponse(
+        "trades.html",
+        {
+            "request": request,
+            "assets": assets,
+            "title": "Trade Journal — Trading Copilot",
+        },
+    )
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    """Render the performance analytics page."""
+    return templates.TemplateResponse(
+        "analytics.html",
+        {
+            "request": request,
+            "title": "Analytics — Trading Copilot",
+        },
+    )
+
+
+@app.get("/signals", response_class=HTMLResponse)
+async def signals_page(request: Request):
+    """Render the signal history page."""
+    return templates.TemplateResponse(
+        "signals.html",
+        {
+            "request": request,
+            "title": "Signal History — Trading Copilot",
         },
     )
 

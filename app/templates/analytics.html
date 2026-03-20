@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/trades" class="back-link">&larr; Trade Journal</a>
+    <h1>Performance Analytics</h1>
+    <p class="subtitle">Trade performance metrics and insights</p>
+</div>
+
+<div id="analytics-loading" class="card" style="text-align:center; padding:40px;">
+    <div class="spinner" style="margin:0 auto 16px;"></div>
+    <p>Loading analytics...</p>
+</div>
+
+<!-- KPI cards -->
+<div id="kpi-section" style="display:none;">
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <span class="kpi-label">Win Rate</span>
+            <span class="kpi-value" id="kpi-winrate">-</span>
+        </div>
+        <div class="kpi-card">
+            <span class="kpi-label">Profit Factor</span>
+            <span class="kpi-value" id="kpi-pf">-</span>
+        </div>
+        <div class="kpi-card">
+            <span class="kpi-label">Avg R-Multiple</span>
+            <span class="kpi-value" id="kpi-avgr">-</span>
+        </div>
+        <div class="kpi-card">
+            <span class="kpi-label">Max Drawdown</span>
+            <span class="kpi-value" id="kpi-dd">-</span>
+        </div>
+        <div class="kpi-card">
+            <span class="kpi-label">Net P&L</span>
+            <span class="kpi-value" id="kpi-pnl">-</span>
+        </div>
+        <div class="kpi-card">
+            <span class="kpi-label">Total Trades</span>
+            <span class="kpi-value" id="kpi-total">-</span>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="analytics-grid">
+        <div class="card">
+            <h3>Equity Curve</h3>
+            <div id="equity-chart" style="height:300px;"></div>
+        </div>
+        <div class="card">
+            <h3>Rolling Win Rate (20 trades)</h3>
+            <div id="winrate-chart" style="height:300px;"></div>
+        </div>
+    </div>
+
+    <!-- R-Multiple Distribution -->
+    <div class="card" style="margin-top:16px;">
+        <h3>R-Multiple Distribution</h3>
+        <div id="r-dist" class="r-dist-grid"></div>
+    </div>
+
+    <!-- Breakdowns -->
+    <div class="analytics-grid" style="margin-top:16px;">
+        <div class="card">
+            <h3>By Regime</h3>
+            <div id="by-regime"></div>
+        </div>
+        <div class="card">
+            <h3>By Quality Score</h3>
+            <div id="by-qs"></div>
+        </div>
+        <div class="card">
+            <h3>By Direction</h3>
+            <div id="by-direction"></div>
+        </div>
+        <div class="card">
+            <h3>By Asset</h3>
+            <div id="by-symbol"></div>
+        </div>
+    </div>
+
+    <!-- Best / Worst -->
+    <div class="analytics-grid" style="margin-top:16px;">
+        <div class="card">
+            <h3>Best Trade</h3>
+            <div id="best-trade"></div>
+        </div>
+        <div class="card">
+            <h3>Worst Trade</h3>
+            <div id="worst-trade"></div>
+        </div>
+    </div>
+
+    <!-- Insights -->
+    <div class="card" style="margin-top:16px;">
+        <h3>Insights</h3>
+        <div id="insights"></div>
+    </div>
+
+    <!-- Signal History Summary -->
+    <div class="card" style="margin-top:16px;">
+        <h3>Signal Win Rate (Theoretical)</h3>
+        <div id="signal-analytics"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let equityChart = null;
+let winrateChart = null;
+
+async function loadAnalytics() {
+    try {
+        const [tradeRes, signalRes] = await Promise.all([
+            fetch('/api/trades/analytics'),
+            fetch('/api/signals/analytics'),
+        ]);
+        const data = await tradeRes.json();
+        const sigData = await signalRes.json();
+
+        document.getElementById('analytics-loading').style.display = 'none';
+        document.getElementById('kpi-section').style.display = 'block';
+
+        if (data.total_trades === 0) {
+            document.getElementById('kpi-section').innerHTML =
+                '<div class="card" style="text-align:center; padding:40px;"><p>No closed trades yet. Record trades in the <a href="/trades">Trade Journal</a> to see analytics.</p></div>';
+            renderSignalAnalytics(sigData);
+            return;
+        }
+
+        renderKPIs(data);
+        renderEquityCurve(data.equity_curve);
+        renderRollingWinRate(data.rolling_win_rate);
+        renderRDist(data.r_distribution);
+        renderBreakdown('by-regime', data.by_regime);
+        renderBreakdown('by-qs', data.by_quality_score);
+        renderBreakdown('by-direction', data.by_direction);
+        renderBreakdown('by-symbol', data.by_symbol);
+        renderTradeSummary('best-trade', data.best_trade);
+        renderTradeSummary('worst-trade', data.worst_trade);
+        renderInsights(data.insights);
+        renderSignalAnalytics(sigData);
+    } catch (e) {
+        console.error('Analytics error:', e);
+        document.getElementById('analytics-loading').innerHTML =
+            '<p style="color:var(--accent-red);">Failed to load analytics</p>';
+    }
+}
+
+function renderKPIs(d) {
+    const pnlClass = d.net_pnl >= 0 ? 'price-up' : 'price-down';
+    document.getElementById('kpi-winrate').textContent = d.win_rate + '%';
+    document.getElementById('kpi-winrate').className = 'kpi-value ' + (d.win_rate >= 50 ? 'price-up' : 'price-down');
+    document.getElementById('kpi-pf').textContent = d.profit_factor === Infinity ? 'Inf' : d.profit_factor;
+    document.getElementById('kpi-avgr').textContent = (d.avg_r_multiple >= 0 ? '+' : '') + d.avg_r_multiple + 'R';
+    document.getElementById('kpi-avgr').className = 'kpi-value ' + (d.avg_r_multiple >= 0 ? 'price-up' : 'price-down');
+    document.getElementById('kpi-dd').textContent = d.max_drawdown.toFixed(2);
+    document.getElementById('kpi-dd').className = 'kpi-value price-down';
+    document.getElementById('kpi-pnl').textContent = (d.net_pnl >= 0 ? '+' : '') + d.net_pnl.toFixed(2);
+    document.getElementById('kpi-pnl').className = 'kpi-value ' + pnlClass;
+    document.getElementById('kpi-total').textContent = d.total_trades;
+}
+
+function renderEquityCurve(curve) {
+    const container = document.getElementById('equity-chart');
+    equityChart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#1c2128' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d' },
+    });
+    const series = equityChart.addAreaSeries({
+        lineColor: '#58a6ff',
+        topColor: 'rgba(88, 166, 255, 0.3)',
+        bottomColor: 'rgba(88, 166, 255, 0.0)',
+        lineWidth: 2,
+    });
+    const data = curve.map((p, i) => ({
+        time: p.timestamp ? p.timestamp.split('T')[0] : `2026-01-${String(i+1).padStart(2,'0')}`,
+        value: p.cumulative_pnl,
+    }));
+    // Deduplicate by time (keep last)
+    const seen = {};
+    data.forEach(d => seen[d.time] = d);
+    series.setData(Object.values(seen));
+    equityChart.timeScale().fitContent();
+}
+
+function renderRollingWinRate(rolling) {
+    const container = document.getElementById('winrate-chart');
+    winrateChart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#1c2128' }, textColor: '#8b949e' },
+        grid: { vertLines: { color: '#30363d' }, horzLines: { color: '#30363d' } },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d' },
+    });
+    const series = winrateChart.addLineSeries({
+        color: '#3fb950', lineWidth: 2,
+    });
+    const data = rolling.map((p, i) => ({
+        time: p.timestamp ? p.timestamp.split('T')[0] : `2026-01-${String(i+1).padStart(2,'0')}`,
+        value: p.win_rate,
+    }));
+    const seen = {};
+    data.forEach(d => seen[d.time] = d);
+    series.setData(Object.values(seen));
+    // 50% reference line
+    const refLine = winrateChart.addLineSeries({
+        color: 'rgba(248, 81, 73, 0.5)', lineWidth: 1, lineStyle: 2,
+    });
+    if (Object.keys(seen).length >= 2) {
+        const keys = Object.keys(seen);
+        refLine.setData([
+            { time: keys[0], value: 50 },
+            { time: keys[keys.length - 1], value: 50 },
+        ]);
+    }
+    winrateChart.timeScale().fitContent();
+}
+
+function renderRDist(dist) {
+    const el = document.getElementById('r-dist');
+    const maxVal = Math.max(...Object.values(dist), 1);
+    el.innerHTML = Object.entries(dist).map(([label, count]) => {
+        const pct = (count / maxVal * 100).toFixed(0);
+        const color = label.includes('-') || label.startsWith('<') ? 'var(--accent-red)' : 'var(--accent-green)';
+        return `<div class="r-bar-row">
+            <span class="r-bar-label">${label}</span>
+            <div class="r-bar-track"><div class="r-bar-fill" style="width:${pct}%; background:${color};"></div></div>
+            <span class="r-bar-count">${count}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderBreakdown(id, data) {
+    const el = document.getElementById(id);
+    if (!data || !Object.keys(data).length) {
+        el.innerHTML = '<p class="info-sub">No data</p>';
+        return;
+    }
+    el.innerHTML = Object.entries(data).map(([key, stats]) => {
+        const wrClass = stats.win_rate >= 50 ? 'price-up' : 'price-down';
+        return `<div class="info-row">
+            <span><strong>${key}</strong> (${stats.total} trades)</span>
+            <span class="${wrClass}" style="font-family:monospace;">${stats.win_rate}% WR</span>
+        </div>`;
+    }).join('');
+}
+
+function renderTradeSummary(id, trade) {
+    if (!trade) return;
+    const el = document.getElementById(id);
+    const pnlClass = (trade.outcome_pips || 0) >= 0 ? 'price-up' : 'price-down';
+    el.innerHTML = `
+        <div class="info-row"><span>Asset</span><span><strong>${trade.symbol}</strong></span></div>
+        <div class="info-row"><span>Direction</span><span>${trade.direction}</span></div>
+        <div class="info-row"><span>P&L</span><span class="${pnlClass}" style="font-family:monospace;">${trade.outcome_pips !== null ? trade.outcome_pips.toFixed(2) : '-'}</span></div>
+        <div class="info-row"><span>R-Multiple</span><span style="font-family:monospace;">${trade.r_multiple !== null ? trade.r_multiple.toFixed(2) + 'R' : '-'}</span></div>
+        <div class="info-row"><span>Date</span><span>${trade.timestamp ? new Date(trade.timestamp).toLocaleDateString() : '-'}</span></div>
+    `;
+}
+
+function renderInsights(insights) {
+    const el = document.getElementById('insights');
+    el.innerHTML = insights.map(i =>
+        `<div class="insight-item">${i}</div>`
+    ).join('');
+}
+
+function renderSignalAnalytics(data) {
+    const el = document.getElementById('signal-analytics');
+    if (!data || data.total_signals === 0) {
+        el.innerHTML = '<p class="info-sub">No signals generated yet</p>';
+        return;
+    }
+    el.innerHTML = `
+        <div class="info-row"><span>Total signals generated</span><span>${data.total_signals}</span></div>
+        <div class="info-row"><span>Resolved (TP/SL hit)</span><span>${data.resolved}</span></div>
+        <div class="info-row"><span>Pending</span><span>${data.pending}</span></div>
+        <div class="info-row"><span>TP Hits</span><span class="price-up">${data.tp_hits}</span></div>
+        <div class="info-row"><span>SL Hits</span><span class="price-down">${data.sl_hits}</span></div>
+        <div class="info-row"><span>Theoretical Win Rate</span>
+            <span style="font-size:18px; font-weight:700; font-family:monospace;" class="${data.theoretical_win_rate >= 50 ? 'price-up' : 'price-down'}">
+                ${data.theoretical_win_rate}%
+            </span>
+        </div>
+    `;
+}
+
+document.addEventListener('DOMContentLoaded', loadAnalytics);
+</script>
+{% endblock %}
