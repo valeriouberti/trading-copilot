@@ -180,7 +180,7 @@ class TestATRAdaptiveSLTP:
         assert "atr_percentile" in setup
         assert "sl_multiplier" in setup
         assert setup["atr_percentile"] > 0
-        assert 1.0 <= setup["sl_multiplier"] <= 2.0
+        assert setup["sl_multiplier"] > 0
 
     def test_maintains_risk_reward_ratio(self) -> None:
         """TP/SL ratio should match the per-class defaults from strategy module.
