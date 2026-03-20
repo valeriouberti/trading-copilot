@@ -905,22 +905,22 @@ cat backup.sql | docker compose exec -T postgres psql -U trading trading
 |-------|---------|--------|------------|
 | 5.1 | Struttura progetto + FastAPI + SQLAlchemy | `DONE` | Nessuna |
 | 5.2 | Dashboard HTML | `DONE` | 5.1 |
-| 5.3 | Config management UI | `TODO` | 5.2 |
+| 5.3 | Config management UI | `DONE` | 5.2 |
 | 6.1 | Analysis service layer | `DONE` | 5.1 |
 | 6.2 | Asset detail page + chart | `DONE` | 6.1 |
 | 6.3 | Entry/SL/TP calculator | `DONE` | 6.2 |
-| 7.1 | Telegram bot setup | `TODO` | 5.1 |
-| 7.2 | Notification triggers | `TODO` | 7.1 + 6.1 |
+| 7.1 | Telegram bot setup | `DONE` | 5.1 |
+| 7.2 | Notification triggers | `DONE` | 7.1 + 6.1 |
 | 8.1 | Background price monitor | `TODO` | 6.1 |
 | 8.2 | Signal detection engine | `TODO` | 8.1 + 6.3 |
 | 8.3 | WebSocket real-time push | `TODO` | 8.2 |
 | 9.1 | Trade journal UI | `TODO` | 5.2 |
 | 9.2 | Performance analytics | `TODO` | 9.1 |
 | 9.3 | Signal history | `TODO` | 8.2 + 9.1 |
-| 10.1 | Dockerfile | `TODO` | 5.1 |
-| 10.2 | Docker Compose + PostgreSQL | `TODO` | 10.1 |
+| 10.1 | Dockerfile | `DONE` | 5.1 |
+| 10.2 | Docker Compose + PostgreSQL | `DONE` | 10.1 |
 | 10.3 | Alembic migrations | `DONE` | 5.1 |
-| 10.4 | Comandi operativi + docs | `TODO` | 10.2 |
+| 10.4 | Comandi operativi + docs | `DONE` | 10.2 |
 
 ### Ordine di Implementazione Consigliato
 

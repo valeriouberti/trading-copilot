@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from app.api import analysis as analysis_router
 from app.api import assets as assets_router
 from app.api import health as health_router
+from app.api import settings as settings_router
 from app.config import get_database_url, load_config
 from app.models.database import Base
 from app.models.engine import get_engine, get_session_factory
@@ -69,6 +70,7 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 app.include_router(health_router.router, prefix="/api", tags=["health"])
 app.include_router(assets_router.router, prefix="/api", tags=["assets"])
 app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
+app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 
 
 # ---------------------------------------------------------------------------
@@ -106,5 +108,17 @@ async def asset_detail(request: Request, symbol: str):
             "request": request,
             "asset": asset,
             "title": f"{asset['display_name']} — Trading Copilot",
+        },
+    )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Render the settings page."""
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "title": "Settings — Trading Copilot",
         },
     )

@@ -44,6 +44,19 @@ def load_config(path: str | None = None) -> dict:
     return config
 
 
+def reload_config() -> dict:
+    """Clear the cache and reload config from disk."""
+    load_config.cache_clear()
+    return load_config()
+
+
+def save_config(config: dict, path: str | None = None) -> None:
+    """Write the config dict back to config.yaml, preserving comments where possible."""
+    config_path = Path(path) if path else _CONFIG_PATH
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
 def get_database_url() -> str:
     """Resolve database URL.
 

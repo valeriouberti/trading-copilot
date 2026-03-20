@@ -102,3 +102,6 @@ trading.db-wal
 
 # Trade log (generated)
 trade_log.csv
+
+# Docker volumes
+pgdata/
