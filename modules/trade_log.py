@@ -18,8 +18,8 @@ TRADE_LOG_FILE = "trade_log.csv"
 
 COLUMNS = [
     "date", "asset", "llm_score", "tech_signal", "poly_signal",
-    "direction", "entry_price", "exit_price", "outcome_pips",
-    "llm_correct", "notes",
+    "direction", "quality_score", "entry_price", "exit_price",
+    "outcome_pips", "llm_correct", "notes",
 ]
 
 
@@ -38,6 +38,7 @@ def log_trade(
     tech_signal: str,
     poly_signal: str,
     direction: str,
+    quality_score: int = 0,
     entry_price: float = 0.0,
     exit_price: float = 0.0,
     outcome_pips: float = 0.0,
@@ -55,8 +56,8 @@ def log_trade(
 
     row = [
         today, asset, f"{llm_score:+.1f}", tech_signal, poly_signal,
-        direction, f"{entry_price:.2f}", f"{exit_price:.2f}",
-        f"{outcome_pips:.1f}", llm_correct, notes,
+        direction, str(quality_score), f"{entry_price:.2f}",
+        f"{exit_price:.2f}", f"{outcome_pips:.1f}", llm_correct, notes,
     ]
 
     with open(log_path, "a", newline="", encoding="utf-8") as f:

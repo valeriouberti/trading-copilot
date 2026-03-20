@@ -109,6 +109,31 @@ def _mtf_cell(asset: Any) -> str:
     )
 
 
+def _quality_badge(asset: Any) -> str:
+    """Build inline quality score badge for the asset table."""
+    qs = getattr(asset, "quality_score", None)
+    if not qs:
+        return '<span style="color:#64748b;">N/A</span>'
+    colors = {5: "#22c55e", 4: "#4ade80", 3: "#eab308", 2: "#f97316", 1: "#ef4444", 0: "#6b7280"}
+    color = colors.get(qs.total, "#6b7280")
+    factors = []
+    if qs.confluence:
+        factors.append("C")
+    if qs.strong_trend:
+        factors.append("T")
+    if qs.near_key_level:
+        factors.append("L")
+    if qs.candle_pattern:
+        factors.append("P")
+    if qs.volume_above_avg:
+        factors.append("V")
+    detail = "+".join(factors) if factors else "-"
+    return (
+        f'<span style="color:{color};font-weight:bold;font-size:1.2em;">{qs.total}/5</span>'
+        f'<br><span style="color:#9ca3af;font-size:0.75em;">{detail}</span>'
+    )
+
+
 def _category_badge(category: str) -> str:
     """Colored HTML badge for the market category."""
     colors = {
@@ -569,6 +594,121 @@ def _build_mtf_section(asset_analyses: list[Any]) -> str:
     </div>"""
 
 
+def _build_quality_score_section(asset_analyses: list[Any]) -> str:
+    """Build the HTML section showing quality score breakdown per asset."""
+    has_qs = any(
+        getattr(a, "quality_score", None) is not None
+        and getattr(a, "error", None) is None
+        for a in asset_analyses
+    )
+    if not has_qs:
+        return ""
+
+    cards = ""
+    for a in asset_analyses:
+        qs = getattr(a, "quality_score", None)
+        if not qs or getattr(a, "error", None):
+            continue
+
+        colors = {5: "#22c55e", 4: "#4ade80", 3: "#eab308", 2: "#f97316", 1: "#ef4444", 0: "#6b7280"}
+        score_color = colors.get(qs.total, "#6b7280")
+        tradeable = qs.total >= 4
+        trade_badge = (
+            '<span style="color:#22c55e;">TRADEABLE</span>'
+            if tradeable else
+            '<span style="color:#ef4444;">SKIP &mdash; low quality</span>'
+        )
+
+        def _check(val: bool) -> str:
+            return "&#9989;" if val else "&#10060;"
+
+        cards += f"""
+            <div style="background:#0f172a;border:1px solid {'#22c55e' if tradeable else '#374151'};border-radius:8px;padding:16px;min-width:200px;flex:1;">
+                <h3 style="margin:0 0 8px;color:#f1f5f9;font-size:1em;">{a.display_name}</h3>
+                <div style="text-align:center;margin:8px 0;">
+                    <span style="color:{score_color};font-size:2em;font-weight:bold;">{qs.total}/5</span>
+                    <div style="margin-top:4px;">{trade_badge}</div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+                    <tr><td style="padding:3px;color:#94a3b8;">{_check(qs.confluence)} Confluence (4+ signals)</td></tr>
+                    <tr><td style="padding:3px;color:#94a3b8;">{_check(qs.strong_trend)} Strong Trend (ADX&gt;25)</td></tr>
+                    <tr><td style="padding:3px;color:#94a3b8;">{_check(qs.near_key_level)} Near Key Level</td></tr>
+                    <tr><td style="padding:3px;color:#94a3b8;">{_check(qs.candle_pattern)} Candle Pattern</td></tr>
+                    <tr><td style="padding:3px;color:#94a3b8;">{_check(qs.volume_above_avg)} Volume Above Avg</td></tr>
+                </table>
+            </div>"""
+
+    return f"""
+    <!-- QUALITY SCORE -->
+    <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 16px;color:#f1f5f9;">Setup Quality Score</h2>
+        <p style="color:#94a3b8;margin:0 0 16px;font-size:0.85em;">Rule: only trade setups with score &ge; 4/5</p>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            {cards}
+        </div>
+    </div>"""
+
+
+def _build_correlation_section(
+    asset_analyses: list[Any],
+    corr_matrix: Any | None = None,
+    filtered_symbols: list[str] | None = None,
+) -> str:
+    """Build the HTML section for the correlation matrix."""
+    if corr_matrix is None or len(corr_matrix) < 2:
+        return ""
+
+    filtered = set(filtered_symbols or [])
+    symbols = list(corr_matrix.index)
+
+    name_map = {a.symbol: a.display_name for a in asset_analyses if a.error is None}
+
+    header_cells = '<th style="padding:8px;color:#94a3b8;"></th>'
+    for sym in symbols:
+        name = name_map.get(sym, sym)
+        header_cells += f'<th style="padding:8px;color:#94a3b8;font-size:0.85em;">{name}</th>'
+
+    data_rows = ""
+    for sym_a in symbols:
+        name_a = name_map.get(sym_a, sym_a)
+        cells = f'<td style="padding:8px;color:#94a3b8;font-weight:bold;font-size:0.85em;">{name_a}</td>'
+        for sym_b in symbols:
+            val = float(corr_matrix.loc[sym_a, sym_b])
+            if sym_a == sym_b:
+                cells += '<td style="padding:8px;text-align:center;color:#6b7280;">1.00</td>'
+            else:
+                if abs(val) > 0.7:
+                    cell_color = "#ef4444"
+                    cell_bg = "background:#3d1f1f;"
+                elif abs(val) > 0.5:
+                    cell_color = "#f59e0b"
+                    cell_bg = ""
+                else:
+                    cell_color = "#9ca3af"
+                    cell_bg = ""
+                cells += f'<td style="padding:8px;text-align:center;color:{cell_color};{cell_bg}">{val:+.2f}</td>'
+        data_rows += f'<tr>{cells}</tr>'
+
+    filter_html = ""
+    if filtered:
+        filtered_names = [name_map.get(s, s) for s in filtered]
+        filter_html = f"""
+        <div style="background:#3d2f0f;border:1px solid #f59e0b;border-radius:8px;padding:12px;margin-top:16px;">
+            <span style="color:#fcd34d;">&#9888; Correlation filter: skip same-direction trades on {', '.join(filtered_names)} (corr &gt; 0.7)</span>
+        </div>"""
+
+    return f"""
+    <!-- CORRELATION MATRIX -->
+    <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 16px;color:#f1f5f9;">Correlation Matrix (30-day returns)</h2>
+        <table style="width:auto;border-collapse:collapse;color:#e2e8f0;font-size:0.9em;margin:0 auto;">
+            <thead><tr style="border-bottom:2px solid #374151;">{header_cells}</tr></thead>
+            <tbody>{data_rows}</tbody>
+        </table>
+        {filter_html}
+    </div>"""
+
+
 def _build_key_levels_section(asset_analyses: list[Any]) -> str:
     """Build the HTML section for key S/R levels."""
     has_levels = any(
@@ -675,6 +815,8 @@ def generate_report(
     regime: str = "NEUTRAL",
     regime_reason: str = "",
     calendar_data: Any | None = None,
+    corr_matrix: Any | None = None,
+    filtered_symbols: list[str] | None = None,
 ) -> str:
     """Generate the HTML report and return the file path.
 
@@ -686,6 +828,8 @@ def generate_report(
         poly_data: Optional Polymarket data from get_polymarket_context().
         validation_flags: Validation flags including Polymarket ones.
         calendar_data: Optional CalendarData from economic calendar.
+        corr_matrix: Optional correlation matrix DataFrame.
+        filtered_symbols: List of symbols filtered out by correlation.
 
     Returns:
         Absolute path to the generated HTML file.
@@ -705,7 +849,7 @@ def generate_report(
             asset_rows += f"""
             <tr>
                 <td style="padding:10px;border-bottom:1px solid #374151;font-weight:bold;">{a.display_name}</td>
-                <td colspan="14" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
+                <td colspan="15" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
                     Error: {a.error}
                 </td>
             </tr>"""
@@ -772,6 +916,7 @@ def generate_report(
                     <span style="color:{score_color};font-weight:bold;">{a.composite_score}</span>
                     <span style="color:#9ca3af;font-size:0.85em;"> ({a.confidence_pct}%)</span></td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{_mtf_cell(a)}</td>
+                <td style="padding:10px;border-bottom:1px solid #374151;">{_quality_badge(a)}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">
                     <span style="color:{_signal_color(bias)}">{bias}</span></td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{poly_cell}</td>
@@ -910,6 +1055,7 @@ def generate_report(
                     <th style="padding:10px;text-align:left;color:#94a3b8;">ADX</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Score</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">MTF</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">QS</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">LLM Bias</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Poly</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Action</th>
@@ -920,6 +1066,10 @@ def generate_report(
             </tbody>
         </table>
     </div>
+
+    {_build_quality_score_section(asset_analyses)}
+
+    {_build_correlation_section(asset_analyses, corr_matrix, filtered_symbols)}
 
     {_build_key_levels_section(asset_analyses)}
 
@@ -972,6 +1122,8 @@ def print_terminal_summary(
     regime_reason: str = "",
     validation_flags: list[str] | None = None,
     calendar_data: Any | None = None,
+    corr_matrix: Any | None = None,
+    filtered_symbols: list[str] | None = None,
 ) -> None:
     """Print a compact ASCII summary to the terminal."""
     session = get_market_session()
@@ -1033,13 +1185,14 @@ def print_terminal_summary(
         time_str = f"{m}m" if m < 60 else f"{m // 60}h {m % 60}m"
         print(f"    Next high-quality: {sess['next_high_session']} in {time_str}")
 
-    print(f"\n  {'Asset':<25} {'Price':>12} {'Score':<10} {'MTF':<12} {'Action':<20}")
-    print("  " + "-" * 79)
+    print(f"\n  {'Asset':<25} {'Price':>12} {'Score':<10} {'MTF':<12} {'QS':>4} {'Action':<20}")
+    print("  " + "-" * 83)
 
     asset_biases = getattr(sentiment, "asset_biases", {})
+    filtered = set(filtered_symbols or [])
     for a in asset_analyses:
         if a.error:
-            print(f"  {a.display_name:<25} {'ERROR':>12} {'':10} {'':12} {a.error[:20]}")
+            print(f"  {a.display_name:<25} {'ERROR':>12} {'':10} {'':12} {'':>4} {a.error[:20]}")
             continue
         price_str = f"{a.price:,.2f}" if a.price else "N/A"
         a_bias = asset_biases.get(a.symbol, bias)
@@ -1049,6 +1202,10 @@ def print_terminal_summary(
         mtf = getattr(a, "mtf", None)
         mtf_str = mtf.alignment if mtf else "N/A"
 
+        # Quality score
+        qs = getattr(a, "quality_score", None)
+        qs_str = f"{qs.total}/5" if qs else "N/A"
+
         # Key level proximity note
         kl = getattr(a, "key_levels", None)
         level_note = ""
@@ -1057,7 +1214,10 @@ def print_terminal_summary(
             if dist < 0.5:
                 level_note = f" [!{kl.nearest_level_name} {dist:.1f}%]"
 
-        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {mtf_str:<12} {hint:<20}{level_note}")
+        # Correlation filter note
+        corr_note = " [CORR-SKIP]" if a.symbol in filtered else ""
+
+        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {mtf_str:<12} {qs_str:>4} {hint:<20}{level_note}{corr_note}")
 
     print(f"\n  News analyzed: {news_count}")
 

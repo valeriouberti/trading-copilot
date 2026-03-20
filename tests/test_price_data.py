@@ -13,14 +13,19 @@ from modules.price_data import (
     AssetAnalysis,
     KeyLevels,
     MTFAnalysis,
+    QualityScore,
     TechnicalSignal,
     _analyze_mtf,
     _analyze_single_asset,
     _compute_ema_trend,
     _compute_key_levels,
+    _compute_quality_score,
+    _detect_candle_pattern,
     _fetch_twelvedata,
     _psych_step,
     analyze_assets,
+    compute_correlation_matrix,
+    filter_correlated_assets,
 )
 
 
@@ -848,3 +853,380 @@ class TestMTFPenalty:
         assert "mtf" in d
         assert d["mtf"] is not None
         assert "alignment" in d["mtf"]
+
+
+# ---------------------------------------------------------------------------
+# Quality Score
+# ---------------------------------------------------------------------------
+
+
+class TestDetectCandlePattern:
+    def test_bullish_engulfing(self) -> None:
+        """Bullish engulfing: prev red, current green wrapping prev body."""
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        df = pd.DataFrame({
+            "Open": [100, 105, 98],   # prev: O>C (red), last: O<C (green)
+            "High": [106, 106, 107],
+            "Low": [99, 97, 97],
+            "Close": [102, 99, 106],  # last wraps prev body (99→105)
+        }, index=dates)
+        assert _detect_candle_pattern(df, "BULLISH") is True
+        assert _detect_candle_pattern(df, "BEARISH") is False
+
+    def test_bearish_engulfing(self) -> None:
+        """Bearish engulfing: prev green, current red wrapping prev body."""
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        df = pd.DataFrame({
+            "Open": [100, 98, 106],   # prev: O<C (green), last: O>C (red)
+            "High": [106, 106, 107],
+            "Low": [99, 97, 97],
+            "Close": [102, 105, 97],  # last wraps prev body (105→98)
+        }, index=dates)
+        assert _detect_candle_pattern(df, "BEARISH") is True
+        assert _detect_candle_pattern(df, "BULLISH") is False
+
+    def test_bullish_pin_bar(self) -> None:
+        """Bullish pin bar: long lower wick relative to body."""
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        df = pd.DataFrame({
+            "Open": [100, 100, 99.5],
+            "High": [101, 101, 100.2],
+            "Low": [99, 99, 96.0],     # lower_wick = 99.5-96=3.5, body=0.5, upper=0.2
+            "Close": [100.5, 100.5, 100.0],
+        }, index=dates)
+        assert _detect_candle_pattern(df, "BULLISH") is True
+
+    def test_bearish_pin_bar(self) -> None:
+        """Bearish pin bar: long upper wick relative to body."""
+        dates = pd.date_range("2024-01-01", periods=3, freq="D")
+        df = pd.DataFrame({
+            "Open": [100, 100, 100.5],
+            "High": [101, 101, 104.0],   # upper_wick = 104-100.5=3.5, body=0.5
+            "Low": [99, 99, 99.8],
+            "Close": [100.5, 100.5, 100.0],
+        }, index=dates)
+        assert _detect_candle_pattern(df, "BEARISH") is True
+
+    def test_no_pattern(self) -> None:
+        """No special pattern detected."""
+        df = _make_ohlcv_df(100, "flat")
+        # Most bars in a flat series won't form engulfing/pin bar
+        # At least test that it doesn't crash
+        result = _detect_candle_pattern(df, "NEUTRAL")
+        assert isinstance(result, bool)
+
+    def test_insufficient_data(self) -> None:
+        """Should return False with < 2 bars."""
+        df = _make_ohlcv_df(1, "up")
+        assert _detect_candle_pattern(df, "BULLISH") is False
+
+
+class TestComputeQualityScore:
+    def _make_signals(self, bullish: int = 0, bearish: int = 0, adx_val: float = 20.0) -> list:
+        """Helper to create a specific mix of directional signals."""
+        from modules.price_data import TechnicalSignal
+        names = ["RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"]
+        signals = []
+        for i, name in enumerate(names):
+            if i < bullish:
+                signals.append(TechnicalSignal(name, 50.0, "BULLISH", "test"))
+            elif i < bullish + bearish:
+                signals.append(TechnicalSignal(name, 50.0, "BEARISH", "test"))
+            else:
+                signals.append(TechnicalSignal(name, 50.0, "NEUTRAL", "test"))
+        signals.append(TechnicalSignal("ADX", adx_val, "NEUTRAL", f"ADX {adx_val}"))
+        return signals
+
+    def test_max_score(self) -> None:
+        """With all factors present, score should be 5."""
+        # Create data where volume is above average
+        df = _make_ohlcv_df(100, "up")
+        # Force last bar volume very high
+        df.iloc[-1, df.columns.get_loc("Volume")] = 999999.0
+
+        kl = KeyLevels(
+            nearest_level_dist_pct=0.2,  # close to key level
+            nearest_level=float(df["Close"].iloc[-1]) * 0.998,
+            nearest_level_name="PDH",
+        )
+
+        signals = self._make_signals(bullish=5, adx_val=30.0)
+        qs = _compute_quality_score(signals, "BULLISH", kl, df)
+
+        assert qs.confluence is True
+        assert qs.strong_trend is True
+        assert qs.near_key_level is True
+        assert qs.volume_above_avg is True
+        # candle_pattern depends on actual candle shape, may or may not be true
+        assert qs.total >= 4
+
+    def test_zero_score_neutral(self) -> None:
+        """NEUTRAL composite should get 0 confluence."""
+        df = _make_ohlcv_df(100, "flat")
+        signals = self._make_signals(bullish=3, bearish=3, adx_val=15.0)
+        qs = _compute_quality_score(signals, "NEUTRAL", None, df)
+        assert qs.confluence is False
+        assert qs.strong_trend is False
+        assert qs.near_key_level is False
+        assert qs.total <= 2  # only volume_above_avg and candle_pattern possible
+
+    def test_confluence_requires_4(self) -> None:
+        """3 bullish signals should NOT trigger confluence."""
+        df = _make_ohlcv_df(100, "up")
+        signals = self._make_signals(bullish=3, adx_val=15.0)
+        qs = _compute_quality_score(signals, "BULLISH", None, df)
+        assert qs.confluence is False
+
+    def test_confluence_with_4(self) -> None:
+        """4 bullish signals SHOULD trigger confluence."""
+        df = _make_ohlcv_df(100, "up")
+        signals = self._make_signals(bullish=4, adx_val=15.0)
+        qs = _compute_quality_score(signals, "BULLISH", None, df)
+        assert qs.confluence is True
+
+    def test_adx_threshold(self) -> None:
+        """ADX > 25 triggers strong_trend, ADX <= 25 does not."""
+        df = _make_ohlcv_df(100, "up")
+        signals_strong = self._make_signals(adx_val=30.0)
+        signals_weak = self._make_signals(adx_val=20.0)
+        qs_strong = _compute_quality_score(signals_strong, "BULLISH", None, df)
+        qs_weak = _compute_quality_score(signals_weak, "BULLISH", None, df)
+        assert qs_strong.strong_trend is True
+        assert qs_weak.strong_trend is False
+
+    def test_near_key_level(self) -> None:
+        """Price near key level should trigger near_key_level."""
+        df = _make_ohlcv_df(100, "up")
+        kl = KeyLevels(nearest_level_dist_pct=0.3, nearest_level=100.0, nearest_level_name="S1")
+        signals = self._make_signals()
+        qs = _compute_quality_score(signals, "BULLISH", kl, df)
+        assert qs.near_key_level is True
+
+    def test_far_from_key_level(self) -> None:
+        """Price far from key level should NOT trigger near_key_level."""
+        df = _make_ohlcv_df(100, "up")
+        kl = KeyLevels(nearest_level_dist_pct=2.0, nearest_level=100.0, nearest_level_name="S1")
+        signals = self._make_signals()
+        qs = _compute_quality_score(signals, "BULLISH", kl, df)
+        assert qs.near_key_level is False
+
+    def test_to_dict(self) -> None:
+        """QualityScore serialization."""
+        qs = QualityScore(
+            total=3,
+            confluence=True,
+            strong_trend=True,
+            near_key_level=False,
+            candle_pattern=False,
+            volume_above_avg=True,
+        )
+        d = qs.to_dict()
+        assert d["total"] == 3
+        assert d["confluence"] is True
+        assert d["volume_above_avg"] is True
+
+
+class TestQualityScoreInAnalysis:
+    def test_quality_score_present(self) -> None:
+        """Quality score should be populated in AssetAnalysis."""
+        daily_df = _make_ohlcv_df(100, "up")
+        intraday_df = _make_5m_df(200)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history = MagicMock(side_effect=_mock_ticker_side_effect(daily_df, intraday_df))
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            result = _analyze_single_asset("TEST=F", "Test")
+
+        assert result.quality_score is not None
+        assert 0 <= result.quality_score.total <= 5
+
+    def test_quality_score_in_to_dict(self) -> None:
+        """Quality score should appear in serialized output."""
+        daily_df = _make_ohlcv_df(100, "up")
+        intraday_df = _make_5m_df(200)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history = MagicMock(side_effect=_mock_ticker_side_effect(daily_df, intraday_df))
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            result = _analyze_single_asset("TEST=F", "Test")
+
+        d = result.to_dict()
+        assert "quality_score" in d
+        assert d["quality_score"] is not None
+        assert "total" in d["quality_score"]
+
+    def test_daily_closes_stored(self) -> None:
+        """Daily closes should be stored for correlation computation."""
+        daily_df = _make_ohlcv_df(100, "up")
+        intraday_df = _make_5m_df(200)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history = MagicMock(side_effect=_mock_ticker_side_effect(daily_df, intraday_df))
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            result = _analyze_single_asset("TEST=F", "Test")
+
+        assert result.daily_closes is not None
+        assert len(result.daily_closes) > 0
+
+
+# ---------------------------------------------------------------------------
+# Correlation Matrix
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCorrelationMatrix:
+    def test_two_correlated_assets(self) -> None:
+        """Two assets with same data should have correlation ~1.0."""
+        np.random.seed(42)
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        closes = pd.Series(np.linspace(100, 130, 60) + np.random.normal(0, 0.5, 60), index=dates)
+
+        a1 = AssetAnalysis(symbol="A", display_name="Asset A", price=130.0, change_pct=1.0, daily_closes=closes)
+        a2 = AssetAnalysis(symbol="B", display_name="Asset B", price=130.0, change_pct=1.0, daily_closes=closes)
+
+        matrix = compute_correlation_matrix([a1, a2])
+        assert matrix is not None
+        assert abs(float(matrix.loc["A", "B"]) - 1.0) < 0.01
+
+    def test_uncorrelated_assets(self) -> None:
+        """Two random independent assets should have low correlation."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        np.random.seed(42)
+        closes_a = pd.Series(100 + np.random.normal(0, 1, 60).cumsum(), index=dates)
+        np.random.seed(99)
+        closes_b = pd.Series(100 + np.random.normal(0, 1, 60).cumsum(), index=dates)
+
+        a1 = AssetAnalysis(symbol="A", display_name="A", price=100.0, change_pct=0.0, daily_closes=closes_a)
+        a2 = AssetAnalysis(symbol="B", display_name="B", price=100.0, change_pct=0.0, daily_closes=closes_b)
+
+        matrix = compute_correlation_matrix([a1, a2])
+        assert matrix is not None
+        assert abs(float(matrix.loc["A", "B"])) < 0.7  # should be reasonably uncorrelated
+
+    def test_insufficient_data_returns_none(self) -> None:
+        """Should return None if not enough data."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=10, freq="D")
+        closes = pd.Series(np.linspace(100, 110, 10), index=dates)
+
+        a1 = AssetAnalysis(symbol="A", display_name="A", price=110.0, change_pct=0.0, daily_closes=closes)
+        a2 = AssetAnalysis(symbol="B", display_name="B", price=110.0, change_pct=0.0, daily_closes=closes)
+
+        assert compute_correlation_matrix([a1, a2]) is None
+
+    def test_single_asset_returns_none(self) -> None:
+        """Should return None with only one asset."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        closes = pd.Series(np.linspace(100, 130, 60), index=dates)
+        a1 = AssetAnalysis(symbol="A", display_name="A", price=130.0, change_pct=0.0, daily_closes=closes)
+        assert compute_correlation_matrix([a1]) is None
+
+    def test_matrix_shape(self) -> None:
+        """Matrix should be N×N for N assets with sufficient data."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        np.random.seed(42)
+        assets = []
+        for sym in ["A", "B", "C"]:
+            closes = pd.Series(100 + np.random.normal(0, 1, 60).cumsum(), index=dates)
+            assets.append(AssetAnalysis(symbol=sym, display_name=sym, price=100.0, change_pct=0.0, daily_closes=closes))
+
+        matrix = compute_correlation_matrix(assets)
+        assert matrix is not None
+        assert matrix.shape == (3, 3)
+        assert list(matrix.index) == ["A", "B", "C"]
+
+
+class TestFilterCorrelatedAssets:
+    def test_same_direction_high_corr_filters(self) -> None:
+        """Two correlated assets in same direction: lower QS gets filtered."""
+        np.random.seed(42)
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        closes = pd.Series(np.linspace(100, 130, 60), index=dates)
+
+        a1 = AssetAnalysis(
+            symbol="NQ=F", display_name="NQ", price=130.0, change_pct=1.0,
+            composite_score="BULLISH", quality_score=QualityScore(total=4),
+            daily_closes=closes,
+        )
+        a2 = AssetAnalysis(
+            symbol="ES=F", display_name="ES", price=130.0, change_pct=1.0,
+            composite_score="BULLISH", quality_score=QualityScore(total=2),
+            daily_closes=closes,
+        )
+
+        matrix = compute_correlation_matrix([a1, a2])
+        filtered = filter_correlated_assets([a1, a2], matrix)
+        assert "ES=F" in filtered
+        assert "NQ=F" not in filtered
+
+    def test_different_direction_not_filtered(self) -> None:
+        """Correlated assets in different directions should NOT be filtered."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        closes = pd.Series(np.linspace(100, 130, 60), index=dates)
+
+        a1 = AssetAnalysis(
+            symbol="A", display_name="A", price=130.0, change_pct=1.0,
+            composite_score="BULLISH", quality_score=QualityScore(total=4),
+            daily_closes=closes,
+        )
+        a2 = AssetAnalysis(
+            symbol="B", display_name="B", price=130.0, change_pct=1.0,
+            composite_score="BEARISH", quality_score=QualityScore(total=2),
+            daily_closes=closes,
+        )
+
+        matrix = compute_correlation_matrix([a1, a2])
+        filtered = filter_correlated_assets([a1, a2], matrix)
+        assert len(filtered) == 0
+
+    def test_neutral_not_filtered(self) -> None:
+        """NEUTRAL assets should never be filtered."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        closes = pd.Series(np.linspace(100, 130, 60), index=dates)
+
+        a1 = AssetAnalysis(
+            symbol="A", display_name="A", price=130.0, change_pct=1.0,
+            composite_score="NEUTRAL", quality_score=QualityScore(total=4),
+            daily_closes=closes,
+        )
+        a2 = AssetAnalysis(
+            symbol="B", display_name="B", price=130.0, change_pct=1.0,
+            composite_score="NEUTRAL", quality_score=QualityScore(total=2),
+            daily_closes=closes,
+        )
+
+        matrix = compute_correlation_matrix([a1, a2])
+        filtered = filter_correlated_assets([a1, a2], matrix)
+        assert len(filtered) == 0
+
+    def test_low_correlation_not_filtered(self) -> None:
+        """Assets with low correlation should NOT be filtered."""
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=60, freq="D")
+        np.random.seed(42)
+        closes_a = pd.Series(100 + np.random.normal(0, 1, 60).cumsum(), index=dates)
+        np.random.seed(99)
+        closes_b = pd.Series(100 + np.random.normal(0, 1, 60).cumsum(), index=dates)
+
+        a1 = AssetAnalysis(
+            symbol="A", display_name="A", price=100.0, change_pct=1.0,
+            composite_score="BULLISH", quality_score=QualityScore(total=4),
+            daily_closes=closes_a,
+        )
+        a2 = AssetAnalysis(
+            symbol="B", display_name="B", price=100.0, change_pct=1.0,
+            composite_score="BULLISH", quality_score=QualityScore(total=2),
+            daily_closes=closes_b,
+        )
+
+        matrix = compute_correlation_matrix([a1, a2])
+        filtered = filter_correlated_assets([a1, a2], matrix)
+        # Low correlation shouldn't trigger filter
+        assert len(filtered) == 0
+
+    def test_none_matrix_returns_empty(self) -> None:
+        """None correlation matrix should return empty list."""
+        a1 = AssetAnalysis(symbol="A", display_name="A", price=100.0, change_pct=0.0)
+        filtered = filter_correlated_assets([a1], None)
+        assert filtered == []

@@ -132,15 +132,15 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 **Problema:** Tutti i segnali sono trattati come uguali. Un LONG su supporto con ADX 35 e engulfing bullish vale molto piu' di un LONG random su EMA touch con ADX 12 nel chop.
 
 **Cosa implementare:**
-- [ ] Score 1-5 per ogni setup basato su:
+- [x] Score 1-5 per ogni setup basato su:
   - Confluenza segnali (quanti indicatori concordano)
   - Forza del trend (ADX > 25 = +1)
   - Prossimita' a key level (entry vicino a S/R = +1)
   - Pattern candela (engulfing, pin bar = +1)
   - Volume sopra media = +1
-- [ ] Regola: trade solo setup con score >= 4
-- [ ] Visualizzazione score nel Pine Script e nel report
-- [ ] Storico quality score nel trade log per analisi post
+- [x] Regola: trade solo setup con score >= 4
+- [x] Visualizzazione score nel Pine Script e nel report
+- [x] Storico quality score nel trade log per analisi post
 
 **Impatto atteso:** Ridurre i trade di bassa qualita' del 30-40%. Aumento netto del profit factor.
 
@@ -157,10 +157,10 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 **Problema:** NQ e ES hanno correlazione ~0.95. Andare LONG su entrambi raddoppia il rischio su un singolo trade. Se il segnale e' sbagliato, si perde 2% invece di 1%.
 
 **Cosa implementare:**
-- [ ] Matrice di correlazione (30 giorni, rendimenti giornalieri) nel report
-- [ ] Regola: mai trade same-direction su asset con correlazione > 0.7
-- [ ] Selezione automatica: tra asset correlati, scegli quello con quality score migliore
-- [ ] Visualizzazione matrice nel report HTML
+- [x] Matrice di correlazione (30 giorni, rendimenti giornalieri) nel report
+- [x] Regola: mai trade same-direction su asset con correlazione > 0.7
+- [x] Selezione automatica: tra asset correlati, scegli quello con quality score migliore
+- [x] Visualizzazione matrice nel report HTML
 
 **Impatto atteso:** Evitare concentrazione di rischio. Diversificazione reale del portafoglio trade.
 
@@ -191,9 +191,9 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 | 2.1 | Trailing Stop | `DONE` | 3 exit modes (Fixed TP, Trailing Stop, Partial+Trail), BE at +1R, trail at +2R, dynamic SL line, R-multiple markers, exit alerts |
 | 3.1 | Multi-Timeframe | `DONE` | Weekly/Daily/1H EMA trend, MTF alignment (ALIGNED/PARTIAL/CONFLICTING), composite score penalty, report cards |
 | 3.2 | Session Filter | `DONE` | Pine Script session filter (London/NYSE), dead zone blocking, session info in report, configurable windows |
-| 4.1 | Quality Score | `TODO` | |
-| 4.2 | Correlation Filter | `TODO` | |
+| 4.1 | Quality Score | `DONE` | Score 1-5 (confluence, ADX>25, key level, candle pattern, volume), QS column in report, Pine Script filter, trade_log recording |
+| 4.2 | Correlation Filter | `DONE` | 30-day return correlation matrix, >0.7 threshold filters same-direction trades, auto-select best QS, heatmap in HTML report |
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026*
+*Ultimo aggiornamento: 20 Marzo 2026 — All phases DONE*

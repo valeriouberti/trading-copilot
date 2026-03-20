@@ -124,6 +124,35 @@ class MTFAnalysis:
 
 
 @dataclass
+class QualityScore:
+    """Setup quality score (1-5) for an asset.
+
+    Each factor adds +1:
+    - confluence: 4+ directional signals agree
+    - strong_trend: ADX > 25
+    - near_key_level: price within 0.5% of S/R
+    - candle_pattern: engulfing or pin bar on last daily candle
+    - volume_above_avg: last bar volume > 20-day average
+    """
+    total: int = 0
+    confluence: bool = False
+    strong_trend: bool = False
+    near_key_level: bool = False
+    candle_pattern: bool = False
+    volume_above_avg: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total": self.total,
+            "confluence": self.confluence,
+            "strong_trend": self.strong_trend,
+            "near_key_level": self.near_key_level,
+            "candle_pattern": self.candle_pattern,
+            "volume_above_avg": self.volume_above_avg,
+        }
+
+
+@dataclass
 class AssetAnalysis:
     """Complete technical analysis for one asset."""
     symbol: str
@@ -136,6 +165,8 @@ class AssetAnalysis:
     data_source: str = "yfinance"
     key_levels: KeyLevels | None = None
     mtf: MTFAnalysis | None = None
+    quality_score: QualityScore | None = None
+    daily_closes: pd.Series | None = field(default=None, repr=False)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -150,6 +181,7 @@ class AssetAnalysis:
             "data_source": self.data_source,
             "key_levels": self.key_levels.to_dict() if self.key_levels else None,
             "mtf": self.mtf.to_dict() if self.mtf else None,
+            "quality_score": self.quality_score.to_dict() if self.quality_score else None,
             "error": self.error,
         }
 
@@ -518,6 +550,114 @@ def _analyze_mtf(
 
 
 # ---------------------------------------------------------------------------
+# Quality Score
+# ---------------------------------------------------------------------------
+
+def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
+    """Detect engulfing or pin bar pattern on the last daily candle."""
+    if len(df_daily) < 2:
+        return False
+
+    last = df_daily.iloc[-1]
+    prev = df_daily.iloc[-2]
+    body = abs(float(last["Close"]) - float(last["Open"]))
+    upper_wick = float(last["High"]) - max(float(last["Close"]), float(last["Open"]))
+    lower_wick = min(float(last["Close"]), float(last["Open"])) - float(last["Low"])
+    total_range = float(last["High"]) - float(last["Low"])
+
+    if total_range <= 0 or body <= 0:
+        return False
+
+    # Bullish engulfing
+    if (direction == "BULLISH"
+            and float(last["Close"]) > float(last["Open"])
+            and float(prev["Close"]) < float(prev["Open"])
+            and float(last["Close"]) > float(prev["Open"])
+            and float(last["Open"]) < float(prev["Close"])):
+        return True
+
+    # Bearish engulfing
+    if (direction == "BEARISH"
+            and float(last["Close"]) < float(last["Open"])
+            and float(prev["Close"]) > float(prev["Open"])
+            and float(last["Close"]) < float(prev["Open"])
+            and float(last["Open"]) > float(prev["Close"])):
+        return True
+
+    # Bullish pin bar (long lower wick)
+    if (direction == "BULLISH"
+            and lower_wick > body * 2
+            and lower_wick > upper_wick * 2):
+        return True
+
+    # Bearish pin bar (long upper wick)
+    if (direction == "BEARISH"
+            and upper_wick > body * 2
+            and upper_wick > lower_wick * 2):
+        return True
+
+    return False
+
+
+def _compute_quality_score(
+    signals: list[TechnicalSignal],
+    composite_score: str,
+    key_levels: KeyLevels | None,
+    df_daily: pd.DataFrame,
+) -> QualityScore:
+    """Compute setup quality score (1-5) based on confluence and market conditions.
+
+    Scoring:
+    - Confluence: 4+ directional signals agree with composite → +1
+    - Strong trend: ADX > 25 → +1
+    - Near key level: price within 0.5% of S/R → +1
+    - Candle pattern: engulfing or pin bar → +1
+    - Volume above average: last bar volume > 20-day avg → +1
+    """
+    qs = QualityScore()
+
+    # 1. Confluence: count directional signals matching composite
+    directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
+    directional = [s for s in signals if s.name in directional_names]
+    if composite_score in ("BULLISH", "BEARISH"):
+        count = sum(1 for s in directional if s.label == composite_score)
+        if count >= 4:
+            qs.confluence = True
+
+    # 2. ADX > 25 (strong trend)
+    adx = next((s for s in signals if s.name == "ADX"), None)
+    if adx and adx.value is not None and adx.value > 25:
+        qs.strong_trend = True
+
+    # 3. Near key level (within 0.5%)
+    if key_levels and key_levels.nearest_level_dist_pct is not None:
+        dist = abs(key_levels.nearest_level_dist_pct)
+        if dist < 0.5 and composite_score != "NEUTRAL":
+            qs.near_key_level = True
+
+    # 4. Candle pattern
+    if _detect_candle_pattern(df_daily, composite_score):
+        qs.candle_pattern = True
+
+    # 5. Volume above 20-day average
+    if len(df_daily) >= 20 and "Volume" in df_daily.columns:
+        vol_avg = float(df_daily["Volume"].iloc[-20:].mean())
+        last_vol = float(df_daily["Volume"].iloc[-1])
+        if vol_avg > 0 and last_vol > vol_avg:
+            qs.volume_above_avg = True
+
+    qs.total = sum([
+        qs.confluence,
+        qs.strong_trend,
+        qs.near_key_level,
+        qs.candle_pattern,
+        qs.volume_above_avg,
+    ])
+
+    return qs
+
+
+# ---------------------------------------------------------------------------
 # Technical analysis
 # ---------------------------------------------------------------------------
 
@@ -790,6 +930,16 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         logger.warning("Key levels failed for %s: %s", symbol, exc)
         key_levels = KeyLevels()
 
+    # --- Quality Score ---
+    try:
+        quality = _compute_quality_score(signals, composite, key_levels, df_daily)
+    except Exception as exc:
+        logger.warning("Quality score failed for %s: %s", symbol, exc)
+        quality = QualityScore()
+
+    # Store daily closes for correlation computation
+    daily_closes = df_daily["Close"].copy() if not df_daily.empty else None
+
     return AssetAnalysis(
         symbol=symbol,
         display_name=display_name,
@@ -801,7 +951,80 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         data_source=daily_source,
         key_levels=key_levels,
         mtf=mtf,
+        quality_score=quality,
+        daily_closes=daily_closes,
     )
+
+
+# ---------------------------------------------------------------------------
+# Correlation analysis
+# ---------------------------------------------------------------------------
+
+def compute_correlation_matrix(analyses: list[AssetAnalysis]) -> pd.DataFrame | None:
+    """Compute pairwise 30-day daily return correlation matrix.
+
+    Args:
+        analyses: List of AssetAnalysis with daily_closes populated.
+
+    Returns:
+        Correlation DataFrame indexed by symbol, or None if insufficient data.
+    """
+    returns: dict[str, pd.Series] = {}
+    for a in analyses:
+        if a.daily_closes is not None and len(a.daily_closes) >= 30:
+            r = a.daily_closes.pct_change().dropna().tail(30)
+            if len(r) >= 20:
+                returns[a.symbol] = r
+
+    if len(returns) < 2:
+        return None
+
+    df = pd.DataFrame(returns)
+    return df.corr()
+
+
+def filter_correlated_assets(
+    analyses: list[AssetAnalysis],
+    corr_matrix: pd.DataFrame | None,
+    threshold: float = 0.7,
+) -> list[str]:
+    """Identify assets to skip due to high correlation with a better-scored setup.
+
+    Among correlated pairs trading in the same direction, keeps the asset
+    with the higher quality score and returns the others as 'skip'.
+
+    Returns:
+        List of symbols that should NOT be traded.
+    """
+    if corr_matrix is None or len(analyses) < 2:
+        return []
+
+    skip: set[str] = set()
+    by_symbol = {a.symbol: a for a in analyses if a.error is None}
+
+    symbols = list(corr_matrix.index)
+    for i in range(len(symbols)):
+        for j in range(i + 1, len(symbols)):
+            sym_a, sym_b = symbols[i], symbols[j]
+            corr = abs(float(corr_matrix.loc[sym_a, sym_b]))
+            if corr < threshold:
+                continue
+
+            a = by_symbol.get(sym_a)
+            b = by_symbol.get(sym_b)
+            if not a or not b:
+                continue
+
+            # Only filter if both have same directional bias
+            if a.composite_score == b.composite_score and a.composite_score != "NEUTRAL":
+                qs_a = a.quality_score.total if a.quality_score else 0
+                qs_b = b.quality_score.total if b.quality_score else 0
+                if qs_a >= qs_b:
+                    skip.add(sym_b)
+                else:
+                    skip.add(sym_a)
+
+    return list(skip)
 
 
 if __name__ == "__main__":

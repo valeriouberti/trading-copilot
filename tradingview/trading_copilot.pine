@@ -13,6 +13,8 @@ i_bias = input.string("NEUTRAL", "LLM Bias (from report)", options=["BULLISH", "
 i_regime = input.string("NEUTRAL", "Regime (from report)", options=["LONG", "SHORT", "NEUTRAL"], group="Report Settings")
 i_confidence = input.int(50, "Report Confidence %", minval=0, maxval=100, group="Report Settings")
 i_flags = input.bool(false, "Validation Flags Present?", tooltip="Set TRUE if the report shows any red flags (SENTIMENT_MISMATCH, DIRECTION_CONFLICT). Forces NEUTRAL regime.", group="Report Settings")
+i_quality_score = input.int(0, "Quality Score (from report)", minval=0, maxval=5, tooltip="Enter the Quality Score from the Python report (0-5). Set 0 to disable filter.", group="Report Settings")
+i_min_quality = input.int(4, "Min Quality Score", minval=0, maxval=5, tooltip="Minimum quality score required for entry. Signals below this are blocked.", group="Report Settings")
 
 // EMA settings
 i_ema_fast = input.int(20, "EMA Fast Length", minval=5, maxval=50, group="EMA Settings")
@@ -148,11 +150,14 @@ long_preconditions = bullish_structure and above_vwap and rsi_ok_long
 // All pre-conditions for SHORT
 short_preconditions = bearish_structure and below_vwap and rsi_ok_short
 
-// Full LONG signal: regime + structure + pullback + bias + session filter
-long_signal = effective_regime == "LONG" and long_preconditions and long_rejection and i_bias != "BEARISH" and session_ok
+// Quality score filter (0 = not set, bypass filter)
+quality_ok = i_quality_score == 0 or i_quality_score >= i_min_quality
 
-// Full SHORT signal: regime + structure + pullback + bias + session filter
-short_signal = effective_regime == "SHORT" and short_preconditions and short_rejection and i_bias != "BULLISH" and session_ok
+// Full LONG signal: regime + structure + pullback + bias + session + quality
+long_signal = effective_regime == "LONG" and long_preconditions and long_rejection and i_bias != "BEARISH" and session_ok and quality_ok
+
+// Full SHORT signal: regime + structure + pullback + bias + session + quality
+short_signal = effective_regime == "SHORT" and short_preconditions and short_rejection and i_bias != "BULLISH" and session_ok and quality_ok
 
 // Prevent repeated signals — only fire on first bar of signal
 var bool in_long = false
@@ -545,8 +550,8 @@ if barstate.islast and i_show_table
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-    // Table rows: 18 base + 3 session rows = 21
-    var table info = table.new(t_pos, 2, 21, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
+    // Table rows: 18 base + 1 quality + 3 session rows = 22
+    var table info = table.new(t_pos, 2, 22, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
 
     // Header
     table.cell(info, 0, 0, "TRADING COPILOT", text_color=#ffffff, text_size=size.normal, bgcolor=color.new(#3b82f6, 20), text_halign=text.align_center)
@@ -567,78 +572,85 @@ if barstate.islast and i_show_table
     table.cell(info, 0, 3, "Confidence", text_color=#9ca3af, text_size=size.small)
     table.cell(info, 1, 3, str.tostring(i_confidence) + "%", text_color=#ffffff, text_size=size.small)
 
+    // Quality Score
+    qs_col = i_quality_score >= i_min_quality ? #22c55e : i_quality_score > 0 ? #ef4444 : #6b7280
+    qs_txt = i_quality_score > 0 ? str.tostring(i_quality_score) + "/5" : "—"
+    qs_status = i_quality_score == 0 ? "" : quality_ok ? " OK" : " BLOCKED"
+    table.cell(info, 0, 4, "Quality", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 4, qs_txt + qs_status, text_color=qs_col, text_size=size.small)
+
     // Separator
-    table.cell(info, 0, 4, "── TECHNICALS ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
-    table.merge_cells(info, 0, 4, 1, 4)
+    table.cell(info, 0, 5, "── TECHNICALS ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 5, 1, 5)
 
     // EMA Trend
     ema_col = bullish_structure ? #22c55e : bearish_structure ? #ef4444 : #eab308
     ema_txt = bullish_structure ? "BULLISH" : bearish_structure ? "BEARISH" : "FLAT"
-    table.cell(info, 0, 5, "EMA " + str.tostring(i_ema_fast) + "/" + str.tostring(i_ema_slow), text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 5, ema_txt, text_color=ema_col, text_size=size.small)
+    table.cell(info, 0, 6, "EMA " + str.tostring(i_ema_fast) + "/" + str.tostring(i_ema_slow), text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 6, ema_txt, text_color=ema_col, text_size=size.small)
 
     // RSI
     rsi_col = rsi > i_rsi_ob ? #ef4444 : rsi < i_rsi_os ? #22c55e : #ffffff
     rsi_status = rsi > i_rsi_ob ? " OB" : rsi < i_rsi_os ? " OS" : ""
-    table.cell(info, 0, 6, "RSI(" + str.tostring(i_rsi_len) + ")", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 6, str.tostring(rsi, "#.1") + rsi_status, text_color=rsi_col, text_size=size.small)
+    table.cell(info, 0, 7, "RSI(" + str.tostring(i_rsi_len) + ")", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 7, str.tostring(rsi, "#.1") + rsi_status, text_color=rsi_col, text_size=size.small)
 
     // VWAP
     vwap_col = above_vwap ? #22c55e : #ef4444
     vwap_txt = above_vwap ? "ABOVE" : "BELOW"
     vwap_dist_pct = (close - vwap_val) / vwap_val * 100
-    table.cell(info, 0, 7, "vs VWAP", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 7, vwap_txt + " (" + str.tostring(vwap_dist_pct, "+#.2") + "%)", text_color=vwap_col, text_size=size.small)
+    table.cell(info, 0, 8, "vs VWAP", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 8, vwap_txt + " (" + str.tostring(vwap_dist_pct, "+#.2") + "%)", text_color=vwap_col, text_size=size.small)
 
     // MACD
     macd_col = macd_bullish ? #22c55e : #ef4444
     macd_txt = macd_bullish ? "BULLISH" : "BEARISH"
-    table.cell(info, 0, 8, "MACD", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 8, macd_txt, text_color=macd_col, text_size=size.small)
+    table.cell(info, 0, 9, "MACD", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 9, macd_txt, text_color=macd_col, text_size=size.small)
 
     // ATR
-    table.cell(info, 0, 9, "ATR(" + str.tostring(i_atr_len) + ")", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 9, str.tostring(atr, format.mintick) + " (" + str.tostring(atr_pct, "#.2") + "%)", text_color=#ffffff, text_size=size.small)
+    table.cell(info, 0, 10, "ATR(" + str.tostring(i_atr_len) + ")", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 10, str.tostring(atr, format.mintick) + " (" + str.tostring(atr_pct, "#.2") + "%)", text_color=#ffffff, text_size=size.small)
 
     // Separator — Risk
-    table.cell(info, 0, 10, "── RISK ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
-    table.merge_cells(info, 0, 10, 1, 10)
+    table.cell(info, 0, 11, "── RISK ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 11, 1, 11)
 
     // SL distance
     sl_dist = atr * i_sl_mult
-    table.cell(info, 0, 11, "SL Distance", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 11, str.tostring(sl_dist, format.mintick) + " pts", text_color=#ef4444, text_size=size.small)
+    table.cell(info, 0, 12, "SL Distance", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 12, str.tostring(sl_dist, format.mintick) + " pts", text_color=#ef4444, text_size=size.small)
 
     // TP distance / Exit mode
     if i_exit_mode == "Fixed TP"
         tp_dist = atr * i_tp_mult
-        table.cell(info, 0, 12, "TP Distance", text_color=#9ca3af, text_size=size.small)
-        table.cell(info, 1, 12, str.tostring(tp_dist, format.mintick) + " pts", text_color=#22c55e, text_size=size.small)
+        table.cell(info, 0, 13, "TP Distance", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 13, str.tostring(tp_dist, format.mintick) + " pts", text_color=#22c55e, text_size=size.small)
     else
-        table.cell(info, 0, 12, "TP Mode", text_color=#9ca3af, text_size=size.small)
-        table.cell(info, 1, 12, "TRAILING", text_color=#f97316, text_size=size.small)
+        table.cell(info, 0, 13, "TP Mode", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 13, "TRAILING", text_color=#f97316, text_size=size.small)
 
     // R:R ratio
     rr = i_exit_mode == "Fixed TP" and i_sl_mult > 0 ? i_tp_mult / i_sl_mult : 0
     rr_txt = i_exit_mode == "Fixed TP" ? "1:" + str.tostring(rr, "#.1") : "OPEN"
-    table.cell(info, 0, 13, "R:R", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 13, rr_txt, text_color=#ffffff, text_size=size.small)
+    table.cell(info, 0, 14, "R:R", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 14, rr_txt, text_color=#ffffff, text_size=size.small)
 
     // Separator — Trailing Stop
-    table.cell(info, 0, 14, "── TRAIL ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
-    table.merge_cells(info, 0, 14, 1, 14)
+    table.cell(info, 0, 15, "── TRAIL ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 15, 1, 15)
 
     // Exit mode
     mode_col = i_exit_mode == "Fixed TP" ? #ffffff : i_exit_mode == "Trailing Stop" ? #f97316 : #8b5cf6
-    table.cell(info, 0, 15, "Exit Mode", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 15, i_exit_mode, text_color=mode_col, text_size=size.small)
+    table.cell(info, 0, 16, "Exit Mode", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 16, i_exit_mode, text_color=mode_col, text_size=size.small)
 
     // Trail stage (only meaningful when in position)
     if (in_long or in_short) and trail_active
         stage_col = trail_stage == 0 ? #ef4444 : trail_stage == 1 ? #eab308 : #f97316
         stage_text = trail_stage == 0 ? "INITIAL" : trail_stage == 1 ? "BREAKEVEN" : "TRAILING"
-        table.cell(info, 0, 16, "Trail Stage", text_color=#9ca3af, text_size=size.small)
-        table.cell(info, 1, 16, stage_text, text_color=stage_col, text_size=size.small)
+        table.cell(info, 0, 17, "Trail Stage", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 17, stage_text, text_color=stage_col, text_size=size.small)
 
         // Current R-multiple
         curr_r = 0.0
@@ -647,25 +659,25 @@ if barstate.islast and i_show_table
         if in_short and not na(entry_price) and not na(one_r) and one_r > 0
             curr_r := (entry_price - close) / one_r
         r_col = curr_r >= 2.0 ? #22c55e : curr_r >= 1.0 ? #eab308 : curr_r >= 0 ? #ffffff : #ef4444
-        table.cell(info, 0, 17, "Current R", text_color=#9ca3af, text_size=size.small)
-        table.cell(info, 1, 17, str.tostring(curr_r, "+#.1") + "R", text_color=r_col, text_size=size.small)
+        table.cell(info, 0, 18, "Current R", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 18, str.tostring(curr_r, "+#.1") + "R", text_color=r_col, text_size=size.small)
     else
-        table.cell(info, 0, 16, "Trail Stage", text_color=#9ca3af, text_size=size.small)
-        table.cell(info, 1, 16, "—", text_color=#6b7280, text_size=size.small)
-        table.cell(info, 0, 17, "Current R", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 0, 17, "Trail Stage", text_color=#9ca3af, text_size=size.small)
         table.cell(info, 1, 17, "—", text_color=#6b7280, text_size=size.small)
+        table.cell(info, 0, 18, "Current R", text_color=#9ca3af, text_size=size.small)
+        table.cell(info, 1, 18, "—", text_color=#6b7280, text_size=size.small)
 
     // Separator — Session
-    table.cell(info, 0, 18, "── SESSION ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
-    table.merge_cells(info, 0, 18, 1, 18)
+    table.cell(info, 0, 19, "── SESSION ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 19, 1, 19)
 
     // Current session
     sess_col = in_active_session ? #22c55e : in_dead_zone ? #ef4444 : #eab308
     sess_status = i_session_filter ? (session_ok ? "ACTIVE" : "BLOCKED") : "OFF"
-    table.cell(info, 0, 19, "Session", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 19, session_name, text_color=sess_col, text_size=size.small)
+    table.cell(info, 0, 20, "Session", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 20, session_name, text_color=sess_col, text_size=size.small)
 
     // Filter status
     filter_col = not i_session_filter ? #6b7280 : session_ok ? #22c55e : #ef4444
-    table.cell(info, 0, 20, "Filter", text_color=#9ca3af, text_size=size.small)
-    table.cell(info, 1, 20, sess_status, text_color=filter_col, text_size=size.small)
+    table.cell(info, 0, 21, "Filter", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 21, sess_status, text_color=filter_col, text_size=size.small)
