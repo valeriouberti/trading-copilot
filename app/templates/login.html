@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Trading Copilot</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .login-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 2rem;
+            background: var(--bg-secondary, #1e1e2e);
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #333);
+        }
+        .login-container h1 {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: var(--text-primary, #e0e0e0);
+        }
+        .login-container form {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .login-container label {
+            color: var(--text-secondary, #a0a0a0);
+            font-size: 0.9rem;
+        }
+        .login-container input[type="password"] {
+            padding: 0.75rem;
+            border-radius: 4px;
+            border: 1px solid var(--border-color, #333);
+            background: var(--bg-primary, #121212);
+            color: var(--text-primary, #e0e0e0);
+            font-size: 1rem;
+        }
+        .login-container button {
+            padding: 0.75rem;
+            border-radius: 4px;
+            border: none;
+            background: var(--accent, #4a9eff);
+            color: #fff;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+        .login-container button:hover {
+            opacity: 0.9;
+        }
+        .login-error {
+            color: var(--danger, #ff4444);
+            text-align: center;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Trading Copilot</h1>
+        <form method="post" action="/login">
+            <label for="api_key">API Key</label>
+            <input type="password" id="api_key" name="api_key" placeholder="Enter your API key" required>
+            <button type="submit">Login</button>
+        </form>
+        {% if error %}
+        <p class="login-error">{{ error }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>

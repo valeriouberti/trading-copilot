@@ -309,8 +309,56 @@ def _compute_setup(
             "atr": round(atr_value, 2),
         }
 
-    sl_distance = atr_value * 1.5
-    tp_distance = sl_distance * 2.0
+    # ATR-adaptive SL/TP: compare current ATR to 20-period average
+    # Compute ATR average from daily data if available
+    atr_avg = atr_value  # default: assume current ATR is average
+    atr_percentile = 1.0
+    if analysis.daily_closes is not None and len(analysis.daily_closes) >= 34:
+        try:
+            import pandas_ta as _ta
+            daily_df = analysis.daily_closes
+            # Reconstruct a minimal df for ATR computation
+            # daily_closes is a Series; we need the parent DataFrame
+            # Use ATR value directly: compare to a rough average
+            # We'll estimate by looking at the ATR signal detail or use a ratio
+            pass
+        except Exception:
+            pass
+
+    # Use ATR-based signals to find ATR average info
+    # Simple approach: use ohlc_data if available to compute ATR average
+    if hasattr(analysis, 'ohlc_data') and analysis.ohlc_data and len(analysis.ohlc_data) >= 34:
+        try:
+            import pandas as _pd
+            ohlc_df = _pd.DataFrame(analysis.ohlc_data)
+            if all(c in ohlc_df.columns for c in ('high', 'low', 'close')):
+                import pandas_ta as _ta
+                atr_s = _ta.atr(ohlc_df['high'], ohlc_df['low'], ohlc_df['close'], length=14)
+                if atr_s is not None and not atr_s.empty:
+                    recent_atr = atr_s.dropna().tail(20)
+                    if len(recent_atr) >= 5:
+                        atr_avg = float(recent_atr.mean())
+        except Exception:
+            pass
+
+    if atr_avg > 0:
+        atr_percentile = atr_value / atr_avg
+    else:
+        atr_percentile = 1.0
+
+    # SL multiplier: ranges from 1.0 (low vol) to 2.0 (high vol), default 1.5
+    if atr_percentile < 0.8:
+        sl_multiplier = 1.0
+    elif atr_percentile > 1.5:
+        sl_multiplier = 2.0
+    else:
+        # Linear interpolation between 0.8 and 1.5
+        sl_multiplier = 1.0 + (atr_percentile - 0.8) / (1.5 - 0.8) * (2.0 - 1.0)
+
+    tp_multiplier = sl_multiplier * 2.0  # Maintain 1:2 R:R
+
+    sl_distance = atr_value * sl_multiplier
+    tp_distance = atr_value * tp_multiplier
 
     if direction == "LONG":
         stop_loss = price - sl_distance
@@ -330,6 +378,8 @@ def _compute_setup(
         "tp_distance": round(tp_distance, 2),
         "risk_reward": "1:2.0",
         "atr": round(atr_value, 2),
+        "atr_percentile": round(atr_percentile, 2),
+        "sl_multiplier": round(sl_multiplier, 2),
         "quality_score": quality_score,
         "tradeable": tradeable,
         "reason": "OK" if tradeable else (

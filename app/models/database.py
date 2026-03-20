@@ -187,6 +187,25 @@ async def get_all_assets(session_factory) -> list[dict]:
     return [{"symbol": r.symbol, "display_name": r.display_name} for r in rows]
 
 
+async def get_asset_by_symbol(session_factory, symbol: str) -> dict | None:
+    """Look up a single asset by symbol.
+
+    Uses the indexed symbol column for efficient lookup instead of
+    loading all assets.
+
+    Returns:
+        A dict with 'symbol' and 'display_name', or None if not found.
+    """
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Asset).where(Asset.symbol == symbol)
+        )
+        row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    return {"symbol": row.symbol, "display_name": row.display_name}
+
+
 # ---------------------------------------------------------------------------
 # RSS feed helpers
 # ---------------------------------------------------------------------------

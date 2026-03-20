@@ -105,6 +105,12 @@ if os.environ.get("TRADING_COPILOT_JSON_LOGS", "").lower() in ("1", "true"):
     configure_logging()
     app.add_middleware(CorrelationIDMiddleware)
 
+# API key authentication (only if env var is set)
+_api_key = os.environ.get("TRADING_COPILOT_API_KEY", "")
+if _api_key:
+    from app.middleware.auth import APIKeyMiddleware
+    app.add_middleware(APIKeyMiddleware, api_key=_api_key)
+
 # Rate limiting
 from app.middleware.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler

@@ -963,25 +963,58 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     except Exception as exc:
         logger.warning("ADX failed for %s: %s", symbol, exc)
 
-    # --- Composite score — 6-point system ---
+    # --- Composite score — adaptive weighted system ---
     # Directional indicators: RSI, MACD, VWAP, EMA_TREND, BBANDS, STOCH
     # Non-directional (excluded): ATR, ADX
+    # Weights adapt based on ADX (trend strength):
+    #   ADX > 25 (trending): momentum indicators get 1.5x, mean-reversion 0.7x
+    #   ADX < 20 (ranging): mean-reversion gets 1.5x, momentum 0.7x
+    #   Otherwise: equal weight (1.0x)
     directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
-    directional_signals = [s for s in signals if s.name in directional_names]
-    bullish_count = sum(1 for s in directional_signals if s.label == "BULLISH")
-    total = len(directional_signals) or 6
+    momentum_names = {"MACD", "EMA_TREND"}
+    mean_reversion_names = {"RSI", "BBANDS"}
 
-    if bullish_count >= 4:
-        composite = "BULLISH"
-        confidence = (bullish_count / total) * 100
-    elif bullish_count <= 2:
-        bearish_count = sum(1 for s in directional_signals if s.label == "BEARISH")
-        if bearish_count >= 4:
-            composite = "BEARISH"
-            confidence = (bearish_count / total) * 100
+    adx_signal = next((s for s in signals if s.name == "ADX"), None)
+    adx_value = adx_signal.value if (adx_signal and adx_signal.value is not None) else None
+
+    if adx_value is not None and adx_value > 25:
+        # Trending regime: favor momentum
+        momentum_weight = 1.5
+        mean_rev_weight = 0.7
+    elif adx_value is not None and adx_value < 20:
+        # Ranging regime: favor mean-reversion
+        momentum_weight = 0.7
+        mean_rev_weight = 1.5
+    else:
+        momentum_weight = 1.0
+        mean_rev_weight = 1.0
+
+    directional_signals = [s for s in signals if s.name in directional_names]
+
+    bullish_weight = 0.0
+    bearish_weight = 0.0
+    total_weight = 0.0
+    for s in directional_signals:
+        if s.name in momentum_names:
+            w = momentum_weight
+        elif s.name in mean_reversion_names:
+            w = mean_rev_weight
         else:
-            composite = "NEUTRAL"
-            confidence = 50.0
+            w = 1.0
+        total_weight += w
+        if s.label == "BULLISH":
+            bullish_weight += w
+        elif s.label == "BEARISH":
+            bearish_weight += w
+
+    total_weight = total_weight or 6.0
+
+    if bullish_weight >= total_weight * 0.6:
+        composite = "BULLISH"
+        confidence = (bullish_weight / total_weight) * 100
+    elif bearish_weight >= total_weight * 0.6:
+        composite = "BEARISH"
+        confidence = (bearish_weight / total_weight) * 100
     else:
         composite = "NEUTRAL"
         confidence = 50.0

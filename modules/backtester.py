@@ -620,6 +620,110 @@ class BacktestEngine:
 
         return result
 
+    def walk_forward(
+        self,
+        symbol: str,
+        period: str = "2y",
+        interval: str = "1d",
+        train_bars: int = 120,
+        test_bars: int = 30,
+        df: pd.DataFrame | None = None,
+    ) -> dict:
+        """Run walk-forward optimization with rolling train/test windows.
+
+        Splits data into rolling windows: train on *train_bars* bars, test on
+        *test_bars* bars, then slide forward by *test_bars*.
+
+        Parameters
+        ----------
+        symbol : str
+            Ticker symbol.
+        period : str
+            Look-back period for data fetch (should be long enough for
+            multiple windows).
+        interval : str
+            Bar interval for data fetch.
+        train_bars : int
+            Number of bars for the in-sample (training) window.
+        test_bars : int
+            Number of bars for the out-of-sample (testing) window.
+        df : pd.DataFrame | None
+            Optional pre-fetched DataFrame.
+
+        Returns
+        -------
+        dict
+            Contains ``oos_results`` (list of BacktestResult for each
+            out-of-sample window), ``is_results`` (in-sample results),
+            and ``aggregate`` stats.
+        """
+        if df is None:
+            df = self.fetch_data(symbol, period, interval)
+
+        window_size = train_bars + test_bars
+        if len(df) < window_size:
+            logger.warning(
+                "Not enough bars (%d) for walk-forward (need %d). "
+                "Returning single backtest.",
+                len(df),
+                window_size,
+            )
+            result = self.run(symbol=symbol, df=df)
+            return {
+                "oos_results": [result],
+                "is_results": [result],
+                "aggregate": result.to_dict(),
+            }
+
+        oos_results: list[BacktestResult] = []
+        is_results: list[BacktestResult] = []
+        start = 0
+
+        while start + window_size <= len(df):
+            train_df = df.iloc[start: start + train_bars]
+            test_df = df.iloc[start + train_bars: start + window_size]
+
+            # In-sample run
+            is_result = self.run(symbol=symbol, df=train_df)
+            is_results.append(is_result)
+
+            # Out-of-sample run: compute indicators on full train+test then
+            # only simulate trades from the test portion
+            full_window = df.iloc[start: start + window_size]
+            full_ind = compute_indicators(full_window)
+            full_sig = generate_signals(full_ind)
+            # Only keep signals in the test portion
+            test_start_idx = full_sig.index[train_bars] if len(full_sig) > train_bars else full_sig.index[-1]
+            full_sig.loc[full_sig.index < test_start_idx, "signal"] = 0
+            oos_trades = simulate_trades(full_sig, self.sl_atr_mult, self.tp_atr_mult)
+            oos_result = compute_statistics(oos_trades)
+            oos_results.append(oos_result)
+
+            start += test_bars
+
+        # Aggregate OOS stats
+        all_oos_trades: list[Trade] = []
+        for r in oos_results:
+            all_oos_trades.extend(r.trades)
+        aggregate = compute_statistics(all_oos_trades)
+
+        # Compute IS/OOS performance ratio
+        is_pnl = sum(r.total_pnl for r in is_results)
+        oos_pnl = aggregate.total_pnl
+        perf_ratio = oos_pnl / is_pnl if is_pnl != 0 else 0.0
+
+        agg_dict = aggregate.to_dict()
+        agg_dict["windows"] = len(oos_results)
+        agg_dict["is_total_pnl"] = round(is_pnl, 4)
+        agg_dict["oos_total_pnl"] = round(oos_pnl, 4)
+        agg_dict["oos_is_ratio"] = round(perf_ratio, 4)
+
+        return {
+            "oos_results": oos_results,
+            "is_results": is_results,
+            "aggregate": agg_dict,
+        }
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point
