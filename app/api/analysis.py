@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.models.engine import get_db
-from app.services.analyzer import analyze_single_asset
+from app.services.analyzer import analyze_single_asset, _run_technicals, _format_analysis
 from app.services.notifier import get_notifier
 
 router = APIRouter()
+
+
+@router.get("/chart/{symbol}")
+async def get_chart_data(request: Request, symbol: str):
+    """Return only price chart data (OHLC + EMA) for fast initial page load."""
+    config = request.app.state.config
+    assets = config.get("assets", [])
+    asset = next(
+        (a for a in assets if a["symbol"] == symbol),
+        {"symbol": symbol, "display_name": symbol},
+    )
+    try:
+        tech_result = await asyncio.to_thread(_run_technicals, asset)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    formatted = _format_analysis(tech_result)
+    return {
+        "chart": formatted.get("chart"),
+        "price": formatted.get("price"),
+    }
 
 
 @router.post("/analyze/{symbol}")

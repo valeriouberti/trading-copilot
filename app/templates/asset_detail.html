@@ -100,7 +100,7 @@ const SYMBOL = "{{ asset.symbol }}";
 let chart = null;
 let analysisData = null;
 
-// Initialize empty chart
+// Initialize chart and load price data immediately
 document.addEventListener("DOMContentLoaded", function() {
     const container = document.getElementById("chart-container");
     chart = LightweightCharts.createChart(container, {
@@ -117,7 +117,19 @@ document.addEventListener("DOMContentLoaded", function() {
         timeScale: { borderColor: '#30363d' },
     });
     chart.timeScale().fitContent();
+    loadInitialChart();
 });
+
+async function loadInitialChart() {
+    try {
+        const resp = await fetch(`/api/chart/${encodeURIComponent(SYMBOL)}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderChart({ analysis: { chart: data.chart } });
+    } catch (e) {
+        console.warn("Initial chart load failed:", e);
+    }
+}
 
 async function runAnalysis() {
     const btn = document.getElementById("btn-analyze");
