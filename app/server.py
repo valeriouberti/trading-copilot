@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.api import analysis as analysis_router
 from app.api import assets as assets_router
 from app.api import health as health_router
 from app.config import get_database_url, load_config
@@ -67,6 +68,7 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 # API routers
 app.include_router(health_router.router, prefix="/api", tags=["health"])
 app.include_router(assets_router.router, prefix="/api", tags=["assets"])
+app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
 
 
 # ---------------------------------------------------------------------------
@@ -85,5 +87,24 @@ async def dashboard(request: Request):
             "request": request,
             "assets": assets,
             "title": "Trading Copilot",
+        },
+    )
+
+
+@app.get("/asset/{symbol}", response_class=HTMLResponse)
+async def asset_detail(request: Request, symbol: str):
+    """Render the single-asset analysis page."""
+    config = request.app.state.config
+    assets = config.get("assets", [])
+    asset = next(
+        (a for a in assets if a["symbol"] == symbol),
+        {"symbol": symbol, "display_name": symbol},
+    )
+    return templates.TemplateResponse(
+        "asset_detail.html",
+        {
+            "request": request,
+            "asset": asset,
+            "title": f"{asset['display_name']} — Trading Copilot",
         },
     )

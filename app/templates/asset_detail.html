@@ -1,0 +1,459 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex; align-items:center; justify-content:space-between;">
+    <div>
+        <a href="/" class="back-link">&larr; Dashboard</a>
+        <h1>{{ asset.display_name }}</h1>
+        <p class="subtitle">{{ asset.symbol }}</p>
+    </div>
+    <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" id="btn-analyze" onclick="runAnalysis()">
+            Analyze
+        </button>
+    </div>
+</div>
+
+<!-- Setup box (hidden until analysis runs) -->
+<div id="setup-box" class="setup-box" style="display:none;"></div>
+
+<!-- Main grid -->
+<div class="detail-grid">
+    <!-- Left column: chart + technicals -->
+    <div class="detail-main">
+        <div class="card">
+            <h3>Price Chart</h3>
+            <div id="chart-container" style="height:400px; width:100%;"></div>
+        </div>
+
+        <div class="card" id="technicals-card" style="display:none;">
+            <h3>Technical Indicators</h3>
+            <div id="technicals-content"></div>
+        </div>
+
+        <div class="card" id="keylevels-card" style="display:none;">
+            <h3>Key Levels</h3>
+            <div id="keylevels-content"></div>
+        </div>
+    </div>
+
+    <!-- Right column: sentiment, regime, quality, polymarket, calendar -->
+    <div class="detail-sidebar">
+        <div class="card" id="regime-card" style="display:none;">
+            <h3>Regime</h3>
+            <div id="regime-content"></div>
+        </div>
+
+        <div class="card" id="sentiment-card" style="display:none;">
+            <h3>Sentiment</h3>
+            <div id="sentiment-content"></div>
+        </div>
+
+        <div class="card" id="quality-card" style="display:none;">
+            <h3>Quality Score</h3>
+            <div id="quality-content"></div>
+        </div>
+
+        <div class="card" id="mtf-card" style="display:none;">
+            <h3>Multi-Timeframe</h3>
+            <div id="mtf-content"></div>
+        </div>
+
+        <div class="card" id="polymarket-card" style="display:none;">
+            <h3>Polymarket</h3>
+            <div id="polymarket-content"></div>
+        </div>
+
+        <div class="card" id="calendar-card" style="display:none;">
+            <h3>Economic Calendar</h3>
+            <div id="calendar-content"></div>
+        </div>
+
+        <div class="card" id="flags-card" style="display:none;">
+            <h3>Validation Flags</h3>
+            <div id="flags-content"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading-overlay" style="display:none;">
+    <div class="loading-spinner">
+        <div class="spinner"></div>
+        <p>Running analysis...</p>
+        <p class="loading-sub">Fetching news, technicals, sentiment, Polymarket...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SYMBOL = "{{ asset.symbol }}";
+let chart = null;
+let analysisData = null;
+
+// Initialize empty chart
+document.addEventListener("DOMContentLoaded", function() {
+    const container = document.getElementById("chart-container");
+    chart = LightweightCharts.createChart(container, {
+        layout: {
+            background: { color: '#1c2128' },
+            textColor: '#8b949e',
+        },
+        grid: {
+            vertLines: { color: '#30363d' },
+            horzLines: { color: '#30363d' },
+        },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#30363d' },
+        timeScale: { borderColor: '#30363d', timeVisible: true },
+    });
+    chart.timeScale().fitContent();
+});
+
+async function runAnalysis() {
+    const btn = document.getElementById("btn-analyze");
+    const overlay = document.getElementById("loading-overlay");
+
+    btn.disabled = true;
+    btn.textContent = "Analyzing...";
+    overlay.style.display = "flex";
+
+    try {
+        const resp = await fetch(`/api/analyze/${encodeURIComponent(SYMBOL)}`, {
+            method: "POST",
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        analysisData = await resp.json();
+        renderAnalysis(analysisData);
+    } catch (err) {
+        alert("Analysis failed: " + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Analyze";
+        overlay.style.display = "none";
+    }
+}
+
+function renderAnalysis(data) {
+    renderSetupBox(data);
+    renderRegime(data);
+    renderSentiment(data);
+    renderTechnicals(data);
+    renderQuality(data);
+    renderMTF(data);
+    renderKeyLevels(data);
+    renderPolymarket(data);
+    renderCalendar(data);
+    renderFlags(data);
+}
+
+function renderSetupBox(data) {
+    const box = document.getElementById("setup-box");
+    const s = data.setup;
+    if (!s) { box.style.display = "none"; return; }
+
+    const dirClass = s.direction === "LONG" ? "setup-long" :
+                     s.direction === "SHORT" ? "setup-short" : "setup-neutral";
+    const tradeableClass = s.tradeable ? "setup-tradeable" : "setup-skip";
+
+    box.className = `setup-box ${dirClass} ${tradeableClass}`;
+    box.style.display = "flex";
+
+    if (!s.tradeable) {
+        box.innerHTML = `
+            <div class="setup-direction">
+                <span class="setup-dir-label">${s.direction || "NEUTRAL"}</span>
+                <span class="setup-badge badge-skip">SKIP</span>
+            </div>
+            <div class="setup-reason">${s.reason || "Not tradeable"}</div>
+        `;
+        return;
+    }
+
+    box.innerHTML = `
+        <div class="setup-direction">
+            <span class="setup-dir-label">${s.direction}</span>
+            <span class="setup-badge badge-go">GO</span>
+        </div>
+        <div class="setup-levels">
+            <div class="setup-level">
+                <span class="sl-entry">Entry</span>
+                <span class="sl-value">${fmt(s.entry_price)}</span>
+            </div>
+            <div class="setup-level">
+                <span class="sl-stop">SL</span>
+                <span class="sl-value">${fmt(s.stop_loss)}</span>
+                <span class="sl-dist">(-${fmt(s.sl_distance)})</span>
+            </div>
+            <div class="setup-level">
+                <span class="sl-tp">TP</span>
+                <span class="sl-value">${fmt(s.take_profit)}</span>
+                <span class="sl-dist">(+${fmt(s.tp_distance)})</span>
+            </div>
+        </div>
+        <div class="setup-meta">
+            <span>R:R ${s.risk_reward}</span>
+            <span>QS ${s.quality_score}/5</span>
+            <span>ATR ${fmt(s.atr)}</span>
+        </div>
+    `;
+}
+
+function renderRegime(data) {
+    const card = document.getElementById("regime-card");
+    const content = document.getElementById("regime-content");
+    card.style.display = "block";
+
+    const cls = data.regime === "LONG" ? "badge-bullish" :
+                data.regime === "SHORT" ? "badge-bearish" : "badge-neutral";
+
+    content.innerHTML = `
+        <div class="regime-display">
+            <span class="badge ${cls}" style="font-size:18px; padding:6px 16px;">
+                ${data.regime}
+            </span>
+        </div>
+        <p class="info-sub">${data.regime_reason || ""}</p>
+    `;
+}
+
+function renderSentiment(data) {
+    const card = document.getElementById("sentiment-card");
+    const content = document.getElementById("sentiment-content");
+    if (!data.sentiment) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    const s = data.sentiment;
+    const scoreColor = s.score > 0 ? "var(--accent-green)" :
+                       s.score < 0 ? "var(--accent-red)" : "var(--text-secondary)";
+
+    let driversHtml = "";
+    if (s.key_drivers && s.key_drivers.length) {
+        driversHtml = '<div class="drivers">' +
+            s.key_drivers.map(d => `<div class="driver-item">${d}</div>`).join("") +
+            '</div>';
+    }
+
+    content.innerHTML = `
+        <div class="score-display" style="color:${scoreColor}">
+            ${s.score > 0 ? "+" : ""}${s.score.toFixed(1)}
+        </div>
+        <p class="info-sub">${s.label}</p>
+        <div class="info-row"><span>Bias</span><span class="badge ${biasClass(s.bias)}">${s.bias}</span></div>
+        <div class="info-row"><span>Confidence</span><span>${s.confidence}%</span></div>
+        <div class="info-row"><span>Source</span><span>${s.source}</span></div>
+        ${driversHtml}
+    `;
+}
+
+function renderTechnicals(data) {
+    const card = document.getElementById("technicals-card");
+    const content = document.getElementById("technicals-content");
+    if (!data.analysis || data.analysis.error) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    const t = data.analysis.technicals;
+    const p = data.analysis.price;
+
+    let priceHtml = `
+        <div class="price-header">
+            <span class="current-price">${fmt(p.current)}</span>
+            <span class="price-change ${p.change_pct >= 0 ? 'price-up' : 'price-down'}">
+                ${p.change_pct >= 0 ? "+" : ""}${p.change_pct.toFixed(2)}%
+            </span>
+            ${p.data_source !== "yfinance" ? `<span class="badge badge-neutral">${p.data_source}</span>` : ""}
+        </div>
+    `;
+
+    let compositeHtml = `
+        <div class="composite-row">
+            <span class="badge ${biasClass(t.composite_score)}" style="font-size:14px; padding:4px 12px;">
+                ${t.composite_score} (${t.confidence_pct}%)
+            </span>
+        </div>
+    `;
+
+    let signalsHtml = '<table class="signals-table"><thead><tr><th>Indicator</th><th>Value</th><th>Signal</th><th>Detail</th></tr></thead><tbody>';
+    for (const [key, sig] of Object.entries(t.signals || {})) {
+        signalsHtml += `<tr>
+            <td>${sig.name}</td>
+            <td>${sig.value !== null ? (typeof sig.value === "number" ? sig.value.toFixed(2) : sig.value) : "-"}</td>
+            <td><span class="badge ${biasClass(sig.label)}">${sig.label}</span></td>
+            <td class="detail-text">${sig.detail || ""}</td>
+        </tr>`;
+    }
+    signalsHtml += '</tbody></table>';
+
+    content.innerHTML = priceHtml + compositeHtml + signalsHtml;
+}
+
+function renderQuality(data) {
+    const card = document.getElementById("quality-card");
+    const content = document.getElementById("quality-content");
+    if (!data.analysis || data.analysis.error || !data.analysis.technicals.quality_score) {
+        card.style.display = "none"; return;
+    }
+    card.style.display = "block";
+
+    const qs = data.analysis.technicals.quality_score;
+    const factors = [
+        { key: "confluence", label: "C", full: "Confluence (4+ signals)" },
+        { key: "strong_trend", label: "T", full: "Strong Trend (ADX>25)" },
+        { key: "near_key_level", label: "L", full: "Near Key Level (<0.5%)" },
+        { key: "candle_pattern", label: "P", full: "Candle Pattern" },
+        { key: "volume_above_avg", label: "V", full: "Volume Above Avg" },
+    ];
+
+    const tradeable = qs.total >= 4;
+    let html = `
+        <div class="qs-score ${tradeable ? 'qs-go' : 'qs-skip'}">
+            ${qs.total}/5
+            <span class="badge ${tradeable ? 'badge-bullish' : 'badge-bearish'}">
+                ${tradeable ? "TRADEABLE" : "SKIP"}
+            </span>
+        </div>
+        <div class="qs-factors">
+    `;
+    for (const f of factors) {
+        const active = qs[f.key];
+        html += `<div class="qs-factor ${active ? 'qs-active' : 'qs-inactive'}">
+            <span class="qs-check">${active ? "&#10003;" : "&#10007;"}</span>
+            <span>${f.full}</span>
+        </div>`;
+    }
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function renderMTF(data) {
+    const card = document.getElementById("mtf-card");
+    const content = document.getElementById("mtf-content");
+    if (!data.analysis || data.analysis.error || !data.analysis.technicals.mtf) {
+        card.style.display = "none"; return;
+    }
+    card.style.display = "block";
+
+    const m = data.analysis.technicals.mtf;
+    const alignClass = m.alignment === "ALIGNED" ? "badge-bullish" :
+                       m.alignment === "PARTIAL" ? "badge-neutral" : "badge-bearish";
+
+    const arrow = (trend) => trend === "BULLISH" ? "&uarr;" : trend === "BEARISH" ? "&darr;" : "&harr;";
+    const trendClass = (trend) => trend === "BULLISH" ? "trend-up" : trend === "BEARISH" ? "trend-down" : "trend-flat";
+
+    content.innerHTML = `
+        <div style="text-align:center; margin-bottom:12px;">
+            <span class="badge ${alignClass}" style="font-size:14px; padding:4px 12px;">${m.alignment}</span>
+        </div>
+        <div class="mtf-rows">
+            <div class="info-row"><span>Weekly</span><span class="${trendClass(m.weekly_trend)}">${arrow(m.weekly_trend)} ${m.weekly_trend}</span></div>
+            <div class="info-row"><span>Daily</span><span class="${trendClass(m.daily_trend)}">${arrow(m.daily_trend)} ${m.daily_trend}</span></div>
+            <div class="info-row"><span>1-Hour</span><span class="${trendClass(m.hourly_trend)}">${arrow(m.hourly_trend)} ${m.hourly_trend}</span></div>
+        </div>
+    `;
+}
+
+function renderKeyLevels(data) {
+    const card = document.getElementById("keylevels-card");
+    const content = document.getElementById("keylevels-content");
+    if (!data.analysis || data.analysis.error || !data.analysis.technicals.key_levels) {
+        card.style.display = "none"; return;
+    }
+    card.style.display = "block";
+
+    const kl = data.analysis.technicals.key_levels;
+    const price = data.analysis.price.current;
+
+    const levelRow = (name, value) => {
+        if (!value) return "";
+        const dist = price ? (((value - price) / price) * 100).toFixed(2) : "?";
+        const distClass = parseFloat(dist) >= 0 ? "price-up" : "price-down";
+        return `<div class="info-row"><span>${name}</span><span>${fmt(value)} <small class="${distClass}">(${dist}%)</small></span></div>`;
+    };
+
+    content.innerHTML = `
+        <div class="kl-section"><h4>Previous Day</h4>
+            ${levelRow("PDH", kl.pdh)}${levelRow("PDL", kl.pdl)}${levelRow("PDC", kl.pdc)}
+        </div>
+        <div class="kl-section"><h4>Pivot Points</h4>
+            ${levelRow("R2", kl.r2)}${levelRow("R1", kl.r1)}${levelRow("PP", kl.pp)}${levelRow("S1", kl.s1)}${levelRow("S2", kl.s2)}
+        </div>
+        ${kl.pwh ? `<div class="kl-section"><h4>Previous Week</h4>${levelRow("PWH", kl.pwh)}${levelRow("PWL", kl.pwl)}</div>` : ""}
+        ${kl.nearest_level ? `<div class="kl-nearest">Nearest: <strong>${kl.nearest_level.name}</strong> at ${fmt(kl.nearest_level.price)} (${kl.nearest_level.distance_pct.toFixed(2)}%)</div>` : ""}
+    `;
+}
+
+function renderPolymarket(data) {
+    const card = document.getElementById("polymarket-card");
+    const content = document.getElementById("polymarket-content");
+    if (!data.polymarket) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    const p = data.polymarket;
+    content.innerHTML = `
+        <div style="text-align:center; margin-bottom:12px;">
+            <span class="badge ${biasClass(p.signal)}" style="font-size:14px; padding:4px 12px;">
+                ${p.signal} (${p.confidence}%)
+            </span>
+        </div>
+        <div class="info-row"><span>Markets analyzed</span><span>${p.market_count}</span></div>
+    `;
+}
+
+function renderCalendar(data) {
+    const card = document.getElementById("calendar-card");
+    const content = document.getElementById("calendar-content");
+    if (!data.calendar || !data.calendar.events_today.length) {
+        card.style.display = "none"; return;
+    }
+    card.style.display = "block";
+
+    let html = "";
+    if (data.calendar.regime_override) {
+        html += `<div class="calendar-override">REGIME OVERRIDE: ${data.calendar.override_reason}</div>`;
+    }
+    html += '<div class="calendar-events">';
+    for (const ev of data.calendar.events_today) {
+        const hoursStr = ev.hours_away !== null ? `${ev.hours_away}h` : "";
+        html += `<div class="calendar-event">
+            <span class="event-time">${hoursStr}</span>
+            <span class="event-title">${ev.title}</span>
+            <span class="event-country">${ev.country}</span>
+        </div>`;
+    }
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function renderFlags(data) {
+    const card = document.getElementById("flags-card");
+    const content = document.getElementById("flags-content");
+    if (!data.validation_flags || !data.validation_flags.length) {
+        card.style.display = "none"; return;
+    }
+    card.style.display = "block";
+
+    content.innerHTML = data.validation_flags.map(f =>
+        `<div class="flag-item">${f}</div>`
+    ).join("");
+}
+
+// Helpers
+function fmt(n) {
+    if (n === null || n === undefined) return "-";
+    return typeof n === "number" ? n.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2}) : n;
+}
+
+function biasClass(label) {
+    if (!label) return "badge-neutral";
+    const l = label.toUpperCase();
+    if (l === "BULLISH" || l === "LONG") return "badge-bullish";
+    if (l === "BEARISH" || l === "SHORT") return "badge-bearish";
+    return "badge-neutral";
+}
+</script>
+{% endblock %}
