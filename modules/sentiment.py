@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -25,6 +24,9 @@ try:
     from groq import Groq
 except ImportError:
     Groq = None  # type: ignore[assignment,misc]
+
+from modules.exceptions import LLMRateLimited, LLMResponseInvalid, LLMUnavailable
+from modules.retry import retry_llm
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class SentimentResult:
 # News temporal tagging
 # ---------------------------------------------------------------------------
 
+
 def _tag_news_with_recency(
     news: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -99,6 +102,7 @@ def _tag_news_with_recency(
 # Two-pass prompts
 # ---------------------------------------------------------------------------
 
+
 def _build_reasoning_prompt(
     news: list[dict[str, Any]],
     assets: list[dict[str, str]],
@@ -106,8 +110,7 @@ def _build_reasoning_prompt(
 ) -> str:
     """Pass 1: Chain-of-thought reasoning prompt."""
     asset_names = ", ".join(
-        f"{a.get('display_name', a['symbol'])} ({a['symbol']})"
-        for a in assets
+        f"{a.get('display_name', a['symbol'])} ({a['symbol']})" for a in assets
     )
 
     news_block = ""
@@ -125,8 +128,7 @@ def _build_reasoning_prompt(
         top = poly_data.get("top_markets", [])[:5]
         if top:
             lines = "\n".join(
-                f"- {m['question']}: {m['prob_yes']:.0f}% YES"
-                for m in top
+                f"- {m['question']}: {m['prob_yes']:.0f}% YES" for m in top
             )
             poly_block = f"""
 PREDICTION MARKET DATA (Polymarket — real money at stake):
@@ -161,9 +163,7 @@ def _build_extraction_prompt(
 ) -> str:
     """Pass 2: JSON extraction from reasoning, with few-shot calibration."""
     asset_symbols = [a["symbol"] for a in assets]
-    asset_score_lines = ",\n    ".join(
-        f'"{s}": <-3.0 to +3.0>' for s in asset_symbols
-    )
+    asset_score_lines = ",\n    ".join(f'"{s}": <-3.0 to +3.0>' for s in asset_symbols)
 
     return f"""Given your previous analysis, produce EXCLUSIVELY a valid JSON.
 
@@ -238,9 +238,7 @@ Take this data into account in your sentiment analysis.
 """
 
     asset_symbols = [a["symbol"] for a in assets]
-    asset_score_lines = ",\n    ".join(
-        f'"{s}": <-3.0 to +3.0>' for s in asset_symbols
-    )
+    asset_score_lines = ",\n    ".join(f'"{s}": <-3.0 to +3.0>' for s in asset_symbols)
 
     return f"""You are an expert financial analyst. Analyze the following market news
 and provide a macro sentiment analysis for a retail CFD trader operating on: {asset_names}.
@@ -275,6 +273,7 @@ Rules:
 # ---------------------------------------------------------------------------
 # Helper to parse and clean LLM JSON
 # ---------------------------------------------------------------------------
+
 
 def _clean_json_response(raw: str) -> str:
     """Strip markdown fences and whitespace from LLM response."""
@@ -327,6 +326,8 @@ def _parse_sentiment_json(
 # Groq LLM call with retry
 # ---------------------------------------------------------------------------
 
+
+@retry_llm(max_attempts=MAX_RETRIES)
 def _groq_call(
     client: Any,
     model: str,
@@ -336,35 +337,33 @@ def _groq_call(
     temperature: float = 0.3,
 ) -> str:
     """Make a single Groq API call with retry logic. Returns raw text."""
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as exc:
-            if "rate_limit" in str(exc).lower() or "429" in str(exc):
-                wait = BACKOFF_BASE ** attempt
-                logger.warning(
-                    "Rate limited, retrying in %.1fs (attempt %d)", wait, attempt,
-                )
-                time.sleep(wait)
-                if attempt == MAX_RETRIES:
-                    raise
-            else:
-                raise
-    raise RuntimeError("Groq call failed after all retries")
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        if "rate_limit" in str(exc).lower() or "429" in str(exc):
+            raise LLMRateLimited(
+                provider="groq",
+                detail=str(exc),
+            ) from exc
+        raise LLMUnavailable(
+            provider="groq",
+            detail=str(exc),
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
 # Two-pass Groq analysis
 # ---------------------------------------------------------------------------
+
 
 def _analyze_with_groq_two_pass(
     news: list[dict[str, Any]],
@@ -383,9 +382,10 @@ def _analyze_with_groq_two_pass(
     reasoning_prompt = _build_reasoning_prompt(news, assets, poly_data)
     logger.info("Groq Pass 1: chain-of-thought reasoning...")
     reasoning = _groq_call(
-        client, model,
+        client,
+        model,
         system_msg="You are a senior quant analyst. Reason step-by-step about the impact "
-                   "of news on financial markets.",
+        "of news on financial markets.",
         user_msg=reasoning_prompt,
         max_tokens=1000,
         temperature=0.4,
@@ -396,9 +396,10 @@ def _analyze_with_groq_two_pass(
     extraction_prompt = _build_extraction_prompt(reasoning, assets)
     logger.info("Groq Pass 2: structured extraction...")
     raw_json = _groq_call(
-        client, model,
+        client,
+        model,
         system_msg="You are a data extraction engine. Convert the analysis to valid JSON. "
-                   "Respond ONLY with JSON.",
+        "Respond ONLY with JSON.",
         user_msg=extraction_prompt,
         max_tokens=600,
         temperature=0.1,
@@ -406,10 +407,19 @@ def _analyze_with_groq_two_pass(
     logger.debug("Groq Pass 2 raw: %s", raw_json[:200])
 
     cleaned = _clean_json_response(raw_json)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise LLMResponseInvalid(
+            provider="groq",
+            detail=f"Invalid JSON in pass 2: {exc}",
+        ) from exc
     result = _parse_sentiment_json(data, assets, source="groq-2pass")
-    logger.info("Two-pass analysis complete: score=%.1f, bias=%s",
-                result.sentiment_score, result.directional_bias)
+    logger.info(
+        "Two-pass analysis complete: score=%.1f, bias=%s",
+        result.sentiment_score,
+        result.directional_bias,
+    )
     return result
 
 
@@ -428,7 +438,8 @@ def _analyze_with_groq_single_pass(
     prompt = _build_prompt(news, assets, poly_data=poly_data)
 
     raw = _groq_call(
-        client, model,
+        client,
+        model,
         system_msg="You are a financial analyst. Respond only in valid JSON.",
         user_msg=prompt,
         max_tokens=600,
@@ -436,7 +447,13 @@ def _analyze_with_groq_single_pass(
     )
 
     cleaned = _clean_json_response(raw)
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise LLMResponseInvalid(
+            provider="groq",
+            detail=f"Invalid JSON in single-pass: {exc}",
+        ) from exc
     return _parse_sentiment_json(data, assets, source="groq")
 
 
@@ -451,22 +468,32 @@ def _analyze_with_groq(
     # Try two-pass first (better quality)
     try:
         return _analyze_with_groq_two_pass(
-            news, assets, model, api_key, poly_data,
+            news,
+            assets,
+            model,
+            api_key,
+            poly_data,
         )
     except Exception as exc:
         logger.warning(
-            "Two-pass analysis failed, trying single-pass: %s", exc,
+            "Two-pass analysis failed, trying single-pass: %s",
+            exc,
         )
 
     # Fallback to single-pass
     return _analyze_with_groq_single_pass(
-        news, assets, model, api_key, poly_data,
+        news,
+        assets,
+        model,
+        api_key,
+        poly_data,
     )
 
 
 # ---------------------------------------------------------------------------
 # FinBERT (fallback + ensemble cross-validation)
 # ---------------------------------------------------------------------------
+
 
 def _get_finbert_score(news: list[dict[str, Any]]) -> float | None:
     """Run FinBERT on headlines and return a -3 to +3 score, or None on failure."""
@@ -505,7 +532,8 @@ def _get_finbert_score(news: list[dict[str, Any]]) -> float | None:
 
 
 def _compute_finbert_agreement(
-    groq_score: float, finbert_score: float | None,
+    groq_score: float,
+    finbert_score: float | None,
 ) -> tuple[str, float]:
     """Compute agreement level between Groq and FinBERT.
 
@@ -616,6 +644,7 @@ def _analyze_with_finbert(news: list[dict[str, Any]]) -> SentimentResult:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def analyze_sentiment(
     news: list[dict[str, Any]],
     assets: list[dict[str, str]],
@@ -659,8 +688,16 @@ def analyze_sentiment(
     if api_key:
         try:
             result = _analyze_with_groq(
-                tagged_news, assets, groq_model, api_key, poly_data=poly_data,
+                tagged_news,
+                assets,
+                groq_model,
+                api_key,
+                poly_data=poly_data,
             )
+        except (LLMRateLimited, LLMUnavailable) as exc:
+            logger.warning("Groq transient failure, falling back to FinBERT: %s", exc)
+        except LLMResponseInvalid as exc:
+            logger.warning("Groq response invalid, falling back to FinBERT: %s", exc)
         except Exception as exc:
             logger.warning("Groq analysis failed, falling back to FinBERT: %s", exc)
 
@@ -671,16 +708,20 @@ def analyze_sentiment(
             finbert_score = _get_finbert_score(news)
             if finbert_score is not None:
                 agreement, conf_mod = _compute_finbert_agreement(
-                    result.sentiment_score, finbert_score,
+                    result.sentiment_score,
+                    finbert_score,
                 )
                 result.finbert_score = finbert_score
                 result.finbert_agreement = agreement
                 result.confidence = max(
-                    0.0, min(100.0, result.confidence + conf_mod),
+                    0.0,
+                    min(100.0, result.confidence + conf_mod),
                 )
                 logger.info(
                     "FinBERT ensemble: score=%.1f, agreement=%s (Groq=%.1f)",
-                    finbert_score, agreement, result.sentiment_score,
+                    finbert_score,
+                    agreement,
+                    result.sentiment_score,
                 )
         except Exception as exc:
             logger.debug("FinBERT ensemble skipped: %s", exc)

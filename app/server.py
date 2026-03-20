@@ -7,6 +7,7 @@ Shutdown: disposes the engine gracefully.
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI):
 
     monitor = AssetMonitor(app)
     app.state.monitor = monitor
+    monitor.install_signal_handlers()
     await monitor.restore_from_db()
 
     db_type = "PostgreSQL" if "postgresql" in settings.database_url else "SQLite"
@@ -93,9 +95,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Trading Copilot",
     description="Real-time CFD trading dashboard",
-    version="0.1.0",
+    version="5.3.0",
     lifespan=lifespan,
 )
+
+# Structured logging + correlation ID middleware
+if os.environ.get("TRADING_COPILOT_JSON_LOGS", "").lower() in ("1", "true"):
+    from app.middleware.logging import CorrelationIDMiddleware, configure_logging
+    configure_logging()
+    app.add_middleware(CorrelationIDMiddleware)
 
 # Static files
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")

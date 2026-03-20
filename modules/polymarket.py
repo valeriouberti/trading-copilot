@@ -24,20 +24,20 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
 
+from modules.exceptions import ExternalAPITransient, LLMResponseInvalid
 from modules.keywords import BEARISH_EVENT_KEYWORDS, BULLISH_EVENT_KEYWORDS
+from modules.retry import retry_external_api
 
 logger = logging.getLogger(__name__)
 
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
 MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds
 EVENTS_PER_TAG = 20  # Max events per tag_slug query
 MAX_MARKETS = 20  # Final cap on returned markets
 
@@ -48,17 +48,92 @@ MAX_MARKETS = 20  # Final cap on returned markets
 _ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
     # Order matters: longer/more specific keys first to avoid substring false matches
     # (e.g. "ES" in "futures" would wrongly match Gold Futures)
-    ("IXIC", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
-    ("NAS",  ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
-    ("NQ",   ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
-    ("GSPC", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
-    ("SPX",  ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    (
+        "IXIC",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
+    (
+        "NAS",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
+    (
+        "NQ",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
+    (
+        "GSPC",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
+    (
+        "SPX",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
     ("GOLD", ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
-    ("GC",   ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
-    ("OIL",  ["oil", "commodities", "geopolitics", "fed"]),
-    ("CL",   ["oil", "commodities", "geopolitics", "fed"]),
-    ("EUR",  ["fed", "inflation", "interest-rates", "economy", "tariffs", "geopolitics"]),
-    ("ES",   ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy", "geopolitics"]),
+    ("GC", ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
+    ("OIL", ["oil", "commodities", "geopolitics", "fed"]),
+    ("CL", ["oil", "commodities", "geopolitics", "fed"]),
+    (
+        "EUR",
+        ["fed", "inflation", "interest-rates", "economy", "tariffs", "geopolitics"],
+    ),
+    (
+        "ES",
+        [
+            "fed",
+            "inflation",
+            "gdp",
+            "unemployment",
+            "tariffs",
+            "stocks",
+            "economy",
+            "geopolitics",
+        ],
+    ),
 ]
 
 _DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics", "tariffs"]
@@ -67,18 +142,83 @@ _DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics", "tari
 # Category classification keywords
 # ---------------------------------------------------------------------------
 _CATEGORY_RULES: list[tuple[str, list[str]]] = [
-    ("FED", ["fed", "federal reserve", "rate hike", "rate cut", "fomc",
-             "interest rate", "inflation", "cpi", "monetary policy", "powell"]),
-    ("MACRO", ["recession", "gdp", "unemployment", "jobs", "nonfarm",
-               "economy", "growth", "debt", "default", "fiscal", "treasury",
-               "s&p", "sp500", "nasdaq", "stock market", "bear market",
-               "bull market", "negative gdp", "company", "nvidia", "tesla",
-               "apple", "google", "amazon", "microsoft"]),
-    ("COMMODITY", ["gold", "silver", "crude oil", "oil", "commodity",
-                   "commodities", "natural gas"]),
-    ("GEOPOLITICAL", ["war", "russia", "china", "ukraine", "iran", "israel",
-                      "nato", "conflict", "tariff", "sanctions", "trade war",
-                      "invasion", "military", "ceasefire", "hormuz"]),
+    (
+        "FED",
+        [
+            "fed",
+            "federal reserve",
+            "rate hike",
+            "rate cut",
+            "fomc",
+            "interest rate",
+            "inflation",
+            "cpi",
+            "monetary policy",
+            "powell",
+        ],
+    ),
+    (
+        "MACRO",
+        [
+            "recession",
+            "gdp",
+            "unemployment",
+            "jobs",
+            "nonfarm",
+            "economy",
+            "growth",
+            "debt",
+            "default",
+            "fiscal",
+            "treasury",
+            "s&p",
+            "sp500",
+            "nasdaq",
+            "stock market",
+            "bear market",
+            "bull market",
+            "negative gdp",
+            "company",
+            "nvidia",
+            "tesla",
+            "apple",
+            "google",
+            "amazon",
+            "microsoft",
+        ],
+    ),
+    (
+        "COMMODITY",
+        [
+            "gold",
+            "silver",
+            "crude oil",
+            "oil",
+            "commodity",
+            "commodities",
+            "natural gas",
+        ],
+    ),
+    (
+        "GEOPOLITICAL",
+        [
+            "war",
+            "russia",
+            "china",
+            "ukraine",
+            "iran",
+            "israel",
+            "nato",
+            "conflict",
+            "tariff",
+            "sanctions",
+            "trade war",
+            "invasion",
+            "military",
+            "ceasefire",
+            "hormuz",
+        ],
+    ),
     ("CRYPTO", ["bitcoin", "btc", "eth", "crypto", "coinbase"]),
 ]
 
@@ -129,24 +269,70 @@ def _get_keywords_for_assets(assets: list[dict[str, str]]) -> list[str]:
         display_name = asset.get("display_name", "").lower()
 
         if any(s in symbol for s in ("NQ", "NAS", "IXIC")):
-            keywords.extend(["federal reserve", "fed rate", "fomc",
-                             "recession", "inflation", "cpi", "nasdaq",
-                             "s&p 500", "sp500", "gdp", "unemployment",
-                             "tariff", "trade war", "interest rate"])
+            keywords.extend(
+                [
+                    "federal reserve",
+                    "fed rate",
+                    "fomc",
+                    "recession",
+                    "inflation",
+                    "cpi",
+                    "nasdaq",
+                    "s&p 500",
+                    "sp500",
+                    "gdp",
+                    "unemployment",
+                    "tariff",
+                    "trade war",
+                    "interest rate",
+                ]
+            )
         elif any(s in symbol for s in ("ES", "SPX", "GSPC")):
-            keywords.extend(["federal reserve", "fed rate", "fomc",
-                             "recession", "inflation", "cpi",
-                             "s&p 500", "sp500", "gdp", "unemployment",
-                             "tariff", "trade war", "interest rate"])
+            keywords.extend(
+                [
+                    "federal reserve",
+                    "fed rate",
+                    "fomc",
+                    "recession",
+                    "inflation",
+                    "cpi",
+                    "s&p 500",
+                    "sp500",
+                    "gdp",
+                    "unemployment",
+                    "tariff",
+                    "trade war",
+                    "interest rate",
+                ]
+            )
         elif "EUR" in symbol:
-            keywords.extend(["ecb", "euro", "federal reserve", "eurozone",
-                             "dollar", "tariff", "interest rate"])
+            keywords.extend(
+                [
+                    "ecb",
+                    "euro",
+                    "federal reserve",
+                    "eurozone",
+                    "dollar",
+                    "tariff",
+                    "interest rate",
+                ]
+            )
         elif "GC" in symbol or "gold" in display_name:
-            keywords.extend(["gold", "inflation", "federal reserve",
-                             "geopolitical", "war", "tariff", "interest rate"])
+            keywords.extend(
+                [
+                    "gold",
+                    "inflation",
+                    "federal reserve",
+                    "geopolitical",
+                    "war",
+                    "tariff",
+                    "interest rate",
+                ]
+            )
         else:
-            keywords.extend(["recession", "federal reserve", "gdp",
-                             "interest rate", "inflation"])
+            keywords.extend(
+                ["recession", "federal reserve", "gdp", "interest rate", "inflation"]
+            )
 
     return list(dict.fromkeys(keywords))
 
@@ -154,6 +340,7 @@ def _get_keywords_for_assets(assets: list[dict[str, str]]) -> list[str]:
 # ---------------------------------------------------------------------------
 # API fetching via /events endpoint
 # ---------------------------------------------------------------------------
+
 
 def _fetch_events(tag_slug: str) -> list[dict[str, Any]]:
     """Fetch events from the Gamma /events endpoint with retry."""
@@ -165,29 +352,29 @@ def _fetch_events(tag_slug: str) -> list[dict[str, Any]]:
         "order": "volume",
         "ascending": "false",
     }
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            resp = requests.get(
-                f"{GAMMA_API_BASE}/events",
-                params=params,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as exc:
-            logger.warning(
-                "Polymarket API error (attempt %d/%d): %s",
-                attempt, MAX_RETRIES, exc,
-            )
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY)
-            else:
-                logger.warning(
-                    "Polymarket API unreachable after %d attempts",
-                    MAX_RETRIES,
-                )
-                return []
-    return []
+    try:
+        return _fetch_events_with_retry(params)
+    except ExternalAPITransient:
+        logger.warning("Polymarket API unreachable for tag_slug=%s", tag_slug)
+        return []
+
+
+@retry_external_api(max_attempts=MAX_RETRIES)
+def _fetch_events_with_retry(params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Inner retry-wrapped fetch for Polymarket events."""
+    try:
+        resp = requests.get(
+            f"{GAMMA_API_BASE}/events",
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        raise ExternalAPITransient(
+            service="polymarket",
+            detail=str(exc),
+        ) from exc
 
 
 def _parse_market(market_raw: dict[str, Any]) -> dict[str, Any] | None:
@@ -216,8 +403,16 @@ def _parse_market(market_raw: dict[str, Any]) -> dict[str, Any] | None:
         else:
             outcome_prices = outcome_prices_raw
 
-        prob_yes = round(float(outcome_prices[0]) * 100, 1) if len(outcome_prices) > 0 else 50.0
-        prob_no = round(float(outcome_prices[1]) * 100, 1) if len(outcome_prices) > 1 else round(100 - prob_yes, 1)
+        prob_yes = (
+            round(float(outcome_prices[0]) * 100, 1)
+            if len(outcome_prices) > 0
+            else 50.0
+        )
+        prob_no = (
+            round(float(outcome_prices[1]) * 100, 1)
+            if len(outcome_prices) > 1
+            else round(100 - prob_yes, 1)
+        )
     except (ValueError, TypeError, IndexError, json.JSONDecodeError):
         prob_yes = 50.0
         prob_no = 50.0
@@ -287,7 +482,8 @@ def fetch_markets(
 
     logger.info(
         "Polymarket: %d raw -> %d unique after dedup",
-        len(all_raw_markets), len(unique_markets),
+        len(all_raw_markets),
+        len(unique_markets),
     )
 
     # Parse, classify, and filter
@@ -312,7 +508,8 @@ def fetch_markets(
 
     logger.info(
         "Polymarket: %d markets after filtering (from %d unique)",
-        min(len(results), MAX_MARKETS), len(unique_markets),
+        min(len(results), MAX_MARKETS),
+        len(unique_markets),
     )
 
     return results[:MAX_MARKETS]
@@ -321,6 +518,7 @@ def fetch_markets(
 # ---------------------------------------------------------------------------
 # Temporal decay
 # ---------------------------------------------------------------------------
+
 
 def _compute_time_weight(end_date_str: str) -> float:
     """Compute temporal decay weight based on market resolution date.
@@ -344,6 +542,7 @@ def _compute_time_weight(end_date_str: str) -> float:
 # ---------------------------------------------------------------------------
 # LLM-based classification with impact magnitude
 # ---------------------------------------------------------------------------
+
 
 def _keyword_classify_single(question: str) -> str:
     """Classify a single market question using keywords (fallback)."""
@@ -441,7 +640,7 @@ Rules:
                 {
                     "role": "system",
                     "content": "Classify events as bullish/bearish for markets "
-                               "and assign an impact score 1-5. Respond only in JSON.",
+                    "and assign an impact score 1-5. Respond only in JSON.",
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -461,12 +660,19 @@ Rules:
         for c in classifications:
             idx = c.get("index", 0) - 1
             if 0 <= idx < len(batch):
-                batch[idx]["impact"] = c.get("impact", batch[idx].get("impact", "BEARISH_IF_YES"))
-                batch[idx]["impact_magnitude"] = max(1, min(5, int(c.get("magnitude", 3))))
+                batch[idx]["impact"] = c.get(
+                    "impact", batch[idx].get("impact", "BEARISH_IF_YES")
+                )
+                batch[idx]["impact_magnitude"] = max(
+                    1, min(5, int(c.get("magnitude", 3)))
+                )
 
         logger.info("LLM classified %d Polymarket markets with magnitude", len(batch))
         return markets
 
+    except (LLMResponseInvalid, json.JSONDecodeError) as exc:
+        logger.warning("LLM classification response invalid: %s", exc)
+        return markets  # Already pre-populated
     except Exception as exc:
         logger.warning("LLM classification failed, using keyword fallback: %s", exc)
         return markets  # Already pre-populated
@@ -475,6 +681,7 @@ Rules:
 # ---------------------------------------------------------------------------
 # Signal computation v2 — fixed probability interpretation
 # ---------------------------------------------------------------------------
+
 
 def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute the aggregate directional signal (v2).
@@ -569,7 +776,9 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
             * _compute_time_weight(m.get("end_date", ""))
             * m.get("impact_magnitude", 3)
         )
-    top_markets = sorted(markets, key=lambda m: m["_effective_weight"], reverse=True)[:5]
+    top_markets = sorted(markets, key=lambda m: m["_effective_weight"], reverse=True)[
+        :5
+    ]
     # Clean up temp field
     for m in markets:
         m.pop("_effective_weight", None)
@@ -592,6 +801,7 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
 # High-level entry point
 # ---------------------------------------------------------------------------
 
+
 def get_polymarket_context(
     assets: list[dict[str, str]],
     groq_model: str = "llama-3.3-70b-versatile",
@@ -610,7 +820,9 @@ def get_polymarket_context(
 
     # Classify with LLM (falls back to keywords if unavailable)
     markets = classify_markets_with_llm(
-        markets, groq_model=groq_model, api_key=groq_api_key,
+        markets,
+        groq_model=groq_model,
+        api_key=groq_api_key,
     )
 
     signal_data = compute_signal(markets)

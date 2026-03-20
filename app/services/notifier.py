@@ -56,7 +56,13 @@ class TelegramNotifier:
             )
             return True
         except Exception as exc:
+            from modules.exceptions import NotificationError
             logger.error("Telegram send failed: %s", exc)
+            if "Unauthorized" in str(exc) or "chat not found" in str(exc).lower():
+                from modules.exceptions import NotificationPermanent
+                raise NotificationPermanent(
+                    channel="telegram", detail=str(exc),
+                ) from exc
             return False
 
     async def _check_rate_limit(

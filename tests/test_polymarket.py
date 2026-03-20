@@ -178,10 +178,9 @@ class TestFetchMarketsDeduplication:
 
 class TestFetchMarketsNetworkFailure:
     def test_returns_empty_on_connection_error(self) -> None:
-        """On network error, should return empty list."""
+        """On network error, should return empty list (tenacity retries internally)."""
         with patch("modules.polymarket.requests.get", side_effect=ConnectionError("network down")):
-            with patch("modules.polymarket.time.sleep"):
-                result = fetch_markets(tag_slugs=["fed"])
+            result = fetch_markets(tag_slugs=["fed"])
 
         assert result == []
 

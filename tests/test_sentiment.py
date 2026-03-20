@@ -120,10 +120,11 @@ class TestMalformedResponse:
             "This is not JSON at all, just plain text analysis."
         )
 
+        from modules.exceptions import LLMResponseInvalid
+
         with patch("modules.sentiment.Groq", return_value=mock_client):
-            with patch("modules.sentiment.time.sleep"):
-                with pytest.raises(json.JSONDecodeError):
-                    _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+            with pytest.raises(LLMResponseInvalid):
+                _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
     def test_malformed_json_full_pipeline_fallback(self, mock_news_items: list) -> None:
         """Verify that the full pipeline falls back if Groq returns text."""
@@ -132,24 +133,25 @@ class TestMalformedResponse:
 
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
             with patch("modules.sentiment.Groq", return_value=mock_client):
-                with patch("modules.sentiment.time.sleep"):
-                    with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
-                        mock_finbert.return_value = SentimentResult(
-                            sentiment_score=0.0,
-                            sentiment_label="Neutral",
-                            key_drivers=["Fallback"],
-                            directional_bias="NEUTRAL",
-                            confidence=0.0,
-                            source="finbert",
-                        )
-                        result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+                with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
+                    mock_finbert.return_value = SentimentResult(
+                        sentiment_score=0.0,
+                        sentiment_label="Neutral",
+                        key_drivers=["Fallback"],
+                        directional_bias="NEUTRAL",
+                        confidence=0.0,
+                        source="finbert",
+                    )
+                    result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
         assert result.source == "finbert"
 
 
 class TestGroqRateLimit:
     def test_retry_on_rate_limit(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verify retry with exponential backoff on rate limit."""
+        """Verify retry with exponential backoff on rate limit (via tenacity)."""
+        from modules.exceptions import LLMRateLimited
+
         mock_client = MagicMock()
         call_count = 0
 
@@ -163,11 +165,12 @@ class TestGroqRateLimit:
         mock_client.chat.completions.create.side_effect = side_effect
 
         with patch("modules.sentiment.Groq", return_value=mock_client):
-            with patch("modules.sentiment.time.sleep") as mock_sleep:
+            # Tenacity handles sleep internally — patch it to avoid actual waits
+            with patch("tenacity.nap.time.sleep"):
                 result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.sentiment_score == 1.0
-        assert mock_sleep.call_count == 2  # 2 retries before success
+        assert call_count >= 3  # retried at least twice before success
 
 
 class TestGroqTotalFailure:

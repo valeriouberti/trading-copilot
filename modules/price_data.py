@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +16,13 @@ import pandas as pd
 import pandas_ta as ta
 import requests
 import yfinance as yf
+
+from modules.exceptions import (
+    DataFetchPermanent,
+    DataFetchTransient,
+    NoDataAvailable,
+)
+from modules.retry import retry_data_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,7 @@ import math
 @dataclass
 class TechnicalSignal:
     """A single technical indicator result."""
+
     name: str
     value: float | None
     label: str  # "BULLISH", "BEARISH", or "NEUTRAL"
@@ -64,29 +71,37 @@ class TechnicalSignal:
 @dataclass
 class KeyLevels:
     """Key support/resistance levels for an asset."""
-    pdh: float | None = None   # Previous Day High
-    pdl: float | None = None   # Previous Day Low
-    pdc: float | None = None   # Previous Day Close
-    pwh: float | None = None   # Previous Week High
-    pwl: float | None = None   # Previous Week Low
-    pp: float | None = None    # Pivot Point
-    r1: float | None = None    # Resistance 1
-    r2: float | None = None    # Resistance 2
-    s1: float | None = None    # Support 1
-    s2: float | None = None    # Support 2
+
+    pdh: float | None = None  # Previous Day High
+    pdl: float | None = None  # Previous Day Low
+    pdc: float | None = None  # Previous Day Close
+    pwh: float | None = None  # Previous Week High
+    pwl: float | None = None  # Previous Week Low
+    pp: float | None = None  # Pivot Point
+    r1: float | None = None  # Resistance 1
+    r2: float | None = None  # Resistance 2
+    s1: float | None = None  # Support 1
+    s2: float | None = None  # Support 2
     psych_above: float | None = None  # Nearest psychological level above
     psych_below: float | None = None  # Nearest psychological level below
-    nearest_level: float | None = None       # Closest level to current price
-    nearest_level_name: str = ""             # Name of closest level
+    nearest_level: float | None = None  # Closest level to current price
+    nearest_level_name: str = ""  # Name of closest level
     nearest_level_dist_pct: float | None = None  # Distance % to closest level
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "pdh": self.pdh, "pdl": self.pdl, "pdc": self.pdc,
-            "pwh": self.pwh, "pwl": self.pwl,
-            "pp": self.pp, "r1": self.r1, "r2": self.r2,
-            "s1": self.s1, "s2": self.s2,
-            "psych_above": self.psych_above, "psych_below": self.psych_below,
+            "pdh": self.pdh,
+            "pdl": self.pdl,
+            "pdc": self.pdc,
+            "pwh": self.pwh,
+            "pwl": self.pwl,
+            "pp": self.pp,
+            "r1": self.r1,
+            "r2": self.r2,
+            "s1": self.s1,
+            "s2": self.s2,
+            "psych_above": self.psych_above,
+            "psych_below": self.psych_below,
             "nearest_level": self.nearest_level,
             "nearest_level_name": self.nearest_level_name,
             "nearest_level_dist_pct": self.nearest_level_dist_pct,
@@ -95,11 +110,18 @@ class KeyLevels:
     def all_levels(self) -> list[tuple[str, float]]:
         """Return all non-None levels as (name, value) pairs."""
         pairs = [
-            ("PDH", self.pdh), ("PDL", self.pdl), ("PDC", self.pdc),
-            ("PWH", self.pwh), ("PWL", self.pwl),
-            ("PP", self.pp), ("R1", self.r1), ("R2", self.r2),
-            ("S1", self.s1), ("S2", self.s2),
-            ("Psych", self.psych_above), ("Psych", self.psych_below),
+            ("PDH", self.pdh),
+            ("PDL", self.pdl),
+            ("PDC", self.pdc),
+            ("PWH", self.pwh),
+            ("PWL", self.pwl),
+            ("PP", self.pp),
+            ("R1", self.r1),
+            ("R2", self.r2),
+            ("S1", self.s1),
+            ("S2", self.s2),
+            ("Psych", self.psych_above),
+            ("Psych", self.psych_below),
         ]
         return [(n, v) for n, v in pairs if v is not None]
 
@@ -107,6 +129,7 @@ class KeyLevels:
 @dataclass
 class MTFAnalysis:
     """Multi-timeframe trend alignment analysis."""
+
     weekly_trend: str = "NEUTRAL"
     daily_trend: str = "NEUTRAL"
     hourly_trend: str = "NEUTRAL"
@@ -134,6 +157,7 @@ class QualityScore:
     - candle_pattern: engulfing or pin bar on last daily candle
     - volume_above_avg: last bar volume > 20-day average
     """
+
     total: int = 0
     confluence: bool = False
     strong_trend: bool = False
@@ -155,6 +179,7 @@ class QualityScore:
 @dataclass
 class AssetAnalysis:
     """Complete technical analysis for one asset."""
+
     symbol: str
     display_name: str
     price: float | None
@@ -178,13 +203,18 @@ class AssetAnalysis:
             "display_name": self.display_name,
             "price": self.price,
             "change_pct": self.change_pct,
-            "signals": {s.name: {"value": s.value, "label": s.label, "detail": s.detail} for s in self.signals},
+            "signals": {
+                s.name: {"value": s.value, "label": s.label, "detail": s.detail}
+                for s in self.signals
+            },
             "composite_score": self.composite_score,
             "confidence_pct": self.confidence_pct,
             "data_source": self.data_source,
             "key_levels": self.key_levels.to_dict() if self.key_levels else None,
             "mtf": self.mtf.to_dict() if self.mtf else None,
-            "quality_score": self.quality_score.to_dict() if self.quality_score else None,
+            "quality_score": self.quality_score.to_dict()
+            if self.quality_score
+            else None,
             "error": self.error,
         }
 
@@ -205,8 +235,17 @@ def analyze_assets(assets: list[dict[str, str]]) -> list[AssetAnalysis]:
         logger.info("Analyzing %s (%s)...", display_name, symbol)
         try:
             analysis = _analyze_single_asset(symbol, display_name)
+        except (DataFetchTransient, DataFetchPermanent, NoDataAvailable) as exc:
+            logger.error("Data fetch error for %s: %s", symbol, exc)
+            analysis = AssetAnalysis(
+                symbol=symbol,
+                display_name=display_name,
+                price=None,
+                change_pct=None,
+                error=str(exc),
+            )
         except Exception as exc:
-            logger.error("Error analyzing %s: %s", symbol, exc)
+            logger.error("Unexpected error analyzing %s: %s", symbol, exc)
             analysis = AssetAnalysis(
                 symbol=symbol,
                 display_name=display_name,
@@ -222,23 +261,20 @@ def analyze_assets(assets: list[dict[str, str]]) -> list[AssetAnalysis]:
 # Data fetching — yfinance (primary) + Twelve Data (fallback)
 # ---------------------------------------------------------------------------
 
+
+@retry_data_fetch(max_attempts=MAX_RETRIES)
 def _fetch_with_retry(symbol: str, period: str, interval: str):
     """Fetch yfinance data with retry and exponential backoff."""
     ticker = yf.Ticker(symbol)
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            df = ticker.history(period=period, interval=interval, timeout=15)
-            return df
-        except Exception as exc:
-            if attempt == MAX_RETRIES:
-                raise
-            wait = RETRY_BACKOFF_BASE ** attempt
-            logger.warning(
-                "yfinance %s (%s/%s) failed (attempt %d/%d), retry in %.1fs: %s",
-                symbol, period, interval, attempt, MAX_RETRIES, wait, exc,
-            )
-            time.sleep(wait)
-    return None
+    try:
+        df = ticker.history(period=period, interval=interval, timeout=15)
+        return df
+    except Exception as exc:
+        raise DataFetchTransient(
+            symbol=symbol,
+            source="yfinance",
+            detail=str(exc),
+        ) from exc
 
 
 def _fetch_twelvedata(
@@ -324,6 +360,8 @@ def _fetch_daily(symbol: str) -> tuple[pd.DataFrame, str]:
         df = _fetch_with_retry(symbol, period="60d", interval="1d")
         if df is not None and not df.empty:
             return df, "yfinance"
+    except DataFetchTransient as exc:
+        logger.warning("yfinance daily failed for %s: %s", symbol, exc)
     except Exception as exc:
         logger.warning("yfinance daily failed for %s: %s", symbol, exc)
 
@@ -332,7 +370,9 @@ def _fetch_daily(symbol: str) -> tuple[pd.DataFrame, str]:
         logger.info("Using Twelve Data fallback for %s (daily)", symbol)
         return df, "twelvedata"
 
-    raise ValueError(f"No daily data available for {symbol} from any source")
+    raise NoDataAvailable(
+        symbol=symbol, source="all", detail="No daily data from any source"
+    )
 
 
 def _fetch_intraday(symbol: str) -> tuple[pd.DataFrame, str]:
@@ -399,10 +439,11 @@ def _fetch_hourly(symbol: str) -> tuple[pd.DataFrame, str]:
 # Key Levels (Support / Resistance)
 # ---------------------------------------------------------------------------
 
+
 def _psych_step(price: float) -> float:
     """Determine psychological level step size based on price magnitude."""
     if price < 2:
-        return 0.01     # Forex (EURUSD ~1.08)
+        return 0.01  # Forex (EURUSD ~1.08)
     elif price < 20:
         return 0.5
     elif price < 200:
@@ -410,9 +451,9 @@ def _psych_step(price: float) -> float:
     elif price < 2000:
         return 50
     elif price < 6000:
-        return 100       # ES (~5800)
+        return 100  # ES (~5800)
     elif price < 25000:
-        return 500       # NQ (~21000)
+        return 500  # NQ (~21000)
     else:
         return 1000
 
@@ -481,6 +522,7 @@ def _compute_key_levels(df_daily: pd.DataFrame, current_price: float) -> KeyLeve
 # ---------------------------------------------------------------------------
 # Multi-Timeframe Analysis
 # ---------------------------------------------------------------------------
+
 
 def _compute_ema_trend(df: pd.DataFrame, min_bars: int = 50) -> str:
     """Compute trend direction from EMA20/EMA50 on any timeframe.
@@ -556,6 +598,7 @@ def _analyze_mtf(
 # Quality Score
 # ---------------------------------------------------------------------------
 
+
 def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
     """Detect engulfing or pin bar pattern on the last daily candle."""
     if len(df_daily) < 2:
@@ -572,31 +615,31 @@ def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
         return False
 
     # Bullish engulfing
-    if (direction == "BULLISH"
-            and float(last["Close"]) > float(last["Open"])
-            and float(prev["Close"]) < float(prev["Open"])
-            and float(last["Close"]) > float(prev["Open"])
-            and float(last["Open"]) < float(prev["Close"])):
+    if (
+        direction == "BULLISH"
+        and float(last["Close"]) > float(last["Open"])
+        and float(prev["Close"]) < float(prev["Open"])
+        and float(last["Close"]) > float(prev["Open"])
+        and float(last["Open"]) < float(prev["Close"])
+    ):
         return True
 
     # Bearish engulfing
-    if (direction == "BEARISH"
-            and float(last["Close"]) < float(last["Open"])
-            and float(prev["Close"]) > float(prev["Open"])
-            and float(last["Close"]) < float(prev["Open"])
-            and float(last["Open"]) > float(prev["Close"])):
+    if (
+        direction == "BEARISH"
+        and float(last["Close"]) < float(last["Open"])
+        and float(prev["Close"]) > float(prev["Open"])
+        and float(last["Close"]) < float(prev["Open"])
+        and float(last["Open"]) > float(prev["Close"])
+    ):
         return True
 
     # Bullish pin bar (long lower wick)
-    if (direction == "BULLISH"
-            and lower_wick > body * 2
-            and lower_wick > upper_wick * 2):
+    if direction == "BULLISH" and lower_wick > body * 2 and lower_wick > upper_wick * 2:
         return True
 
     # Bearish pin bar (long upper wick)
-    if (direction == "BEARISH"
-            and upper_wick > body * 2
-            and upper_wick > lower_wick * 2):
+    if direction == "BEARISH" and upper_wick > body * 2 and upper_wick > lower_wick * 2:
         return True
 
     return False
@@ -649,13 +692,15 @@ def _compute_quality_score(
         if vol_avg > 0 and last_vol > vol_avg:
             qs.volume_above_avg = True
 
-    qs.total = sum([
-        qs.confluence,
-        qs.strong_trend,
-        qs.near_key_level,
-        qs.candle_pattern,
-        qs.volume_above_avg,
-    ])
+    qs.total = sum(
+        [
+            qs.confluence,
+            qs.strong_trend,
+            qs.near_key_level,
+            qs.candle_pattern,
+            qs.volume_above_avg,
+        ]
+    )
 
     return qs
 
@@ -663,6 +708,7 @@ def _compute_quality_score(
 # ---------------------------------------------------------------------------
 # Technical analysis
 # ---------------------------------------------------------------------------
+
 
 def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     """Download data and compute indicators for a single asset."""
@@ -677,7 +723,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     df_hourly, _ = _fetch_hourly(symbol)
 
     current_price = float(df_daily["Close"].iloc[-1])
-    prev_close = float(df_daily["Close"].iloc[-2]) if len(df_daily) >= 2 else current_price
+    prev_close = (
+        float(df_daily["Close"].iloc[-2]) if len(df_daily) >= 2 else current_price
+    )
     change_pct = ((current_price - prev_close) / prev_close) * 100
 
     signals: list[TechnicalSignal] = []
@@ -692,9 +740,15 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             elif rsi_val < 30:
                 rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — oversold"
             elif rsi_val > 60:
-                rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — bullish momentum"
+                rsi_label, rsi_detail = (
+                    "BULLISH",
+                    f"RSI {rsi_val:.1f} — bullish momentum",
+                )
             elif rsi_val < 40:
-                rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — bearish momentum"
+                rsi_label, rsi_detail = (
+                    "BEARISH",
+                    f"RSI {rsi_val:.1f} — bearish momentum",
+                )
             else:
                 rsi_label, rsi_detail = "NEUTRAL", f"RSI {rsi_val:.1f} — neutral"
             signals.append(TechnicalSignal("RSI", rsi_val, rsi_label, rsi_detail))
@@ -727,10 +781,18 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         bbands = ta.bbands(df_daily["Close"], length=20, std=2)
         if bbands is not None and not bbands.empty:
             bb_cols = bbands.columns.tolist()
-            upper = float(bbands[[c for c in bb_cols if c.startswith("BBU_")][0]].iloc[-1])
-            middle = float(bbands[[c for c in bb_cols if c.startswith("BBM_")][0]].iloc[-1])
-            lower = float(bbands[[c for c in bb_cols if c.startswith("BBL_")][0]].iloc[-1])
-            bandwidth = float(bbands[[c for c in bb_cols if c.startswith("BBB_")][0]].iloc[-1])
+            upper = float(
+                bbands[[c for c in bb_cols if c.startswith("BBU_")][0]].iloc[-1]
+            )
+            middle = float(
+                bbands[[c for c in bb_cols if c.startswith("BBM_")][0]].iloc[-1]
+            )
+            lower = float(
+                bbands[[c for c in bb_cols if c.startswith("BBL_")][0]].iloc[-1]
+            )
+            bandwidth = float(
+                bbands[[c for c in bb_cols if c.startswith("BBB_")][0]].iloc[-1]
+            )
 
             if current_price > upper:
                 label = "BEARISH"
@@ -753,7 +815,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
 
     # --- Stochastic (14, 3, 3) ---
     try:
-        stoch = ta.stoch(df_daily["High"], df_daily["Low"], df_daily["Close"], k=14, d=3, smooth_k=3)
+        stoch = ta.stoch(
+            df_daily["High"], df_daily["Low"], df_daily["Close"], k=14, d=3, smooth_k=3
+        )
         if stoch is not None and not stoch.empty:
             stoch_cols = stoch.columns.tolist()
             k_col = [c for c in stoch_cols if c.startswith("STOCHk_")][0]
@@ -795,7 +859,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     # --- VWAP (using intraday data) ---
     if not df_5m.empty and "Volume" in df_5m.columns and df_5m["Volume"].sum() > 0:
         try:
-            vwap_series = ta.vwap(df_5m["High"], df_5m["Low"], df_5m["Close"], df_5m["Volume"])
+            vwap_series = ta.vwap(
+                df_5m["High"], df_5m["Low"], df_5m["Close"], df_5m["Volume"]
+            )
             if vwap_series is not None and not vwap_series.empty:
                 vwap_val = float(vwap_series.iloc[-1])
                 current_5m = float(df_5m["Close"].iloc[-1])
@@ -812,20 +878,32 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
                 signals.append(TechnicalSignal("VWAP", vwap_val, label, detail))
         except Exception as exc:
             logger.warning("VWAP failed for %s: %s", symbol, exc)
-            signals.append(TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP calculation error"))
+            signals.append(
+                TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP calculation error")
+            )
     else:
-        signals.append(TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP not available (no volume)"))
+        signals.append(
+            TechnicalSignal("VWAP", None, "NEUTRAL", "VWAP not available (no volume)")
+        )
 
     # --- ATR(14) ---
     try:
-        atr_series = ta.atr(df_daily["High"], df_daily["Low"], df_daily["Close"], length=14)
+        atr_series = ta.atr(
+            df_daily["High"], df_daily["Low"], df_daily["Close"], length=14
+        )
         if atr_series is not None and not atr_series.empty:
             atr_val = float(atr_series.iloc[-1])
             atr_pct = (atr_val / current_price) * 100
             if atr_pct > 2.0:
-                label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — high volatility"
+                label, detail = (
+                    "NEUTRAL",
+                    f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — high volatility",
+                )
             else:
-                label, detail = "NEUTRAL", f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — normal volatility"
+                label, detail = (
+                    "NEUTRAL",
+                    f"ATR {atr_val:.2f} ({atr_pct:.2f}%) — normal volatility",
+                )
             signals.append(TechnicalSignal("ATR", atr_val, label, detail))
     except Exception as exc:
         logger.warning("ATR failed for %s: %s", symbol, exc)
@@ -834,7 +912,12 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     try:
         ema20 = ta.ema(df_daily["Close"], length=20)
         ema50 = ta.ema(df_daily["Close"], length=50)
-        if ema20 is not None and ema50 is not None and not ema20.empty and not ema50.empty:
+        if (
+            ema20 is not None
+            and ema50 is not None
+            and not ema20.empty
+            and not ema50.empty
+        ):
             ema20_val = float(ema20.iloc[-1])
             ema50_val = float(ema50.iloc[-1])
             if ema20_val > ema50_val and current_price > ema20_val:
@@ -861,9 +944,15 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         adx_df = ta.adx(df_daily["High"], df_daily["Low"], df_daily["Close"], length=14)
         if adx_df is not None and not adx_df.empty:
             adx_cols = adx_df.columns.tolist()
-            adx_val = float(adx_df[[c for c in adx_cols if c.startswith("ADX_")][0]].iloc[-1])
-            dmp_val = float(adx_df[[c for c in adx_cols if c.startswith("DMP_")][0]].iloc[-1])
-            dmn_val = float(adx_df[[c for c in adx_cols if c.startswith("DMN_")][0]].iloc[-1])
+            adx_val = float(
+                adx_df[[c for c in adx_cols if c.startswith("ADX_")][0]].iloc[-1]
+            )
+            dmp_val = float(
+                adx_df[[c for c in adx_cols if c.startswith("DMP_")][0]].iloc[-1]
+            )
+            dmn_val = float(
+                adx_df[[c for c in adx_cols if c.startswith("DMN_")][0]].iloc[-1]
+            )
 
             if adx_val >= 25:
                 trend_dir = "bullish" if dmp_val > dmn_val else "bearish"
@@ -908,7 +997,8 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         if mtf.alignment == "CONFLICTING" and composite != "NEUTRAL":
             logger.info(
                 "%s: MTF CONFLICTING — forcing composite %s → NEUTRAL",
-                symbol, composite,
+                symbol,
+                composite,
             )
             composite = "NEUTRAL"
             confidence = 50.0
@@ -916,7 +1006,9 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             if composite != "NEUTRAL" and composite != mtf.dominant_direction:
                 logger.info(
                     "%s: MTF PARTIAL (%s) contradicts composite %s → NEUTRAL",
-                    symbol, mtf.dominant_direction, composite,
+                    symbol,
+                    mtf.dominant_direction,
+                    composite,
                 )
                 composite = "NEUTRAL"
                 confidence = 50.0
@@ -952,13 +1044,15 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             ohlc_data = []
             for idx, row in df_daily.iterrows():
                 day_str = idx.strftime("%Y-%m-%d")
-                ohlc_data.append({
-                    "time": day_str,
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                })
+                ohlc_data.append(
+                    {
+                        "time": day_str,
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                    }
+                )
 
             ema20 = ta.ema(df_daily["Close"], length=20)
             ema50 = ta.ema(df_daily["Close"], length=50)
@@ -966,12 +1060,22 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
             if ema20 is not None:
                 ema20_data = []
                 for idx, val in ema20.dropna().items():
-                    ema20_data.append({"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)})
+                    ema20_data.append(
+                        {
+                            "time": idx.strftime("%Y-%m-%d"),
+                            "value": round(float(val), 2),
+                        }
+                    )
 
             if ema50 is not None:
                 ema50_data = []
                 for idx, val in ema50.dropna().items():
-                    ema50_data.append({"time": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)})
+                    ema50_data.append(
+                        {
+                            "time": idx.strftime("%Y-%m-%d"),
+                            "value": round(float(val), 2),
+                        }
+                    )
         except Exception as exc:
             logger.warning("Chart data build failed for %s: %s", symbol, exc)
 
@@ -997,6 +1101,7 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
 # ---------------------------------------------------------------------------
 # Correlation analysis
 # ---------------------------------------------------------------------------
+
 
 def compute_correlation_matrix(analyses: list[AssetAnalysis]) -> pd.DataFrame | None:
     """Compute pairwise 30-day daily return correlation matrix.
@@ -1054,7 +1159,10 @@ def filter_correlated_assets(
                 continue
 
             # Only filter if both have same directional bias
-            if a.composite_score == b.composite_score and a.composite_score != "NEUTRAL":
+            if (
+                a.composite_score == b.composite_score
+                and a.composite_score != "NEUTRAL"
+            ):
                 qs_a = a.quality_score.total if a.quality_score else 0
                 qs_b = b.quality_score.total if b.quality_score else 0
                 if qs_a >= qs_b:
@@ -1073,7 +1181,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(f)
     results = analyze_assets(config["assets"])
     for r in results:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"{r.display_name} ({r.symbol}) [source: {r.data_source}]")
         if r.error:
             print(f"  ERROR: {r.error}")

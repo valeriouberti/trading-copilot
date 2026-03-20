@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import signal
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+GRACEFUL_SHUTDOWN_TIMEOUT = 30  # seconds
+
 
 class AssetMonitor:
     """Manages background monitoring jobs for one or more assets."""
@@ -38,6 +41,16 @@ class AssetMonitor:
         self.app = app
         self.scheduler = AsyncIOScheduler()
         self._started = False
+        self._drawdown_breaker = None
+
+    def _get_drawdown_breaker(self):
+        """Lazy-init drawdown circuit breaker."""
+        if self._drawdown_breaker is None:
+            from modules.circuit_breaker_drawdown import DrawdownCircuitBreaker
+            self._drawdown_breaker = DrawdownCircuitBreaker(
+                self.app.state.session_factory,
+            )
+        return self._drawdown_breaker
 
     def ensure_running(self) -> None:
         """Start the scheduler if not already running."""
@@ -123,10 +136,37 @@ class AssetMonitor:
             await self.start(row.symbol, row.interval_seconds)
 
     async def shutdown(self) -> None:
-        """Shut down the scheduler gracefully."""
+        """Shut down the scheduler gracefully.
+
+        Waits up to GRACEFUL_SHUTDOWN_TIMEOUT seconds for running jobs
+        to complete before forcing shutdown.
+        """
         if self._started:
-            self.scheduler.shutdown(wait=False)
+            logger.info(
+                "Shutting down monitor (waiting up to %ds for running jobs)...",
+                GRACEFUL_SHUTDOWN_TIMEOUT,
+            )
+            self.scheduler.shutdown(wait=True)
             self._started = False
+            logger.info("Monitor shutdown complete")
+
+    def install_signal_handlers(self) -> None:
+        """Install SIGTERM/SIGINT handlers for graceful shutdown.
+
+        Call this after the event loop is running (e.g. in the lifespan).
+        """
+        loop = asyncio.get_event_loop()
+
+        def _handle_signal(sig: signal.Signals) -> None:
+            logger.info("Received %s — initiating graceful shutdown", sig.name)
+            loop.create_task(self.shutdown())
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _handle_signal, sig)
+            except NotImplementedError:
+                # Windows doesn't support add_signal_handler
+                pass
 
     # ─── Internal ─────────────────────────────────────────────────
 
@@ -176,8 +216,19 @@ class AssetMonitor:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
-            # If signal fired → broadcast + Telegram
+            # If signal fired → check drawdown breaker → broadcast + Telegram
             if detection.fired:
+                breaker = self._get_drawdown_breaker()
+                if await breaker.is_tripped():
+                    logger.warning(
+                        "SIGNAL BLOCKED by drawdown breaker: %s %s @ %s",
+                        symbol, detection.direction, detection.entry,
+                    )
+                    detection.fired = False
+                    detection.reason = "DRAWDOWN BREAKER: daily/weekly loss limit reached"
+                    await self._update_check(symbol, price, detection)
+                    return
+
                 logger.info(
                     "SIGNAL FIRED: %s %s @ %s",
                     symbol, detection.direction, detection.entry,
@@ -204,7 +255,11 @@ class AssetMonitor:
                 await self._notify_telegram(symbol, analysis, detection)
 
         except Exception as exc:
-            logger.error("Monitor poll failed for %s: %s", symbol, exc, exc_info=True)
+            from modules.exceptions import TransientError
+            if isinstance(exc, TransientError):
+                logger.warning("Monitor poll transient error for %s: %s", symbol, exc)
+            else:
+                logger.error("Monitor poll failed for %s: %s", symbol, exc, exc_info=True)
 
     async def _upsert_session(
         self,

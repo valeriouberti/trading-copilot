@@ -2,6 +2,9 @@
 
 All existing modules are synchronous. This service bridges them to the async
 FastAPI world via asyncio.to_thread().
+
+Includes an in-memory TTL cache to avoid redundant API calls when the same
+asset is analysed within the cache window.
 """
 
 from __future__ import annotations
@@ -12,7 +15,12 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.cache import AnalysisCache
+
 logger = logging.getLogger(__name__)
+
+# Module-level cache singleton
+_cache = AnalysisCache()
 
 
 def _run_technicals(asset: dict) -> Any:
@@ -256,6 +264,11 @@ def _compute_setup(
     }
 
 
+def get_cache() -> AnalysisCache:
+    """Return the module-level cache singleton (for health checks / stats)."""
+    return _cache
+
+
 async def analyze_single_asset(
     symbol: str,
     config: dict,
@@ -266,6 +279,7 @@ async def analyze_single_asset(
     """Run the full analysis pipeline for a single asset.
 
     Returns a structured dict with all analysis results.
+    Uses the in-memory cache to skip redundant pipeline stages.
     """
     # Resolve asset dict (from DB or fallback)
     if asset is None:
@@ -278,43 +292,65 @@ async def analyze_single_asset(
     lookback_hours = config.get("lookback_hours", 16)
     groq_model = config.get("groq_model", "llama-3.3-70b-versatile")
 
-    # Phase 1: Parallel data fetching
-    tech_task = asyncio.to_thread(_run_technicals, asset)
-    news_task = asyncio.to_thread(_run_news, feeds, lookback_hours, asset)
-    calendar_task = asyncio.to_thread(_run_calendar)
+    # Phase 1: Parallel data fetching — check cache first
+    cached_tech = _cache.get(symbol, "price")
+    cached_news = _cache.get(symbol, "news")
+    cached_calendar = _cache.get(symbol, "calendar")
 
+    tech_task = None if cached_tech else asyncio.to_thread(_run_technicals, asset)
+    news_task = None if cached_news else asyncio.to_thread(_run_news, feeds, lookback_hours, asset)
+    calendar_task = None if cached_calendar else asyncio.to_thread(_run_calendar)
+
+    cached_poly = _cache.get(symbol, "polymarket") if not skip_polymarket else None
     poly_task = None
-    if not skip_polymarket:
+    if not skip_polymarket and cached_poly is None:
         poly_task = asyncio.to_thread(_run_polymarket, asset, groq_model)
 
-    # Gather parallel tasks
-    tasks = [tech_task, news_task, calendar_task]
-    if poly_task:
-        tasks.append(poly_task)
+    # Gather non-cached tasks
+    tasks = [t for t in [tech_task, news_task, calendar_task, poly_task] if t is not None]
+    results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Rebuild results from cache or fresh fetch
+    result_iter = iter(results)
 
-    # Unpack results
-    tech_result = results[0] if not isinstance(results[0], Exception) else None
-    news_result = results[1] if not isinstance(results[1], Exception) else []
-    calendar_data = results[2] if not isinstance(results[2], Exception) else None
+    def _next_or_cache(cached_value, fallback=None):
+        if cached_value is not None:
+            return cached_value
+        try:
+            r = next(result_iter)
+            return fallback if isinstance(r, Exception) else r
+        except StopIteration:
+            return fallback
 
-    poly_data = None
-    if poly_task and len(results) > 3:
-        poly_data = results[3] if not isinstance(results[3], Exception) else None
+    tech_result = _next_or_cache(cached_tech, None)
+    news_result = _next_or_cache(cached_news, [])
+    calendar_data = _next_or_cache(cached_calendar, None)
+    poly_data = cached_poly if skip_polymarket or cached_poly is not None else _next_or_cache(None, None)
 
-    # Log any exceptions
-    for i, r in enumerate(results):
+    # Cache fresh results
+    if tech_result and cached_tech is None:
+        _cache.set(symbol, "price", tech_result)
+    if news_result and cached_news is None:
+        _cache.set(symbol, "news", news_result)
+    if calendar_data and cached_calendar is None:
+        _cache.set(symbol, "calendar", calendar_data)
+    if poly_data and cached_poly is None and not skip_polymarket:
+        _cache.set(symbol, "polymarket", poly_data)
+
+    # Log any exceptions from gather
+    for r in results:
         if isinstance(r, Exception):
-            logger.error("Task %d failed: %s", i, r)
+            logger.error("Pipeline task failed: %s", r)
 
-    # Phase 2: Sentiment analysis (needs news)
-    sentiment = None
-    if not skip_llm and news_result:
+    # Phase 2: Sentiment analysis (needs news) — check cache
+    sentiment = _cache.get(symbol, "sentiment") if not skip_llm else None
+    if sentiment is None and not skip_llm and news_result:
         try:
             sentiment = await asyncio.to_thread(
                 _run_sentiment, news_result, asset, groq_model, poly_data
             )
+            if sentiment:
+                _cache.set(symbol, "sentiment", sentiment)
         except Exception as exc:
             logger.error("Sentiment analysis failed: %s", exc)
 
