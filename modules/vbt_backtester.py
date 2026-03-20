@@ -27,6 +27,15 @@ import vectorbt as vbt
 
 from modules.data import ASSET_UNIVERSE, AssetClass, AssetSpec
 from modules.data.registry import DataRegistry, create_default_registry
+from modules.strategy import (
+    _CLASS_SL_TP as _STRATEGY_SL_TP,
+    classify_regime,
+    compute_composite,
+    compute_quality_score,
+    compute_sl_tp_series,
+    label_bar,
+    COMPOSITE_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +105,22 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate trading signals using regime-aware composite scoring.
+def generate_signals(
+    df: pd.DataFrame,
+    qs_filter: bool = True,
+    qs_min: int = 4,
+) -> pd.DataFrame:
+    """Generate trading signals using the unified strategy module.
 
-    In TRENDING markets (ADX > 25), indicators are interpreted as trend
-    confirmation (RSI < 50 = bearish, not "oversold bounce").
-    In RANGING markets (ADX < 20), classic mean-reversion rules apply.
+    Uses regime-aware indicator labeling from modules.strategy for the same
+    logic as the live system. Optionally filters by Quality Score.
 
     Adds columns: signal (1=LONG, -1=SHORT, 0=none), composite_score, regime.
+
+    Args:
+        df: DataFrame with indicator columns from compute_indicators().
+        qs_filter: If True, only fire signals when Quality Score >= qs_min.
+        qs_min: Minimum Quality Score threshold (default 4).
     """
     n = len(df)
     signals = np.zeros(n, dtype=int)
@@ -111,150 +128,32 @@ def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
     regimes = [""] * n
 
     for i in range(50, n):  # Start after warmup
-        row = df.iloc[i]
+        regime, labels, adx_val = label_bar(df, i)
+        regimes[i] = regime.value
 
-        adx = row.get("ADX", 20)
-        if pd.isna(adx):
-            adx = 20
+        composite_dir, confidence = compute_composite(
+            labels, regime, adx_filter=adx_val,
+        )
 
-        close = row["Close"]
-        is_trending = adx > 25
-        is_ranging = adx < 20
-
-        # Determine regime
-        if is_trending:
-            regimes[i] = "TRENDING"
-        elif is_ranging:
-            regimes[i] = "RANGING"
-        else:
-            regimes[i] = "NEUTRAL"
-
-        bull_score = 0.0
-        bear_score = 0.0
-        total_weight = 0.0
-
-        # --- MACD histogram (always momentum) ---
-        macd_hist = row.get("MACD_hist")
-        if macd_hist is not None and not pd.isna(macd_hist):
-            wt = 1.5 if is_trending else 1.0
-            total_weight += wt
-            if macd_hist > 0:
-                bull_score += wt
-            else:
-                bear_score += wt
-
-        # --- EMA Trend (always momentum) ---
-        ema20 = row.get("EMA20")
-        ema50 = row.get("EMA50")
-        if all(v is not None and not pd.isna(v) for v in [ema20, ema50]):
-            wt = 1.5 if is_trending else 1.0
-            total_weight += wt
-            if ema20 > ema50:
-                bull_score += wt
-            else:
-                bear_score += wt
-
-        # --- RSI: regime-dependent interpretation ---
-        rsi = row.get("RSI")
-        if rsi is not None and not pd.isna(rsi):
-            wt = 1.0
-            total_weight += wt
-            if is_trending:
-                # Trend confirmation: RSI > 50 = bull momentum, < 50 = bear
-                if rsi > 55:
-                    bull_score += wt
-                elif rsi < 45:
-                    bear_score += wt
-                elif rsi > 50:
-                    bull_score += wt * 0.4
-                else:
-                    bear_score += wt * 0.4
-            else:
-                # Mean reversion: classic oversold/overbought
-                if rsi < 30:
-                    bull_score += wt
-                elif rsi > 70:
-                    bear_score += wt
-                elif rsi < 40:
-                    bull_score += wt * 0.5
-                elif rsi > 60:
-                    bear_score += wt * 0.5
-
-        # --- Bollinger Bands: regime-dependent ---
-        bb_upper = row.get("BB_upper")
-        bb_lower = row.get("BB_lower")
-        bb_mid = row.get("BB_middle")
-        if all(v is not None and not pd.isna(v) for v in [bb_upper, bb_lower, bb_mid]):
-            wt = 1.0
-            total_weight += wt
-            if is_trending:
-                # Trend confirmation: above/below middle band
-                if close > bb_mid:
-                    bull_score += wt * 0.8
-                else:
-                    bear_score += wt * 0.8
-            else:
-                # Mean reversion: extremes
-                if close > bb_upper:
-                    bear_score += wt
-                elif close < bb_lower:
-                    bull_score += wt
-                elif close > bb_mid:
-                    bull_score += wt * 0.3
-                else:
-                    bear_score += wt * 0.3
-
-        # --- Stochastic: regime-dependent ---
-        stoch_k = row.get("STOCH_K")
-        stoch_d = row.get("STOCH_D")
-        if all(v is not None and not pd.isna(v) for v in [stoch_k, stoch_d]):
-            wt = 1.0
-            total_weight += wt
-            if is_trending:
-                # Trend confirmation: stoch direction
-                if stoch_k > 50:
-                    bull_score += wt * 0.8
-                else:
-                    bear_score += wt * 0.8
-            else:
-                # Mean reversion: oversold/overbought
-                if stoch_k < 20:
-                    bull_score += wt
-                elif stoch_k > 80:
-                    bear_score += wt
-                elif stoch_k > stoch_d:
-                    bull_score += wt * 0.3
-                else:
-                    bear_score += wt * 0.3
-
-        # --- DI+/DI- directional confirmation ---
-        di_plus = row.get("DI_plus")
-        di_minus = row.get("DI_minus")
-        if all(v is not None and not pd.isna(v) for v in [di_plus, di_minus]):
-            wt = 1.0
-            total_weight += wt
-            if di_plus > di_minus:
-                bull_score += wt
-            else:
-                bear_score += wt
-
-        # Compute composite
-        if total_weight > 0:
-            bull_pct = bull_score / total_weight
-            bear_pct = bear_score / total_weight
-        else:
+        if composite_dir == "NEUTRAL":
             continue
 
-        threshold = 0.58  # 58% agreement required
+        # Quality Score filter
+        if qs_filter:
+            qs = compute_quality_score(
+                df, i, composite_dir,
+                adx_value=adx_val,
+                labels=labels,
+            )
+            if qs.total < qs_min:
+                continue
 
-        # ADX filter: only signal when directional energy is present
-        if adx > 20:
-            if bull_pct >= threshold:
-                signals[i] = 1
-                scores[i] = bull_pct
-            elif bear_pct >= threshold:
-                signals[i] = -1
-                scores[i] = bear_pct
+        if composite_dir == "BULLISH":
+            signals[i] = 1
+            scores[i] = confidence / 100.0
+        elif composite_dir == "BEARISH":
+            signals[i] = -1
+            scores[i] = confidence / 100.0
 
     df["signal"] = signals
     df["composite_score"] = scores
@@ -290,18 +189,10 @@ def get_cost_model(spec: AssetSpec) -> CostModel:
     )
 
 
-# Per-class SL/TP tuning — derived from backtest analysis
+# Per-class SL/TP tuning now lives in modules.strategy._CLASS_SL_TP
 _CLASS_PARAMS: dict[AssetClass, dict[str, float]] = {
-    # Forex: tight SL, wide TP — trends are smooth
-    AssetClass.FOREX: {"sl_atr_mult": 1.2, "tp_atr_mult": 3.0},
-    # Commodities: medium SL — volatile intraday, strong trends
-    AssetClass.COMMODITY: {"sl_atr_mult": 1.5, "tp_atr_mult": 3.5},
-    # Indices: wider SL to survive chop, keep 2:1 R:R
-    AssetClass.INDEX: {"sl_atr_mult": 2.0, "tp_atr_mult": 4.0},
-    # Stocks: wider SL, lower TP — mean-reverting, high costs
-    AssetClass.STOCK: {"sl_atr_mult": 1.8, "tp_atr_mult": 3.0},
-    # Reference: not traded
-    AssetClass.REFERENCE: {"sl_atr_mult": 1.5, "tp_atr_mult": 3.0},
+    AssetClass(k): v for k, v in _STRATEGY_SL_TP.items()
+    if k in [e.value for e in AssetClass]
 }
 
 # Default starting equity for metrics (USD)
@@ -381,6 +272,8 @@ class VBTBacktester:
         tp_atr_mult: float | None = None,
         adaptive_sl: bool = True,
         starting_equity: float = DEFAULT_EQUITY,
+        qs_filter: bool = True,
+        qs_min: int = 4,
     ) -> VBTBacktestResult | None:
         """Run a full backtest for a single symbol.
 
@@ -396,6 +289,8 @@ class VBTBacktester:
             tp_atr_mult: TP multiplier (x ATR). None = use per-class default.
             adaptive_sl: If True, adjust SL/TP based on ATR percentile.
             starting_equity: Starting equity in USD for metric calculations.
+            qs_filter: If True, require Quality Score >= qs_min for signals.
+            qs_min: Minimum Quality Score threshold (default 4).
         """
         spec = ASSET_UNIVERSE.get(symbol)
         if spec is None:
@@ -423,15 +318,16 @@ class VBTBacktester:
         # Compute indicators
         df = compute_indicators(df)
 
-        # Generate signals
-        df = generate_signals(df)
+        # Generate signals (unified strategy)
+        df = generate_signals(df, qs_filter=qs_filter, qs_min=qs_min)
 
         # Get cost model
         costs = get_cost_model(spec)
 
-        # Compute ATR-adaptive SL/TP distances
+        # Compute ATR-adaptive SL/TP distances (unified strategy)
         sl_dist, tp_dist = self._compute_sl_tp_distance(
-            df, sl_mult, tp_mult, adaptive_sl
+            df, sl_mult, tp_mult, adaptive_sl,
+            asset_class=spec.asset_class.value,
         )
 
         return self._simulate_trades(
@@ -482,31 +378,24 @@ class VBTBacktester:
         sl_mult: float,
         tp_mult: float,
         adaptive: bool,
+        asset_class: str = "index",
     ) -> tuple[pd.Series, pd.Series]:
         """Compute SL/TP distances (in price units) for each bar.
+
+        Delegates to strategy.compute_sl_tp_series() for unified logic.
 
         Returns (sl_distance, tp_distance) — always positive values
         representing distance from entry price. Direction is applied
         during trade simulation.
         """
         atr = df.get("ATR", pd.Series(dtype=float))
-
-        if adaptive and len(atr.dropna()) > 20:
-            # ATR percentile over rolling 50-bar window
-            atr_pctile = atr.rolling(50, min_periods=20).apply(
-                lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
-            )
-            # Adaptive: low vol → wider SL, high vol → tighter SL
-            sl_multiplier = sl_mult * (1.0 + (0.5 - atr_pctile).clip(-0.5, 0.5))
-            tp_multiplier = sl_multiplier * (tp_mult / sl_mult)
-        else:
-            sl_multiplier = pd.Series(sl_mult, index=df.index)
-            tp_multiplier = pd.Series(tp_mult, index=df.index)
-
-        sl_distance = (atr * sl_multiplier).abs()
-        tp_distance = (atr * tp_multiplier).abs()
-
-        return sl_distance, tp_distance
+        return compute_sl_tp_series(
+            atr,
+            asset_class=asset_class,
+            adaptive=adaptive,
+            sl_override=sl_mult,
+            tp_override=tp_mult,
+        )
 
     def _simulate_trades(
         self,
@@ -823,6 +712,10 @@ Examples:
     parser.add_argument("--equity", type=float, default=DEFAULT_EQUITY,
                         help=f"Starting equity in USD (default: {DEFAULT_EQUITY:.0f})")
     parser.add_argument("--no-adaptive", action="store_true", help="Disable adaptive SL/TP")
+    parser.add_argument("--no-qs-filter", action="store_true",
+                        help="Disable Quality Score filter (allow all signals)")
+    parser.add_argument("--qs-min", type=int, default=4,
+                        help="Minimum Quality Score threshold (default: 4)")
     parser.add_argument("-v", "--verbose", action="store_true")
 
     args = parser.parse_args()
@@ -853,6 +746,8 @@ Examples:
         "tp_atr_mult": args.tp_mult,
         "adaptive_sl": not args.no_adaptive,
         "starting_equity": args.equity,
+        "qs_filter": not args.no_qs_filter,
+        "qs_min": args.qs_min,
     }
 
     if args.edge_only:

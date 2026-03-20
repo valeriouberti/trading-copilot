@@ -57,6 +57,21 @@ _TD_INTERVAL_MAP: dict[str, str] = {
 
 import math
 
+from modules.strategy import (
+    classify_regime,
+    compute_composite,
+    detect_candle_pattern as _strategy_detect_candle,
+    label_bbands,
+    label_ema_trend,
+    label_macd,
+    label_rsi,
+    label_stochastic,
+    Regime,
+    MOMENTUM_INDICATORS,
+    MEAN_REVERSION_INDICATORS,
+    COMPOSITE_THRESHOLD,
+)
+
 
 @dataclass
 class TechnicalSignal:
@@ -602,59 +617,12 @@ def _analyze_mtf(
 def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> str | None:
     """Detect candle patterns on the last daily candle.
 
+    Delegates to the unified strategy module's detect_candle_pattern().
     Returns a string label: "ENGULFING", "PIN_BAR", "INSIDE_BAR", or None.
-    The return value is truthy when a pattern is detected (backward-compatible
-    with the previous bool return).
     """
     if len(df_daily) < 2:
         return None
-
-    last = df_daily.iloc[-1]
-    prev = df_daily.iloc[-2]
-    body = abs(float(last["Close"]) - float(last["Open"]))
-    upper_wick = float(last["High"]) - max(float(last["Close"]), float(last["Open"]))
-    lower_wick = min(float(last["Close"]), float(last["Open"])) - float(last["Low"])
-    total_range = float(last["High"]) - float(last["Low"])
-
-    # Inside bar: high < prev high AND low > prev low
-    if (
-        float(last["High"]) < float(prev["High"])
-        and float(last["Low"]) > float(prev["Low"])
-    ):
-        return "INSIDE_BAR"
-
-    if total_range <= 0 or body <= 0:
-        return None
-
-    # Bullish engulfing
-    if (
-        direction == "BULLISH"
-        and float(last["Close"]) > float(last["Open"])
-        and float(prev["Close"]) < float(prev["Open"])
-        and float(last["Close"]) > float(prev["Open"])
-        and float(last["Open"]) < float(prev["Close"])
-    ):
-        return "ENGULFING"
-
-    # Bearish engulfing
-    if (
-        direction == "BEARISH"
-        and float(last["Close"]) < float(last["Open"])
-        and float(prev["Close"]) > float(prev["Open"])
-        and float(last["Close"]) < float(prev["Open"])
-        and float(last["Open"]) > float(prev["Close"])
-    ):
-        return "ENGULFING"
-
-    # Bullish pin bar (long lower wick)
-    if direction == "BULLISH" and lower_wick > body * 2 and lower_wick > upper_wick * 2:
-        return "PIN_BAR"
-
-    # Bearish pin bar (long upper wick)
-    if direction == "BEARISH" and upper_wick > body * 2 and upper_wick > lower_wick * 2:
-        return "PIN_BAR"
-
-    return None
+    return _strategy_detect_candle(df_daily, len(df_daily) - 1, direction)
 
 
 def _compute_quality_score(
@@ -665,56 +633,52 @@ def _compute_quality_score(
 ) -> QualityScore:
     """Compute setup quality score (1-5) based on confluence and market conditions.
 
-    Scoring:
-    - Confluence: 4+ directional signals agree with composite → +1
-    - Strong trend: ADX > 25 → +1
-    - Near key level: price within 0.5% of S/R → +1
-    - Candle pattern: engulfing or pin bar → +1
-    - Volume above average: last bar volume > 20-day avg → +1
+    Delegates core logic to strategy.compute_quality_score(), then maps
+    into the price_data.QualityScore dataclass for backward compatibility.
     """
-    qs = QualityScore()
-
-    # 1. Confluence: count directional signals matching composite
-    directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
-    directional = [s for s in signals if s.name in directional_names]
-    if composite_score in ("BULLISH", "BEARISH"):
-        count = sum(1 for s in directional if s.label == composite_score)
-        if count >= 4:
-            qs.confluence = True
-
-    # 2. ADX > 25 (strong trend)
-    adx = next((s for s in signals if s.name == "ADX"), None)
-    if adx and adx.value is not None and adx.value > 25:
-        qs.strong_trend = True
-
-    # 3. Near key level (within 0.5%)
-    if key_levels and key_levels.nearest_level_dist_pct is not None:
-        dist = abs(key_levels.nearest_level_dist_pct)
-        if dist < 0.5 and composite_score != "NEUTRAL":
-            qs.near_key_level = True
-
-    # 4. Candle pattern
-    if _detect_candle_pattern(df_daily, composite_score):
-        qs.candle_pattern = True
-
-    # 5. Volume above 20-day average
-    if len(df_daily) >= 20 and "Volume" in df_daily.columns:
-        vol_avg = float(df_daily["Volume"].iloc[-20:].mean())
-        last_vol = float(df_daily["Volume"].iloc[-1])
-        if vol_avg > 0 and last_vol > vol_avg:
-            qs.volume_above_avg = True
-
-    qs.total = sum(
-        [
-            qs.confluence,
-            qs.strong_trend,
-            qs.near_key_level,
-            qs.candle_pattern,
-            qs.volume_above_avg,
-        ]
+    from modules.strategy import (
+        IndicatorLabel as _StratLabel,
+        KeyLevelsResult as _StratKL,
+        compute_quality_score as _strategy_qs,
     )
 
-    return qs
+    # Build strategy-compatible labels
+    directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
+    strat_labels = [
+        (s.name, _StratLabel(s.label, s.detail, 1.0))
+        for s in signals if s.name in directional_names
+    ]
+
+    # ADX value
+    adx_sig = next((s for s in signals if s.name == "ADX"), None)
+    adx_val = adx_sig.value if (adx_sig and adx_sig.value is not None) else None
+
+    # Map KeyLevels to strategy's KeyLevelsResult
+    strat_kl = None
+    if key_levels and key_levels.nearest_level_dist_pct is not None:
+        strat_kl = _StratKL(
+            pdh=key_levels.pdh, pdl=key_levels.pdl, pdc=key_levels.pdc,
+            pp=key_levels.pp, r1=key_levels.r1, r2=key_levels.r2,
+            s1=key_levels.s1, s2=key_levels.s2,
+            nearest_level=key_levels.nearest_level,
+            nearest_level_name=key_levels.nearest_level_name,
+            nearest_level_dist_pct=key_levels.nearest_level_dist_pct,
+        )
+
+    bar_idx = len(df_daily) - 1 if len(df_daily) > 0 else 0
+    strat_result = _strategy_qs(
+        df_daily, bar_idx, composite_score,
+        adx_value=adx_val, labels=strat_labels, key_levels=strat_kl,
+    )
+
+    return QualityScore(
+        total=strat_result.total,
+        confluence=strat_result.confluence,
+        strong_trend=strat_result.strong_trend,
+        near_key_level=strat_result.near_key_level,
+        candle_pattern=strat_result.candle_pattern,
+        volume_above_avg=strat_result.volume_above_avg,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -742,90 +706,55 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
 
     signals: list[TechnicalSignal] = []
 
-    # --- RSI(14) ---
+    # Determine regime from ADX (compute it early so labeling can use it)
+    adx_value_for_regime: float | None = None
+    try:
+        adx_df = ta.adx(df_daily["High"], df_daily["Low"], df_daily["Close"], length=14)
+        if adx_df is not None and not adx_df.empty:
+            adx_cols = adx_df.columns.tolist()
+            adx_value_for_regime = float(
+                adx_df[[c for c in adx_cols if c.startswith("ADX_")][0]].iloc[-1]
+            )
+    except Exception:
+        pass
+    regime = classify_regime(adx_value_for_regime)
+
+    # --- RSI(14) — uses unified strategy labeling ---
     try:
         rsi_series = ta.rsi(df_daily["Close"], length=14)
         if rsi_series is not None and not rsi_series.empty:
             rsi_val = float(rsi_series.iloc[-1])
-            if rsi_val > 70:
-                rsi_label, rsi_detail = "BEARISH", f"RSI {rsi_val:.1f} — overbought"
-            elif rsi_val < 30:
-                rsi_label, rsi_detail = "BULLISH", f"RSI {rsi_val:.1f} — oversold"
-            elif rsi_val > 60:
-                rsi_label, rsi_detail = (
-                    "BULLISH",
-                    f"RSI {rsi_val:.1f} — bullish momentum",
-                )
-            elif rsi_val < 40:
-                rsi_label, rsi_detail = (
-                    "BEARISH",
-                    f"RSI {rsi_val:.1f} — bearish momentum",
-                )
-            else:
-                rsi_label, rsi_detail = "NEUTRAL", f"RSI {rsi_val:.1f} — neutral"
-            signals.append(TechnicalSignal("RSI", rsi_val, rsi_label, rsi_detail))
+            rsi_lbl = label_rsi(rsi_val, regime)
+            signals.append(TechnicalSignal("RSI", rsi_val, rsi_lbl.label, rsi_lbl.detail))
     except Exception as exc:
         logger.warning("RSI failed for %s: %s", symbol, exc)
 
-    # --- MACD(12, 26, 9) ---
+    # --- MACD(12, 26, 9) — uses unified strategy labeling ---
     try:
         macd_df = ta.macd(df_daily["Close"], fast=12, slow=26, signal=9)
         if macd_df is not None and not macd_df.empty:
             macd_hist = float(macd_df.iloc[-1, 1])
-            prev_hist = float(macd_df.iloc[-2, 1]) if len(macd_df) >= 2 else 0
-
-            if macd_hist > 0 and prev_hist <= 0:
-                label, detail = "BULLISH", "MACD bullish crossover"
-            elif macd_hist < 0 and prev_hist >= 0:
-                label, detail = "BEARISH", "MACD bearish crossover"
-            elif macd_hist > 0:
-                label, detail = "BULLISH", f"MACD positive ({macd_hist:.2f})"
-            elif macd_hist < 0:
-                label, detail = "BEARISH", f"MACD negative ({macd_hist:.2f})"
-            else:
-                label, detail = "NEUTRAL", "MACD neutral"
-            signals.append(TechnicalSignal("MACD", macd_hist, label, detail))
+            prev_hist = float(macd_df.iloc[-2, 1]) if len(macd_df) >= 2 else None
+            macd_lbl = label_macd(macd_hist, prev_hist, regime)
+            signals.append(TechnicalSignal("MACD", macd_hist, macd_lbl.label, macd_lbl.detail))
     except Exception as exc:
         logger.warning("MACD failed for %s: %s", symbol, exc)
 
-    # --- Bollinger Bands (20, 2) ---
+    # --- Bollinger Bands (20, 2) — uses unified strategy labeling ---
     try:
         bbands = ta.bbands(df_daily["Close"], length=20, std=2)
         if bbands is not None and not bbands.empty:
             bb_cols = bbands.columns.tolist()
-            upper = float(
-                bbands[[c for c in bb_cols if c.startswith("BBU_")][0]].iloc[-1]
-            )
-            middle = float(
-                bbands[[c for c in bb_cols if c.startswith("BBM_")][0]].iloc[-1]
-            )
-            lower = float(
-                bbands[[c for c in bb_cols if c.startswith("BBL_")][0]].iloc[-1]
-            )
-            bandwidth = float(
-                bbands[[c for c in bb_cols if c.startswith("BBB_")][0]].iloc[-1]
-            )
-
-            if current_price > upper:
-                label = "BEARISH"
-                detail = f"Above upper BB ({upper:.2f}) — overextended"
-            elif current_price < lower:
-                label = "BULLISH"
-                detail = f"Below lower BB ({lower:.2f}) — oversold"
-            elif bandwidth < 4.0:
-                label = "NEUTRAL"
-                detail = f"BB squeeze (bw {bandwidth:.1f}%) — breakout pending"
-            elif current_price > middle:
-                label = "BULLISH"
-                detail = f"Above mid BB ({middle:.2f}), bw {bandwidth:.1f}%"
-            else:
-                label = "BEARISH"
-                detail = f"Below mid BB ({middle:.2f}), bw {bandwidth:.1f}%"
-            signals.append(TechnicalSignal("BBANDS", bandwidth, label, detail))
+            upper = float(bbands[[c for c in bb_cols if c.startswith("BBU_")][0]].iloc[-1])
+            middle = float(bbands[[c for c in bb_cols if c.startswith("BBM_")][0]].iloc[-1])
+            lower = float(bbands[[c for c in bb_cols if c.startswith("BBL_")][0]].iloc[-1])
+            bandwidth = float(bbands[[c for c in bb_cols if c.startswith("BBB_")][0]].iloc[-1])
+            bb_lbl = label_bbands(current_price, upper, lower, middle, bandwidth, regime)
+            signals.append(TechnicalSignal("BBANDS", bandwidth, bb_lbl.label, bb_lbl.detail))
     except Exception as exc:
         logger.warning("Bollinger Bands failed for %s: %s", symbol, exc)
 
-    # --- Stochastic (14, 3, 3) ---
+    # --- Stochastic (14, 3, 3) — uses unified strategy labeling ---
     try:
         stoch = ta.stoch(
             df_daily["High"], df_daily["Low"], df_daily["Close"], k=14, d=3, smooth_k=3
@@ -837,34 +766,11 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
 
             k_val = float(stoch[k_col].iloc[-1])
             d_val = float(stoch[d_col].iloc[-1])
-            prev_k = float(stoch[k_col].iloc[-2]) if len(stoch) >= 2 else k_val
-            prev_d = float(stoch[d_col].iloc[-2]) if len(stoch) >= 2 else d_val
+            prev_k = float(stoch[k_col].iloc[-2]) if len(stoch) >= 2 else None
+            prev_d = float(stoch[d_col].iloc[-2]) if len(stoch) >= 2 else None
 
-            k_cross_up = prev_k <= prev_d and k_val > d_val
-            k_cross_down = prev_k >= prev_d and k_val < d_val
-
-            if k_cross_up and k_val < 30:
-                label = "BULLISH"
-                detail = f"Stoch %K {k_val:.1f} — oversold + bullish crossover"
-            elif k_cross_down and k_val > 70:
-                label = "BEARISH"
-                detail = f"Stoch %K {k_val:.1f} — overbought + bearish crossover"
-            elif k_cross_up:
-                label = "BULLISH"
-                detail = f"Stoch %K {k_val:.1f} — bullish crossover"
-            elif k_cross_down:
-                label = "BEARISH"
-                detail = f"Stoch %K {k_val:.1f} — bearish crossover"
-            elif k_val > 80:
-                label = "BEARISH"
-                detail = f"Stoch %K {k_val:.1f} — overbought"
-            elif k_val < 20:
-                label = "BULLISH"
-                detail = f"Stoch %K {k_val:.1f} — oversold"
-            else:
-                label = "NEUTRAL"
-                detail = f"Stoch %K {k_val:.1f} / %D {d_val:.1f}"
-            signals.append(TechnicalSignal("STOCH", k_val, label, detail))
+            stoch_lbl = label_stochastic(k_val, d_val, prev_k, prev_d, regime)
+            signals.append(TechnicalSignal("STOCH", k_val, stoch_lbl.label, stoch_lbl.detail))
     except Exception as exc:
         logger.warning("Stochastic failed for %s: %s", symbol, exc)
 
@@ -920,7 +826,7 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     except Exception as exc:
         logger.warning("ATR failed for %s: %s", symbol, exc)
 
-    # --- EMA(20) vs EMA(50) ---
+    # --- EMA(20) vs EMA(50) — uses unified strategy labeling ---
     try:
         ema20 = ta.ema(df_daily["Close"], length=20)
         ema50 = ta.ema(df_daily["Close"], length=50)
@@ -932,22 +838,8 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         ):
             ema20_val = float(ema20.iloc[-1])
             ema50_val = float(ema50.iloc[-1])
-            if ema20_val > ema50_val and current_price > ema20_val:
-                label = "BULLISH"
-                detail = f"EMA20 ({ema20_val:.2f}) > EMA50 ({ema50_val:.2f}), price above both"
-            elif ema20_val > ema50_val:
-                label = "BULLISH"
-                detail = f"EMA20 ({ema20_val:.2f}) > EMA50 ({ema50_val:.2f})"
-            elif ema20_val < ema50_val and current_price < ema20_val:
-                label = "BEARISH"
-                detail = f"EMA20 ({ema20_val:.2f}) < EMA50 ({ema50_val:.2f}), price below both"
-            elif ema20_val < ema50_val:
-                label = "BEARISH"
-                detail = f"EMA20 ({ema20_val:.2f}) < EMA50 ({ema50_val:.2f})"
-            else:
-                label = "NEUTRAL"
-                detail = f"EMA20 ≈ EMA50 ({ema20_val:.2f})"
-            signals.append(TechnicalSignal("EMA_TREND", ema20_val, label, detail))
+            ema_lbl = label_ema_trend(ema20_val, ema50_val, current_price, regime)
+            signals.append(TechnicalSignal("EMA_TREND", ema20_val, ema_lbl.label, ema_lbl.detail))
     except Exception as exc:
         logger.warning("EMA failed for %s: %s", symbol, exc)
 
@@ -975,61 +867,21 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
     except Exception as exc:
         logger.warning("ADX failed for %s: %s", symbol, exc)
 
-    # --- Composite score — adaptive weighted system ---
-    # Directional indicators: RSI, MACD, VWAP, EMA_TREND, BBANDS, STOCH
-    # Non-directional (excluded): ATR, ADX
-    # Weights adapt based on ADX (trend strength):
-    #   ADX > 25 (trending): momentum indicators get 1.5x, mean-reversion 0.7x
-    #   ADX < 20 (ranging): mean-reversion gets 1.5x, momentum 0.7x
-    #   Otherwise: equal weight (1.0x)
+    # --- Composite score — uses unified strategy module ---
+    # Build IndicatorLabel list from TechnicalSignal objects for strategy.compute_composite
+    from modules.strategy import IndicatorLabel as _StratLabel
+
     directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
-    momentum_names = {"MACD", "EMA_TREND"}
-    mean_reversion_names = {"RSI", "BBANDS"}
+    composite_labels: list[tuple[str, _StratLabel]] = []
+    for s in signals:
+        if s.name in directional_names:
+            composite_labels.append((s.name, _StratLabel(s.label, s.detail, 1.0)))
 
-    adx_signal = next((s for s in signals if s.name == "ADX"), None)
-    adx_value = adx_signal.value if (adx_signal and adx_signal.value is not None) else None
-
-    if adx_value is not None and adx_value > 25:
-        # Trending regime: favor momentum
-        momentum_weight = 1.5
-        mean_rev_weight = 0.7
-    elif adx_value is not None and adx_value < 20:
-        # Ranging regime: favor mean-reversion
-        momentum_weight = 0.7
-        mean_rev_weight = 1.5
-    else:
-        momentum_weight = 1.0
-        mean_rev_weight = 1.0
-
-    directional_signals = [s for s in signals if s.name in directional_names]
-
-    bullish_weight = 0.0
-    bearish_weight = 0.0
-    total_weight = 0.0
-    for s in directional_signals:
-        if s.name in momentum_names:
-            w = momentum_weight
-        elif s.name in mean_reversion_names:
-            w = mean_rev_weight
-        else:
-            w = 1.0
-        total_weight += w
-        if s.label == "BULLISH":
-            bullish_weight += w
-        elif s.label == "BEARISH":
-            bearish_weight += w
-
-    total_weight = total_weight or 6.0
-
-    if bullish_weight >= total_weight * 0.6:
-        composite = "BULLISH"
-        confidence = (bullish_weight / total_weight) * 100
-    elif bearish_weight >= total_weight * 0.6:
-        composite = "BEARISH"
-        confidence = (bearish_weight / total_weight) * 100
-    else:
-        composite = "NEUTRAL"
-        confidence = 50.0
+    composite, confidence = compute_composite(
+        composite_labels,
+        regime=regime,
+        adx_filter=adx_value_for_regime,
+    )
 
     # --- Multi-Timeframe Analysis ---
     mtf = None

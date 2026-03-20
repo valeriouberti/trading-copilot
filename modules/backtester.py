@@ -1,5 +1,10 @@
 """Backtesting engine for the trading assistant.
 
+# DEPRECATED: Use modules.vbt_backtester instead.
+# This module uses a simplified 3-indicator strategy that does not match
+# the live system. Kept for backward compatibility with existing tests.
+# New code should use VBTBacktester which shares the unified strategy module.
+
 Replays historical signals using the same indicators as the live system
 (RSI, MACD, EMA20/EMA50, ATR, ADX) and evaluates ATR-based SL/TP outcomes.
 Uses a vectorized pandas approach for performance.

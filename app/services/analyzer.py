@@ -282,7 +282,13 @@ def _compute_setup(
     quality_score: int,
     mtf_alignment: str | None,
 ) -> dict:
-    """Compute the entry/SL/TP setup for a single asset."""
+    """Compute the entry/SL/TP setup for a single asset.
+
+    Uses the unified strategy module for per-class SL/TP computation
+    with adaptive ATR percentile adjustment.
+    """
+    from modules.strategy import compute_sl_tp
+
     if analysis is None or getattr(analysis, "error", True):
         return {"tradeable": False, "reason": "No technical data"}
 
@@ -309,63 +315,47 @@ def _compute_setup(
             "atr": round(atr_value, 2),
         }
 
-    # ATR-adaptive SL/TP: compare current ATR to 20-period average
-    # Compute ATR average from daily data if available
-    atr_avg = atr_value  # default: assume current ATR is average
-    atr_percentile = 1.0
-    if analysis.daily_closes is not None and len(analysis.daily_closes) >= 34:
-        try:
-            import pandas_ta as _ta
-            daily_df = analysis.daily_closes
-            # Reconstruct a minimal df for ATR computation
-            # daily_closes is a Series; we need the parent DataFrame
-            # Use ATR value directly: compare to a rough average
-            # We'll estimate by looking at the ATR signal detail or use a ratio
-            pass
-        except Exception:
-            pass
-
-    # Use ATR-based signals to find ATR average info
-    # Simple approach: use ohlc_data if available to compute ATR average
+    # Build ATR series from OHLC data for adaptive computation
+    atr_series = None
     if hasattr(analysis, 'ohlc_data') and analysis.ohlc_data and len(analysis.ohlc_data) >= 34:
         try:
             import pandas as _pd
+            import pandas_ta as _ta
             ohlc_df = _pd.DataFrame(analysis.ohlc_data)
             if all(c in ohlc_df.columns for c in ('high', 'low', 'close')):
-                import pandas_ta as _ta
-                atr_s = _ta.atr(ohlc_df['high'], ohlc_df['low'], ohlc_df['close'], length=14)
-                if atr_s is not None and not atr_s.empty:
-                    recent_atr = atr_s.dropna().tail(20)
-                    if len(recent_atr) >= 5:
-                        atr_avg = float(recent_atr.mean())
+                atr_series = _ta.atr(ohlc_df['high'], ohlc_df['low'], ohlc_df['close'], length=14)
         except Exception:
             pass
 
-    if atr_avg > 0:
-        atr_percentile = atr_value / atr_avg
-    else:
-        atr_percentile = 1.0
+    # Determine asset class from symbol (best effort)
+    asset_class = "index"  # default
+    symbol = getattr(analysis, "symbol", "")
+    _FOREX_SYMS = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD"}
+    _COMMODITY_SYMS = {"GC", "SI", "CL", "NG"}
+    _INDEX_SYMS = {"NQ", "ES", "YM", "RTY"}
+    sym_base = symbol.replace("=F", "").replace("=X", "")
+    if sym_base in _FOREX_SYMS:
+        asset_class = "forex"
+    elif sym_base in _COMMODITY_SYMS:
+        asset_class = "commodity"
+    elif sym_base in _INDEX_SYMS:
+        asset_class = "index"
+    elif symbol.isalpha() and len(symbol) <= 5:
+        asset_class = "stock"
 
-    # SL multiplier: ranges from 1.0 (low vol) to 2.0 (high vol), default 1.5
-    if atr_percentile < 0.8:
-        sl_multiplier = 1.0
-    elif atr_percentile > 1.5:
-        sl_multiplier = 2.0
-    else:
-        # Linear interpolation between 0.8 and 1.5
-        sl_multiplier = 1.0 + (atr_percentile - 0.8) / (1.5 - 0.8) * (2.0 - 1.0)
-
-    tp_multiplier = sl_multiplier * 2.0  # Maintain 1:2 R:R
-
-    sl_distance = atr_value * sl_multiplier
-    tp_distance = atr_value * tp_multiplier
+    sl_tp = compute_sl_tp(
+        atr_value=atr_value,
+        atr_series=atr_series,
+        asset_class=asset_class,
+        adaptive=True,
+    )
 
     if direction == "LONG":
-        stop_loss = price - sl_distance
-        take_profit = price + tp_distance
+        stop_loss = price - sl_tp.sl_distance
+        take_profit = price + sl_tp.tp_distance
     else:
-        stop_loss = price + sl_distance
-        take_profit = price - tp_distance
+        stop_loss = price + sl_tp.sl_distance
+        take_profit = price - sl_tp.tp_distance
 
     tradeable = quality_score >= 4 and (mtf_alignment in ("ALIGNED", None))
 
@@ -374,12 +364,12 @@ def _compute_setup(
         "entry_price": round(price, 2),
         "stop_loss": round(stop_loss, 2),
         "take_profit": round(take_profit, 2),
-        "sl_distance": round(sl_distance, 2),
-        "tp_distance": round(tp_distance, 2),
-        "risk_reward": "1:2.0",
+        "sl_distance": round(sl_tp.sl_distance, 2),
+        "tp_distance": round(sl_tp.tp_distance, 2),
+        "risk_reward": sl_tp.risk_reward,
         "atr": round(atr_value, 2),
-        "atr_percentile": round(atr_percentile, 2),
-        "sl_multiplier": round(sl_multiplier, 2),
+        "atr_percentile": sl_tp.atr_percentile,
+        "sl_multiplier": sl_tp.sl_multiplier,
         "quality_score": quality_score,
         "tradeable": tradeable,
         "reason": "OK" if tradeable else (
