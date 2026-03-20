@@ -38,6 +38,13 @@ def _run_news(feeds: list, lookback_hours: int, asset: dict) -> list:
     return fetch_news_for_asset(feeds, lookback_hours, asset=asset)
 
 
+def _run_news_summary(articles: list, asset: dict) -> list[str]:
+    """Summarize news into bullet points (sync)."""
+    from modules.news_fetcher import summarize_news_with_llm
+
+    return summarize_news_with_llm(articles, asset=asset)
+
+
 def _run_sentiment(
     news: list, asset: dict, groq_model: str, poly_data: dict | None
 ) -> Any:
@@ -479,7 +486,17 @@ async def analyze_single_asset(
 
     setup = _compute_setup(tech_result, sentiment, regime, qs, mtf_align)
 
-    # Phase 7: Generate trade thesis (structured reasoning)
+    # Phase 7: News summary (LLM bullet points)
+    news_summary = None
+    if news_result and not skip_llm:
+        try:
+            news_summary = await asyncio.to_thread(
+                _run_news_summary, news_result, asset,
+            )
+        except Exception as exc:
+            logger.warning("News summary failed: %s", exc)
+
+    # Phase 8: Generate trade thesis (structured reasoning)
     trade_thesis = None
     if regime in ("LONG", "SHORT") and sentiment and tech_result:
         try:
@@ -507,5 +524,6 @@ async def analyze_single_asset(
         "validation_flags": validation_flags,
         "setup": setup,
         "trade_thesis": trade_thesis,
+        "news_summary": news_summary,
         "news_count": len(news_result),
     }

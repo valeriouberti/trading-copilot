@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.middleware.rate_limit import MONITOR_RATE, limiter
+
 router = APIRouter()
 
 
@@ -14,6 +16,7 @@ class MonitorStart(BaseModel):
 
 
 @router.post("/monitor/start")
+@limiter.limit(MONITOR_RATE)
 async def start_monitor(request: Request, body: MonitorStart):
     """Start background monitoring for an asset."""
     monitor = getattr(request.app.state, "monitor", None)
@@ -30,6 +33,7 @@ async def start_monitor(request: Request, body: MonitorStart):
 
 
 @router.post("/monitor/stop")
+@limiter.limit(MONITOR_RATE)
 async def stop_monitor(request: Request, body: MonitorStart):
     """Stop background monitoring for an asset."""
     monitor = getattr(request.app.state, "monitor", None)

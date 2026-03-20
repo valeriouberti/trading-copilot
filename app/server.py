@@ -105,6 +105,14 @@ if os.environ.get("TRADING_COPILOT_JSON_LOGS", "").lower() in ("1", "true"):
     configure_logging()
     app.add_middleware(CorrelationIDMiddleware)
 
+# Rate limiting
+from app.middleware.rate_limit import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Static files
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 

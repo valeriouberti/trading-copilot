@@ -6,6 +6,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.middleware.rate_limit import ANALYSIS_RATE, limiter
 from app.models.database import get_all_assets
 from app.models.engine import get_db
 from app.services.analyzer import analyze_single_asset, _run_technicals, _format_analysis
@@ -24,6 +25,7 @@ async def _resolve_asset(request: Request, symbol: str) -> dict:
 
 
 @router.get("/chart/{symbol}")
+@limiter.limit(ANALYSIS_RATE)
 async def get_chart_data(request: Request, symbol: str):
     """Return only price chart data (OHLC + EMA) for fast initial page load."""
     asset = await _resolve_asset(request, symbol)
@@ -40,6 +42,7 @@ async def get_chart_data(request: Request, symbol: str):
 
 
 @router.post("/analyze/{symbol}")
+@limiter.limit(ANALYSIS_RATE)
 async def analyze_asset(
     request: Request,
     symbol: str,

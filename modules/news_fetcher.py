@@ -275,6 +275,73 @@ def _prioritize_by_assets(
     return prioritized + rest
 
 
+def summarize_news_with_llm(
+    articles: list[dict[str, Any]],
+    asset: dict[str, str] | None = None,
+    max_bullets: int = 5,
+) -> list[str]:
+    """Distill articles into key bullet-point summaries using the LLM.
+
+    Returns up to ``max_bullets`` concise bullet points. Falls back to
+    simple title extraction if the LLM is unavailable.
+    """
+    import os
+
+    if not articles:
+        return []
+
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        # Fallback: just return top titles
+        return [a["title"] for a in articles[:max_bullets]]
+
+    try:
+        from groq import Groq
+    except ImportError:
+        return [a["title"] for a in articles[:max_bullets]]
+
+    asset_name = (
+        f" for {asset.get('display_name', asset.get('symbol', ''))}"
+        if asset else ""
+    )
+    articles_block = "\n".join(
+        f"- [{a.get('source', '?')}] {a['title']}"
+        for a in articles[:15]
+    )
+
+    prompt = f"""Summarize these financial news articles{asset_name} into exactly {max_bullets} concise bullet points.
+Each bullet should be 1 sentence max, focusing on market impact.
+
+ARTICLES:
+{articles_block}
+
+Respond ONLY with {max_bullets} bullet points (one per line, starting with "- ").
+No preamble, no numbering, no markdown."""
+
+    try:
+        groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model=groq_model,
+            messages=[
+                {"role": "system", "content": "You are a financial news summarizer. Be concise and focus on market impact."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=300,
+        )
+        raw = response.choices[0].message.content.strip()
+        bullets = [
+            line.lstrip("- ").strip()
+            for line in raw.split("\n")
+            if line.strip().startswith("-") or line.strip().startswith("•")
+        ]
+        return bullets[:max_bullets] if bullets else [a["title"] for a in articles[:max_bullets]]
+    except Exception as exc:
+        logger.warning("News summarization failed, using title fallback: %s", exc)
+        return [a["title"] for a in articles[:max_bullets]]
+
+
 if __name__ == "__main__":
     import yaml
 

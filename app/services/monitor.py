@@ -234,6 +234,10 @@ class AssetMonitor:
                     symbol, detection.direction, detection.entry,
                 )
 
+                # Transaction boundary: persist signal FIRST, then side-effects
+                await self._save_signal(detection, analysis)
+
+                # Side-effects (broadcast + notification) — non-critical, log on failure
                 signal_msg = {
                     "type": "signal",
                     "symbol": symbol,
@@ -246,13 +250,15 @@ class AssetMonitor:
                     "regime": detection.regime,
                     "timestamp": detection.timestamp,
                 }
-                await broadcast(signal_msg)
+                try:
+                    await broadcast(signal_msg)
+                except Exception as ws_exc:
+                    logger.warning("WebSocket broadcast failed: %s", ws_exc)
 
-                # Persist signal to DB
-                await self._save_signal(detection, analysis)
-
-                # Send Telegram notification
-                await self._notify_telegram(symbol, analysis, detection)
+                try:
+                    await self._notify_telegram(symbol, analysis, detection)
+                except Exception as tg_exc:
+                    logger.warning("Telegram notification failed: %s", tg_exc)
 
         except Exception as exc:
             from modules.exceptions import TransientError
