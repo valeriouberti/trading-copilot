@@ -196,11 +196,10 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 
 ---
 
-## Web App — COMPLETATA
+## Web App — COMPLETATA (Phase 5-10)
 
-Tutte le fasi webapp sono state implementate (Phase 5-10, 17 sub-fasi).
+Tutte le fasi webapp sono state implementate (17 sub-fasi).
 
-Il sistema e' ora una web dashboard completa con:
 - **Dashboard interattiva** — lista asset, analisi on-demand, monitor real-time
 - **Signal Detection Engine** — 9 condizioni di entry, calcolo automatico SL/TP
 - **Notifiche Telegram** — segnali push sul telefono
@@ -208,8 +207,19 @@ Il sistema e' ora una web dashboard completa con:
 - **Performance Analytics** — win rate, profit factor, equity curve, insights
 - **Docker + PostgreSQL** — deploy con un comando
 
+---
+
+## Phase 11 — Data Quality (v5.1.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| 11.1 | Asset in Database | `DONE` | Tabella `Asset` in DB, seed da config.yaml, CRUD via API, no piu' scrittura su YAML |
+| 11.2 | News per Asset | `DONE` | RSS Yahoo Finance per simbolo, filtro rilevanza, ~5 articoli mirati vs 60+ generici |
+| 11.3 | TradingView Chart | `DONE` | Candlestick + EMA20/50 + key levels, caricamento auto, endpoint `/api/chart/{symbol}` |
+| 11.4 | Pulizia docs | `DONE` | Rimosso ROADMAP-WEBAPP.md e docs/Main.md, aggiornati README/CHANGELOG/ROADMAP |
+
 Vedi **[CHANGELOG.md](CHANGELOG.md)** per lo storico completo delle modifiche.
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — Tutte le fasi completate (CLI + Web App)*
+*Ultimo aggiornamento: 20 Marzo 2026 — v5.1.0*

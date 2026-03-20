@@ -4,6 +4,43 @@ Storico delle modifiche al progetto, dalla versione CLI alla web dashboard.
 
 ---
 
+## v5.1.0 — 20 Marzo 2026
+
+### Asset in Database + News/Polymarket per Asset + Chart Fix
+
+#### 11.1 Asset in Database
+- Nuova tabella `Asset` in SQLAlchemy ORM (`app/models/database.py`)
+- Seed automatico da `config.yaml` al primo avvio (tabella vuota → import)
+- CRUD asset via database (non piu' scrittura su `config.yaml`)
+- Dashboard, asset detail, trades caricano asset dal DB
+- `config.yaml` mantiene solo: rss_feeds, groq_model, database, telegram
+- **Files**: `app/models/database.py`, `app/api/assets.py`, `app/server.py`, `app/config.py`
+
+#### 11.2 News per Asset
+- Nuovo `fetch_news_for_asset()` in `modules/news_fetcher.py`
+- Aggiunge RSS Yahoo Finance specifico per simbolo (es. `headline?s=AAPL`)
+- Filtra articoli per rilevanza (solo quelli che menzionano l'asset)
+- Fallback a lista completa se meno di 3 risultati rilevanti
+- Prima: 60+ articoli generici. Dopo: ~5 articoli specifici per asset
+- **Files**: `modules/news_fetcher.py`, `app/services/analyzer.py`
+
+#### 11.3 TradingView Chart Fix
+- Chart candlestick ora funzionante con dati OHLC reali (era vuoto)
+- Overlay EMA20 (blu) e EMA50 (viola) sul grafico
+- Linee orizzontali per key levels (PDH, PDL, PDC, PP, R1, S1)
+- Caricamento automatico chart all'apertura pagina (senza cliccare Analyze)
+- Nuovo endpoint `GET /api/chart/{symbol}` per caricamento veloce
+- Fix bug `nearest_level` JS (struttura API piatta, non annidata)
+- Fix duplicazione serie su ri-analisi (ricreazione chart)
+- **Files**: `app/templates/asset_detail.html`, `app/api/analysis.py`, `app/services/analyzer.py`, `modules/price_data.py`
+
+#### 11.4 Pulizia
+- Rimosso `ROADMAP-WEBAPP.md` (completato, storico in CHANGELOG)
+- Rimosso `docs/Main.md` (duplicato di README)
+- Aggiornati README, CHANGELOG, ROADMAP
+
+---
+
 ## v5.0.0 — 20 Marzo 2026
 
 ### Web Dashboard Completa
@@ -202,4 +239,4 @@ Tutti i moduli CLI (`modules/`) restano invariati — il web app e' un layer sop
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026*
+*Ultimo aggiornamento: 20 Marzo 2026 — v5.1.0*

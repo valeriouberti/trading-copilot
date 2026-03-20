@@ -63,6 +63,73 @@ def fetch_news(
     return deduplicated
 
 
+def fetch_news_for_asset(
+    feeds: list[dict[str, str]],
+    lookback_hours: int = 16,
+    asset: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch news specifically relevant to a single asset.
+
+    1. Fetches from all configured generic RSS feeds
+    2. Adds an asset-specific Yahoo Finance RSS feed
+    3. Filters to keep only articles mentioning the asset
+    4. Falls back to prioritized generic news if filter yields < 3 articles
+    """
+    if asset is None:
+        return fetch_news(feeds, lookback_hours)
+
+    symbol = asset.get("symbol", "")
+
+    # Add asset-specific Yahoo Finance RSS feed
+    asset_feeds = list(feeds)
+    clean_symbol = symbol.replace("=", "%3D")
+    asset_feeds.append({
+        "url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={clean_symbol}&region=US&lang=en-US",
+        "name": f"Yahoo Finance {symbol}",
+    })
+
+    all_articles = fetch_news(asset_feeds, lookback_hours, assets=[asset])
+
+    # Build filter terms from symbol and display_name
+    terms = _build_asset_search_terms(asset)
+
+    # Filter to asset-relevant articles
+    relevant = [a for a in all_articles if _article_mentions_asset(a, terms)]
+
+    # If too few results, fall back to the full prioritized list
+    if len(relevant) < 3:
+        return all_articles
+
+    return relevant
+
+
+def _build_asset_search_terms(asset: dict[str, str]) -> list[str]:
+    """Build search terms for matching articles to an asset."""
+    terms: list[str] = []
+    symbol = asset.get("symbol", "").upper()
+    display_name = asset.get("display_name", "")
+
+    # Raw symbol without suffixes (=F, =X)
+    base_symbol = symbol.split("=")[0]
+    terms.append(base_symbol.lower())
+
+    # Display name words (skip very short/common ones)
+    skip_words = {"inc", "inc.", "the", "corp", "corp.", "ltd", "ltd."}
+    if display_name:
+        for word in display_name.split():
+            w = word.lower().strip(".,()[]")
+            if len(w) > 2 and w not in skip_words:
+                terms.append(w)
+
+    return list(dict.fromkeys(terms))
+
+
+def _article_mentions_asset(article: dict[str, Any], terms: list[str]) -> bool:
+    """Check if an article mentions any of the asset search terms."""
+    text = f"{article.get('title', '')} {article.get('summary', '')}".lower()
+    return any(term in text for term in terms)
+
+
 def _fetch_single_feed(
     url: str,
     source_name: str,

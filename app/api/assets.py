@@ -7,8 +7,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import delete, func, select
 
-from app.config import reload_config, save_config
+from app.models.database import Asset, get_all_assets
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,7 @@ class AssetCreate(BaseModel):
 @router.get("/assets")
 async def list_assets(request: Request):
     """Return the list of configured assets."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    assets = await get_all_assets(request.app.state.session_factory)
     return {
         "assets": assets,
         "count": len(assets),
@@ -33,19 +33,22 @@ async def list_assets(request: Request):
 
 @router.post("/assets", status_code=201)
 async def add_asset(request: Request, body: AssetCreate):
-    """Add a new asset to config.yaml after validating the symbol."""
+    """Add a new asset after validating the symbol via yfinance."""
     symbol = body.symbol.strip().upper()
     display_name = body.display_name.strip()
 
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol cannot be empty")
 
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    session_factory = request.app.state.session_factory
 
     # Check for duplicates
-    if any(a["symbol"] == symbol for a in assets):
-        raise HTTPException(status_code=409, detail=f"{symbol} already exists")
+    async with session_factory() as session:
+        existing = await session.execute(
+            select(Asset).where(Asset.symbol == symbol)
+        )
+        if existing.scalars().first():
+            raise HTTPException(status_code=409, detail=f"{symbol} already exists")
 
     # Validate symbol via yfinance (run in thread — it's sync)
     try:
@@ -61,37 +64,37 @@ async def add_asset(request: Request, body: AssetCreate):
     if not display_name:
         display_name = info.get("shortName") or info.get("longName") or symbol
 
+    async with session_factory() as session:
+        asset = Asset(symbol=symbol, display_name=display_name)
+        session.add(asset)
+        await session.commit()
+
     new_asset = {"symbol": symbol, "display_name": display_name}
-    assets.append(new_asset)
-    config["assets"] = assets
-
-    # Persist to config.yaml and refresh app state
-    save_config(config)
-    request.app.state.config = reload_config()
-
     return {"asset": new_asset, "message": f"{symbol} added"}
 
 
 @router.delete("/assets/{symbol}")
 async def remove_asset(request: Request, symbol: str):
-    """Remove an asset from config.yaml."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    """Remove an asset from the database."""
+    session_factory = request.app.state.session_factory
 
-    original_len = len(assets)
-    assets = [a for a in assets if a["symbol"] != symbol]
+    async with session_factory() as session:
+        # Check exists
+        existing = await session.execute(
+            select(Asset).where(Asset.symbol == symbol)
+        )
+        if not existing.scalars().first():
+            raise HTTPException(status_code=404, detail=f"{symbol} not found")
 
-    if len(assets) == original_len:
-        raise HTTPException(status_code=404, detail=f"{symbol} not found")
+        # Check not last
+        count = await session.scalar(select(func.count()).select_from(Asset))
+        if count is not None and count <= 1:
+            raise HTTPException(status_code=400, detail="Cannot remove last asset")
 
-    if len(assets) == 0:
-        raise HTTPException(status_code=400, detail="Cannot remove last asset")
+        await session.execute(delete(Asset).where(Asset.symbol == symbol))
+        await session.commit()
 
-    config["assets"] = assets
-    save_config(config)
-    request.app.state.config = reload_config()
-
-    return {"message": f"{symbol} removed", "remaining": len(assets)}
+    return {"message": f"{symbol} removed"}
 
 
 def _validate_symbol(symbol: str) -> tuple[bool, dict]:
@@ -100,8 +103,6 @@ def _validate_symbol(symbol: str) -> tuple[bool, dict]:
 
     ticker = yf.Ticker(symbol)
     info = ticker.info or {}
-    # yfinance returns a dict with only 'trailingPegRatio' or similar for invalid symbols
-    # A valid ticker has 'regularMarketPrice' or 'previousClose'
     valid = bool(
         info.get("regularMarketPrice")
         or info.get("previousClose")

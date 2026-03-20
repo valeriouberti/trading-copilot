@@ -31,12 +31,8 @@ def load_config(path: str | None = None) -> dict:
     if not config:
         raise ValueError(f"Configuration file is empty: {config_path}")
 
-    if not config.get("assets"):
-        raise ValueError("'assets' missing or empty in config")
-
-    for i, asset in enumerate(config["assets"]):
-        if not asset.get("symbol"):
-            raise ValueError(f"assets[{i}]: 'symbol' missing")
+    # assets validation is optional — assets are stored in the database.
+    # config.yaml assets are only used for initial seeding.
 
     if not config.get("rss_feeds"):
         raise ValueError("'rss_feeds' missing or empty in config")

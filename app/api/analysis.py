@@ -6,6 +6,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.models.database import get_all_assets
 from app.models.engine import get_db
 from app.services.analyzer import analyze_single_asset, _run_technicals, _format_analysis
 from app.services.notifier import get_notifier
@@ -13,15 +14,19 @@ from app.services.notifier import get_notifier
 router = APIRouter()
 
 
-@router.get("/chart/{symbol}")
-async def get_chart_data(request: Request, symbol: str):
-    """Return only price chart data (OHLC + EMA) for fast initial page load."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
-    asset = next(
+async def _resolve_asset(request: Request, symbol: str) -> dict:
+    """Resolve an asset dict from the database."""
+    assets = await get_all_assets(request.app.state.session_factory)
+    return next(
         (a for a in assets if a["symbol"] == symbol),
         {"symbol": symbol, "display_name": symbol},
     )
+
+
+@router.get("/chart/{symbol}")
+async def get_chart_data(request: Request, symbol: str):
+    """Return only price chart data (OHLC + EMA) for fast initial page load."""
+    asset = await _resolve_asset(request, symbol)
     try:
         tech_result = await asyncio.to_thread(_run_technicals, asset)
     except Exception as exc:
@@ -43,11 +48,13 @@ async def analyze_asset(
 ):
     """Run the full analysis pipeline for a single asset."""
     config = request.app.state.config
+    asset = await _resolve_asset(request, symbol)
     result = await analyze_single_asset(
         symbol=symbol,
         config=config,
         skip_llm=skip_llm,
         skip_polymarket=skip_polymarket,
+        asset=asset,
     )
     return result
 
@@ -61,7 +68,8 @@ async def send_analysis_telegram(request: Request, symbol: str):
     if not notifier.enabled:
         raise HTTPException(status_code=400, detail="Telegram not enabled")
 
-    result = await analyze_single_asset(symbol=symbol, config=config)
+    asset = await _resolve_asset(request, symbol)
+    result = await analyze_single_asset(symbol=symbol, config=config, asset=asset)
 
     setup = result.get("setup", {})
     if not setup.get("direction"):

@@ -23,7 +23,7 @@ from app.api import settings as settings_router
 from app.api import trades as trades_router
 from app.api import websocket as ws_router
 from app.config import get_database_url, load_config
-from app.models.database import Base
+from app.models.database import Base, get_all_assets, seed_assets_from_config
 from app.models.engine import get_engine, get_session_factory
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
     app.state.engine = engine
     app.state.session_factory = get_session_factory(engine)
     app.state.config = load_config()
+
+    # Seed assets from config.yaml on first run
+    await seed_assets_from_config(app.state.session_factory, app.state.config)
 
     # Initialize background monitor
     from app.services.monitor import AssetMonitor
@@ -95,8 +98,7 @@ app.include_router(ws_router.router, tags=["websocket"])
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Render the main dashboard page."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    assets = await get_all_assets(request.app.state.session_factory)
     return templates.TemplateResponse(
         "dashboard.html",
         {
@@ -110,8 +112,7 @@ async def dashboard(request: Request):
 @app.get("/asset/{symbol}", response_class=HTMLResponse)
 async def asset_detail(request: Request, symbol: str):
     """Render the single-asset analysis page."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    assets = await get_all_assets(request.app.state.session_factory)
     asset = next(
         (a for a in assets if a["symbol"] == symbol),
         {"symbol": symbol, "display_name": symbol},
@@ -129,8 +130,7 @@ async def asset_detail(request: Request, symbol: str):
 @app.get("/trades", response_class=HTMLResponse)
 async def trades_page(request: Request):
     """Render the trade journal page."""
-    config = request.app.state.config
-    assets = config.get("assets", [])
+    assets = await get_all_assets(request.app.state.session_factory)
     return templates.TemplateResponse(
         "trades.html",
         {

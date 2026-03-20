@@ -15,13 +15,26 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    delete,
     func,
+    select,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class Asset(Base):
+    """Configured trading assets."""
+
+    __tablename__ = "assets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False, unique=True, index=True)
+    display_name = Column(String(100), nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class Signal(Base):
@@ -118,3 +131,31 @@ class AnalysisCache(Base):
     data_json = Column(Text, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Asset helpers
+# ---------------------------------------------------------------------------
+
+
+async def seed_assets_from_config(session_factory, config: dict) -> None:
+    """Seed assets table from config.yaml if the table is empty."""
+    async with session_factory() as session:
+        count = await session.scalar(select(func.count()).select_from(Asset))
+        if count and count > 0:
+            return
+
+        for item in config.get("assets", []):
+            session.add(Asset(
+                symbol=item["symbol"],
+                display_name=item.get("display_name", item["symbol"]),
+            ))
+        await session.commit()
+
+
+async def get_all_assets(session_factory) -> list[dict]:
+    """Return all assets as list of dicts (same shape as config.yaml)."""
+    async with session_factory() as session:
+        result = await session.execute(select(Asset).order_by(Asset.symbol))
+        rows = result.scalars().all()
+    return [{"symbol": r.symbol, "display_name": r.display_name} for r in rows]

@@ -24,10 +24,10 @@ def _run_technicals(asset: dict) -> Any:
 
 
 def _run_news(feeds: list, lookback_hours: int, asset: dict) -> list:
-    """Fetch news filtered for a single asset (sync)."""
-    from modules.news_fetcher import fetch_news
+    """Fetch news specifically relevant to a single asset (sync)."""
+    from modules.news_fetcher import fetch_news_for_asset
 
-    return fetch_news(feeds, lookback_hours, assets=[asset])
+    return fetch_news_for_asset(feeds, lookback_hours, asset=asset)
 
 
 def _run_sentiment(
@@ -261,17 +261,19 @@ async def analyze_single_asset(
     config: dict,
     skip_llm: bool = False,
     skip_polymarket: bool = False,
+    asset: dict | None = None,
 ) -> dict:
     """Run the full analysis pipeline for a single asset.
 
     Returns a structured dict with all analysis results.
     """
-    # Find asset in config
-    assets = config.get("assets", [])
-    asset = next(
-        (a for a in assets if a["symbol"] == symbol),
-        {"symbol": symbol, "display_name": symbol},
-    )
+    # Resolve asset dict (from DB or fallback)
+    if asset is None:
+        assets = config.get("assets", [])
+        asset = next(
+            (a for a in assets if a["symbol"] == symbol),
+            {"symbol": symbol, "display_name": symbol},
+        )
     feeds = config.get("rss_feeds", [])
     lookback_hours = config.get("lookback_hours", 16)
     groq_model = config.get("groq_model", "llama-3.3-70b-versatile")

@@ -135,11 +135,21 @@ class AssetMonitor:
         try:
             config = self.app.state.config
 
+            # Resolve asset from DB
+            from app.models.database import get_all_assets
+
+            assets = await get_all_assets(self.app.state.session_factory)
+            asset = next(
+                (a for a in assets if a["symbol"] == symbol),
+                {"symbol": symbol, "display_name": symbol},
+            )
+
             # Run full analysis
             analysis = await analyze_single_asset(
                 symbol=symbol,
                 config=config,
                 skip_polymarket=True,  # skip for speed on frequent polls
+                asset=asset,
             )
 
             price = None

@@ -136,6 +136,7 @@ Apri **http://localhost:8000** nel browser.
 | GET | `/api/assets` | Lista asset configurati |
 | POST | `/api/assets` | Aggiunge asset (valida via yfinance) |
 | DELETE | `/api/assets/{symbol}` | Rimuove asset |
+| GET | `/api/chart/{symbol}` | Dati chart OHLC + EMA (caricamento veloce) |
 | POST | `/api/analyze/{symbol}` | Lancia analisi completa |
 | POST | `/api/analyze/{symbol}/telegram` | Analisi + invio Telegram |
 | POST | `/api/monitor/start` | Avvia monitoraggio background |
@@ -271,7 +272,7 @@ database:
   # url: "postgresql+asyncpg://trading:trading@localhost:5432/trading"
 ```
 
-Le tabelle vengono create automaticamente al primo avvio. Migrazioni gestite da Alembic.
+Le tabelle vengono create automaticamente al primo avvio. Gli asset vengono importati da `config.yaml` nel DB al primo avvio (seed). Migrazioni gestite da Alembic.
 
 ---
 
@@ -311,17 +312,9 @@ Le tabelle vengono create automaticamente al primo avvio. Migrazioni gestite da 
 
 ## Aggiungere Nuovi Asset
 
-**Via Web Dashboard:** Dalla dashboard, clicca "Add Asset", inserisci il simbolo Yahoo Finance. Il sistema valida il simbolo automaticamente via yfinance.
+**Via Web Dashboard:** Dalla dashboard, clicca "Add Asset", inserisci il simbolo Yahoo Finance. Il sistema valida il simbolo automaticamente via yfinance e lo salva nel database.
 
-**Via config.yaml:**
-
-```yaml
-assets:
-  - symbol: "NQ=F"
-    display_name: "NASDAQ 100 Futures"
-  - symbol: "CL=F"
-    display_name: "Crude Oil"
-```
+> **Nota:** Gli asset sono gestiti nel database (tabella `assets`). Al primo avvio, gli asset vengono importati da `config.yaml` nel DB. Dopo il seed iniziale, tutte le operazioni CRUD avvengono via database.
 
 I simboli seguono la convenzione Yahoo Finance:
 
@@ -353,7 +346,7 @@ python main.py --no-polymarket
 trading-assistant/
 ├── main.py                          # Entry point CLI
 ├── run_webapp.py                    # Entry point Web Dashboard
-├── config.yaml                      # Configurazione (asset, feed, database, telegram)
+├── config.yaml                      # Configurazione (feed RSS, database, telegram, seed asset)
 ├── Dockerfile                       # Container image multi-stage
 ├── docker-compose.yml               # App + PostgreSQL stack
 ├── .env.example                     # Template variabili d'ambiente
@@ -377,7 +370,7 @@ trading-assistant/
 │   │   ├── monitor.py               # Background polling (APScheduler)
 │   │   └── notifier.py              # Telegram + WebSocket push
 │   ├── models/
-│   │   ├── database.py              # SQLAlchemy ORM (Signal, Trade, etc.)
+│   │   ├── database.py              # SQLAlchemy ORM (Asset, Signal, Trade, etc.)
 │   │   └── engine.py                # Engine factory (SQLite / PostgreSQL)
 │   ├── templates/                   # Jinja2 HTML (7 pagine)
 │   │   ├── base.html                # Layout base (nav, footer, dark theme)
@@ -411,8 +404,6 @@ trading-assistant/
 ├── tradingview/
 │   └── trading_copilot.pine         # Pine Script v6
 │
-├── docs/
-│   └── Main.md                      # Manuale operativo completo (v5.0)
 ├── reports/                         # Report HTML generati
 └── tests/                           # Test suite (250+ test)
 ```
