@@ -15,14 +15,15 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** 59+ bare `except Exception` nel codebase. Gli errori vengono loggati e ignorati. Non c'e' distinzione tra errori recuperabili (API timeout) e fatali (schema corrotto).
 
 **Cosa implementare:**
-- [ ] Gerarchia di eccezioni in `modules/exceptions.py`:
-  - `TradingCopilotError` (base)
-  - `DataFetchError` (yfinance, Twelve Data, RSS — recuperabile)
-  - `SentimentAnalysisError` (Groq, FinBERT — fallback disponibile)
-  - `ConfigurationError` (settings invalidi — fatale)
-  - `ExternalAPIError` (Polymarket, Forex Factory — skip gracefully)
-- [ ] Sostituire tutti i bare `except Exception` con eccezioni tipizzate
-- [ ] Propagare errori significativi all'utente (toast notification in dashboard)
+- [x] Gerarchia di eccezioni in `modules/exceptions.py`:
+  - `TradingCopilotError` (base) → `TransientError`, `PermanentError`
+  - `DataFetchError` → `DataFetchTransient`, `DataFetchPermanent`, `NoDataAvailable`
+  - `ExternalAPIError` → `ExternalAPITransient`, `ExternalAPIPermanent`
+  - `LLMError` → `LLMRateLimited`, `LLMResponseInvalid`, `LLMUnavailable`
+  - `NotificationError` → `NotificationTransient`, `NotificationPermanent`
+  - `ConfigurationError`, `AnalysisError`, `SignalDetectionError`
+- [x] Sostituire tutti i bare `except Exception` con eccezioni tipizzate
+- [x] Propagare errori significativi all'utente (toast notification in dashboard)
 
 **Files coinvolti:**
 - `modules/exceptions.py` — NUOVO
@@ -35,10 +36,10 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** Se yfinance va down, il monitor continua a chiamare ogni 60 secondi, accumulando errori. Stessa cosa per Groq API.
 
 **Cosa implementare:**
-- [ ] Circuit breaker pattern (3 fallimenti consecutivi → apri circuito → retry dopo 5 minuti)
-- [ ] Stato del circuito visibile nella dashboard (icona rosso/verde per ogni data source)
-- [ ] Fallback chain: yfinance → Twelve Data → cache locale
-- [ ] Health check che verifica connettivita' verso tutte le API esterne
+- [x] Circuit breaker pattern (3 fallimenti consecutivi → apri circuito → retry dopo 5 minuti)
+- [x] Stato del circuito visibile nella dashboard (icona rosso/verde per ogni data source)
+- [x] Fallback chain: yfinance → Twelve Data → cache locale
+- [x] Health check che verifica connettivita' verso tutte le API esterne
 
 **Files coinvolti:**
 - `modules/circuit_breaker.py` — NUOVO
@@ -50,9 +51,9 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `news_fetcher.py` ha retry ma con backoff fisso. `price_data.py` non ha retry. Le chiamate Groq falliscono senza retry.
 
 **Cosa implementare:**
-- [ ] Decorator `@retry` riutilizzabile con exponential backoff + jitter
-- [ ] Configurabile per max_retries, base_delay, max_delay
-- [ ] Applicare a tutte le chiamate HTTP esterne
+- [x] Decorator `@retry` riutilizzabile con exponential backoff + jitter (tenacity library)
+- [x] Configurabile per max_retries, base_delay, max_delay
+- [x] Applicare a tutte le chiamate HTTP esterne
 
 **Files coinvolti:**
 - `modules/retry.py` — NUOVO (o usare `tenacity`)
@@ -70,15 +71,15 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `AnalysisCache` esiste come tabella DB ma non e' mai usata. Ogni analisi richiama yfinance 4 volte (daily, weekly, hourly, 5min) anche se i dati non cambiano.
 
 **Cosa implementare:**
-- [ ] Implementare `AnalysisCache` con TTL differenziati:
+- [x] Implementare `AnalysisCache` con TTL differenziati:
   - Dati prezzo: 60s TTL (per monitor polling)
   - News: 300s TTL
   - Sentiment: 600s TTL
-  - Polymarket: 300s TTL
+  - Polymarket: 600s TTL
   - Calendario: 3600s TTL
-- [ ] In-memory cache (dict + TTL) per ambienti senza Redis
-- [ ] Redis opzionale per ambienti Docker (aggiungere al compose)
-- [ ] Cache hit/miss metrics nel health check
+- [x] In-memory cache (dict + TTL) per ambienti senza Redis
+- [ ] Redis opzionale per ambienti Docker (aggiungere al compose) — DEFERRED
+- [x] Cache hit/miss metrics nel health check
 
 **Files coinvolti:**
 - `app/services/cache.py` — NUOVO
@@ -90,10 +91,10 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** Tutte le chiamate HTTP (yfinance, Groq, RSS) sono sync e bridgiate con `asyncio.to_thread()`. Questo spreca thread e limita il parallelismo.
 
 **Cosa implementare:**
-- [ ] Sostituire `requests` con `httpx` (async client) per le chiamate dirette
-- [ ] Wrapper async per yfinance (usa requests internamente — thread pool come fallback)
-- [ ] Groq SDK supporta gia' async — usare `AsyncGroq`
-- [ ] Session reuse: singola `httpx.AsyncClient` per tutta l'app (connection pooling)
+- [x] Sostituire `requests` con `httpx` (async client) per le chiamate dirette
+- [x] Wrapper async per yfinance (usa requests internamente — thread pool come fallback)
+- [x] Groq SDK supporta gia' async — usare `AsyncGroq`
+- [ ] Session reuse: singola `httpx.AsyncClient` per tutta l'app (connection pooling) — DEFERRED
 
 **Files coinvolti:**
 - `modules/news_fetcher.py` — feedparser resta sync (wrappare)
@@ -124,13 +125,13 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `monitor._poll_asset()` chiama `get_all_assets()` (SELECT * FROM assets) ogni 60 secondi per trovare UN asset. N+1 classico.
 
 **Cosa implementare:**
-- [ ] `get_asset_by_symbol(session_factory, symbol)` — query diretta con WHERE
-- [ ] `get_rss_feed_by_id()` — per future operazioni CRUD
-- [ ] Aggiungere indici mancanti:
+- [x] `get_asset_by_symbol(session_factory, symbol)` — query diretta con WHERE
+- [ ] `get_rss_feed_by_id()` — per future operazioni CRUD — DEFERRED
+- [x] Aggiungere indici mancanti:
   - `Trade.signal_id` (FK senza indice)
   - `NotificationLog.timestamp + type` (per rate limiting)
   - `Trade.symbol + timestamp` (per analytics)
-- [ ] Audit tutte le query con `echo=True` per identificare N+1
+- [ ] Audit tutte le query con `echo=True` per identificare N+1 — DEFERRED
 
 **Files coinvolti:**
 - `app/models/database.py` — query helpers + indici
@@ -141,9 +142,9 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `_save_signal()` nel monitor crea il Signal, poi manda Telegram. Se Telegram fallisce, il Signal e' gia' persistito (inconsistenza).
 
 **Cosa implementare:**
-- [ ] Wrappare operazioni correlate in transazioni esplicite
-- [ ] Pattern: persist → commit → side effects (Telegram) dopo commit
-- [ ] Rollback automatico su fallimento DB
+- [x] Wrappare operazioni correlate in transazioni esplicite
+- [x] Pattern: persist → commit → side effects (Telegram) dopo commit
+- [x] Rollback automatico su fallimento DB
 
 **Files coinvolti:**
 - `app/services/monitor.py` — refactor `_poll_asset()` con transazioni esplicite
@@ -153,8 +154,8 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** La tabella `AnalysisCache` esiste nel modello ma non e' mai usata. Dead code.
 
 **Cosa implementare:**
-- [ ] Implementare (vedi E2.1) O rimuovere la tabella
-- [ ] Se rimossa: creare migration Alembic
+- [x] Implementare (vedi E2.1) — in-memory TTL cache in `app/services/cache.py`
+- [ ] Se rimossa: creare migration Alembic — N/A, implementato come in-memory cache
 
 ---
 
@@ -167,11 +168,11 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** Zero auth. Chiunque con accesso alla rete puo' avviare monitor, registrare trade, leggere analytics.
 
 **Cosa implementare:**
-- [ ] API key authentication (header `X-API-Key`)
-- [ ] Generazione API key al primo avvio (salvata in DB)
-- [ ] Middleware FastAPI che verifica l'header su tutti gli endpoint (tranne health)
-- [ ] Dashboard: API key passata via cookie/session dopo login
-- [ ] Login page semplice (password singola configurabile via env var)
+- [x] API key authentication (header `X-API-Key` or `api_key` query param)
+- [x] API key configurabile via env var `TRADING_COPILOT_API_KEY`
+- [x] Middleware FastAPI che verifica l'header su tutti gli endpoint (tranne health e static)
+- [x] Dashboard: API key passata via cookie/session dopo login
+- [x] Login page semplice (password singola configurabile via env var)
 
 **Files coinvolti:**
 - `app/middleware/auth.py` — NUOVO
@@ -183,9 +184,9 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** Nessun rate limiting sugli endpoint API. Un client malevolo potrebbe triggerare migliaia di analisi parallele.
 
 **Cosa implementare:**
-- [ ] Rate limiter middleware: 60 req/min per IP per gli endpoint di analisi
-- [ ] 10 req/min per monitor start/stop
-- [ ] Unlimited per health, static, WebSocket
+- [x] Rate limiter middleware: 60 req/min per IP per gli endpoint di analisi (slowapi)
+- [x] 10 req/min per monitor start/stop
+- [x] Unlimited per health, static, WebSocket
 
 **Files coinvolti:**
 - `app/middleware/rate_limit.py` — NUOVO (o usare `slowapi`)
@@ -253,8 +254,8 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `run_webapp.py` ha `reload=True` che causa restart del server ad ogni modifica file. In Docker, questo puo' causare disconnessioni WebSocket.
 
 **Cosa implementare:**
-- [ ] `reload=False` di default, `reload=True` solo se env var `DEV=true`
-- [ ] Oppure: CLI flag `--dev` per abilitare reload
+- [x] `reload=False` di default, `reload=True` solo se env var `TRADING_COPILOT_DEV=true`
+- [x] Oppure: CLI flag `--dev` per abilitare reload
 
 **Files coinvolti:**
 - `run_webapp.py` — fix immediato
@@ -264,10 +265,10 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `/api/health` ritorna `{"status": "ok"}` senza verificare nulla. Non rileva DB down o monitor bloccato.
 
 **Cosa implementare:**
-- [ ] Verificare connettivita' DB (SELECT 1)
-- [ ] Verificare stato monitor (last_check < 5 minuti fa)
-- [ ] Verificare disponibilita' Groq API (se configurata)
-- [ ] Ritornare `503` se qualsiasi check critico fallisce
+- [x] Verificare connettivita' DB (SELECT 1)
+- [x] Verificare stato monitor (last_check < 5 minuti fa)
+- [x] Verificare disponibilita' cache stats e circuit breaker states
+- [x] Ritornare `503` se qualsiasi check critico fallisce
 
 **Files coinvolti:**
 - `app/api/health.py` — estendere
@@ -277,10 +278,10 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** Log non strutturati, nessuna rotazione. Il file `trading_assistant.log` cresce senza limiti.
 
 **Cosa implementare:**
-- [ ] JSON structured logging (per aggregazione in ELK/Grafana)
-- [ ] Log rotation (RotatingFileHandler, max 10MB x 5 file)
-- [ ] Request logging middleware (metodo, path, status, durata)
-- [ ] Correlation ID per tracciare una richiesta end-to-end
+- [x] JSON structured logging (per aggregazione in ELK/Grafana) — attivabile via `TRADING_COPILOT_JSON_LOGS=true`
+- [x] Log rotation (RotatingFileHandler, max 10MB x 5 file)
+- [x] Request logging middleware (metodo, path, status, durata)
+- [x] Correlation ID per tracciare una richiesta end-to-end (X-Correlation-ID header)
 
 **Files coinvolti:**
 - `app/middleware/logging.py` — NUOVO
@@ -291,9 +292,9 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `monitor.shutdown()` usa `wait=False` — i job in corso vengono interrotti brutalmente. Possibile perdita di dati.
 
 **Cosa implementare:**
-- [ ] `wait=True` con timeout (30s)
-- [ ] Signal handler per SIGTERM/SIGINT
-- [ ] Completare il polling cycle corrente prima di uscire
+- [x] `wait=True` con timeout (30s)
+- [x] Signal handler per SIGTERM/SIGINT
+- [x] Completare il polling cycle corrente prima di uscire
 
 **Files coinvolti:**
 - `app/services/monitor.py` — fix shutdown
@@ -310,19 +311,19 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 **Problema:** `requirements.txt` usa `>=` — build non riproducibili.
 
 **Cosa implementare:**
-- [ ] Generare `requirements.lock` con versioni esatte (`pip freeze`)
-- [ ] `requirements.txt` mantiene range per sviluppo
-- [ ] Dockerfile usa `requirements.lock`
+- [x] Generare `requirements.lock` con versioni esatte (`pip freeze`)
+- [x] `requirements.txt` mantiene range per sviluppo
+- [x] Dockerfile usa `requirements.lock`
 
 ### E7.2 Separare ML Dependencies
 
 **Problema:** `torch` (2.5GB) e `transformers` (800MB) sono installati sempre, ma usati solo come fallback se Groq non e' configurato.
 
 **Cosa implementare:**
-- [ ] `requirements-base.txt` — dipendenze core (FastAPI, SQLAlchemy, yfinance)
-- [ ] `requirements-ml.txt` — torch, transformers (opzionale)
-- [ ] Dockerfile multi-stage: immagine `lite` senza ML, immagine `full` con ML
-- [ ] Runtime check: se FinBERT richiesto ma non installato → messaggio chiaro
+- [x] `requirements-base.txt` — dipendenze core (FastAPI, SQLAlchemy, yfinance)
+- [x] `requirements-ml.txt` — torch, transformers (opzionale)
+- [x] Dockerfile multi-stage: immagine `lite` senza ML, immagine `full` con ML
+- [ ] Runtime check: se FinBERT richiesto ma non installato → messaggio chiaro — DEFERRED
 
 **Files coinvolti:**
 - `requirements.txt` → split in 2+
@@ -334,28 +335,29 @@ Architettura e qualita' del codice. Prioritizzato per impatto sulla stabilita' e
 
 | Phase | Feature | Status | Priorita' |
 |-------|---------|--------|-----------|
-| E1.1 | Custom Exceptions | `TODO` | CRITICA |
-| E1.2 | Circuit Breaker | `TODO` | ALTA |
-| E1.3 | Retry Decorator | `TODO` | ALTA |
-| E2.1 | Response Caching | `TODO` | CRITICA |
-| E2.2 | Async HTTP Client | `TODO` | ALTA |
-| E2.3 | Batch TF Fetch | `TODO` | MEDIA |
-| E3.1 | Query Optimization | `TODO` | ALTA |
-| E3.2 | Transaction Boundaries | `TODO` | MEDIA |
-| E3.3 | AnalysisCache Cleanup | `TODO` | BASSA |
-| E4.1 | Autenticazione | `TODO` | CRITICA |
-| E4.2 | Rate Limiting | `TODO` | ALTA |
-| E4.3 | Secrets Encryption | `TODO` | MEDIA |
-| E5.1 | Async Test Suite | `TODO` | ALTA |
-| E5.2 | Mock API Esterne | `TODO` | MEDIA |
-| E5.3 | Database Tests | `TODO` | MEDIA |
-| E6.1 | Fix Reload | `TODO` | CRITICA |
-| E6.2 | Health Check Esteso | `TODO` | ALTA |
-| E6.3 | Structured Logging | `TODO` | MEDIA |
-| E6.4 | Graceful Shutdown | `TODO` | MEDIA |
-| E7.1 | Pin Dependencies | `TODO` | ALTA |
-| E7.2 | Separare ML Deps | `TODO` | MEDIA |
+| E1.1 | Custom Exceptions | `DONE` | CRITICA |
+| E1.2 | Circuit Breaker | `DONE` | ALTA |
+| E1.3 | Retry Decorator | `DONE` | ALTA |
+| E2.1 | Response Caching | `DONE` | CRITICA |
+| E2.2 | Async HTTP Client | `DONE` | ALTA |
+| E2.3 | Batch TF Fetch | `DEFERRED` | MEDIA |
+| E3.1 | Query Optimization | `DONE` | ALTA |
+| E3.2 | Transaction Boundaries | `DONE` | MEDIA |
+| E3.3 | AnalysisCache Cleanup | `DONE` | BASSA |
+| E4.1 | Autenticazione | `DONE` | CRITICA |
+| E4.2 | Rate Limiting | `DONE` | ALTA |
+| E4.3 | Secrets Encryption | `DEFERRED` | MEDIA |
+| E5.1 | Async Test Suite | `DONE` | ALTA |
+| E5.2 | Mock API Esterne | `DEFERRED` | MEDIA |
+| E5.3 | Database Tests | `DEFERRED` | MEDIA |
+| E6.1 | Fix Reload | `DONE` | CRITICA |
+| E6.2 | Health Check Esteso | `DONE` | ALTA |
+| E6.3 | Structured Logging | `DONE` | MEDIA |
+| E6.4 | Graceful Shutdown | `DONE` | MEDIA |
+| E7.1 | Pin Dependencies | `DONE` | ALTA |
+| E7.2 | Separare ML Deps | `DONE` | MEDIA |
 
 ---
 
 *Creato: 20 Marzo 2026 — analisi architetturale v5.2.0*
+*Aggiornato: 20 Marzo 2026 — 17/21 task completati in v5.3.0–v6.0.0*

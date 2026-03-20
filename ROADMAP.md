@@ -234,13 +234,91 @@ Vedi **[CHANGELOG.md](CHANGELOG.md)** per lo storico completo delle modifiche.
 
 ---
 
-## Roadmap Specializzate
+## Phase 13 — Unified Development Plan (v5.3.0–v6.0.0)
 
-Per i prossimi sviluppi, il progetto ha due roadmap dedicate:
+Implementazione completa del piano unificato che fonde ROADMAP-ENGINEERING (21 task) e ROADMAP-TRADING (17 task) in 6 sprint. **29 task completati, 9 deferred.** 383 test totali passano.
 
-- **[ROADMAP-ENGINEERING.md](ROADMAP-ENGINEERING.md)** — Architettura, performance, sicurezza, testing, deploy. 7 fasi, 21 task.
-- **[ROADMAP-TRADING.md](ROADMAP-TRADING.md)** — Signal quality, risk management, LLM avanzato, backtesting, market microstructure. 6 fasi, 17 task.
+### Sprint 1 — Foundation (v5.3.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| E6.1 | Fix Reload | `DONE` | `reload=True` condizionato a `TRADING_COPILOT_DEV` |
+| E7.1 | Pin Dependencies | `DONE` | `requirements.lock` con versioni esatte |
+| E1.3 | Retry Decorator | `DONE` | `tenacity` library, 4 decoratori pre-configurati |
+| E1.1 | Custom Exceptions | `DONE` | Gerarchia tipizzata: Transient/Permanent, 8 sottoclassi |
+| E6.4 | Graceful Shutdown | `DONE` | `wait=True` 30s, SIGTERM/SIGINT handler |
+| T2.3 | Drawdown Breaker | `DONE` | Daily/weekly P&L limits, pausa segnali |
+
+### Sprint 2 — Resilience & Caching (v5.4.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| E1.2 | Circuit Breaker | `DONE` | closed/open/half-open, 4 breaker pre-configurati |
+| E2.1 | Response Caching | `DONE` | In-memory TTL cache, 5 stage con TTL differenziati |
+| E6.2 | Health Check Esteso | `DONE` | DB, monitor, cache, circuit breakers, drawdown |
+| E6.3 | Structured Logging | `DONE` | JSON formatter, rotation 10MB x 5, correlation ID |
+| T3.1 | LLM Trade Thesis | `DONE` | Ragionamento strutturato per ogni segnale |
+
+### Sprint 3 — Backtester Core (v5.5.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| T4.1 | Backtester | `DONE` | Engine vectorized con CLI, 36 test |
+| E4.2 | Rate Limiting | `DONE` | slowapi, 60/min analisi, 10/min monitor |
+| E3.2 | Transaction Boundaries | `DONE` | Persist → commit → side effects |
+| T3.2 | News Summarizer | `DONE` | LLM bullet points, fallback titoli |
+
+### Sprint 4 — Signal Quality & Async (v5.6.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| T1.1 | Adaptive Weights | `DONE` | ADX-based trending/ranging/volatile weighting |
+| T2.1 | Adaptive SL/TP | `DONE` | ATR percentile, SL 1.0–2.0x dinamico |
+| E2.2 | Async HTTP Client | `DONE` | httpx + AsyncGroq |
+| E3.1 | Query Optimization | `DONE` | `get_asset_by_symbol()`, DB indexes |
+
+### Sprint 5 — Security & Testing (v5.7.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| E4.1 | Autenticazione | `DONE` | API key middleware, login page |
+| T4.2 | Walk-Forward | `DONE` | Rolling window backtest |
+| E7.2 | Separare ML Deps | `DONE` | requirements-base.txt, Dockerfile lite target |
+
+### Sprint 6 — Advanced Trading (v6.0.0)
+
+| # | Feature | Status | Note |
+|---|---------|--------|------|
+| T5.3 | Intermarket Analysis | `DONE` | DXY/Gold, Yields/Equities divergence |
+| T1.3 | Candle Patterns | `DONE` | Engulfing, pin bar, inside bar |
+| T2.2 | Kelly Sizing | `DONE` | Half-Kelly capped 0.25%–2% |
+| T4.3 | Monte Carlo | `DONE` | 1000 equity curve permutazioni |
+| T6.1 | Portfolio Heat Map | `DONE` | Endpoint correlazione + heatmap |
+
+### Deferred (Post v6.0.0)
+
+| # | Feature | Motivo |
+|---|---------|--------|
+| E2.3 | Batch TF Fetch | Coperto parzialmente da caching E2.1 |
+| E3.3 | AnalysisCache Cleanup | Risolto con implementazione E2.1 |
+| E4.3 | Secrets Encryption | Nice-to-have dopo auth |
+| E5.2 | Mock API Esterne | Incrementale |
+| E5.3 | Database Tests | Incrementale |
+| T1.2 | Volume Profile | Richiede tick data non disponibile da yfinance |
+| T3.3 | Post-Trade Review | Richiede piu' dati trade storici |
+| T5.1 | Volume Delta/CVD | Richiede tick data |
+| T5.2 | Volume Heatmap | Richiede tick data |
+| T6.2 | Sector Rotation | Rilevante con 10+ asset |
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — v5.2.0*
+## Roadmap Specializzate
+
+Per i dettagli implementativi, il progetto ha due roadmap dedicate:
+
+- **[ROADMAP-ENGINEERING.md](ROADMAP-ENGINEERING.md)** — Architettura, performance, sicurezza, testing, deploy. 7 fasi, 21 task (17 completati).
+- **[ROADMAP-TRADING.md](ROADMAP-TRADING.md)** — Signal quality, risk management, LLM avanzato, backtesting, market microstructure. 6 fasi, 17 task (12 completati).
+
+---
+
+*Ultimo aggiornamento: 20 Marzo 2026 — v6.0.0*

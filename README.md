@@ -109,6 +109,9 @@ TELEGRAM_CHAT_ID=il_tuo_chat_id
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Modello Groq da usare |
 | `LOOKBACK_HOURS` | `16` | Ore di lookback per le notizie |
 | `REPORT_LANGUAGE` | `italian` | Lingua del report CLI |
+| `TRADING_COPILOT_API_KEY` | *(vuoto)* | API key per autenticazione (disabilitata se vuota) |
+| `TRADING_COPILOT_DEV` | `false` | Abilita hot-reload in sviluppo |
+| `TRADING_COPILOT_JSON_LOGS` | `false` | Abilita structured JSON logging |
 
 ---
 
@@ -141,7 +144,7 @@ Apri **http://localhost:8000** nel browser.
 
 | Metodo | Endpoint | Descrizione |
 |--------|----------|-------------|
-| GET | `/api/health` | Health check |
+| GET | `/api/health` | Health check esteso (DB, monitor, cache, circuit breakers) |
 | GET | `/api/assets` | Lista asset configurati |
 | POST | `/api/assets` | Aggiunge asset (valida via yfinance) |
 | DELETE | `/api/assets/{symbol}` | Rimuove asset |
@@ -161,6 +164,7 @@ Apri **http://localhost:8000** nel browser.
 | GET | `/api/signals/analytics` | Analytics segnali |
 | GET/PUT | `/api/settings/telegram` | Configurazione Telegram (salvata in DB) |
 | POST | `/api/telegram/test` | Invia messaggio di test |
+| GET | `/api/analytics/heatmap` | Matrice correlazione portfolio |
 | WS | `/ws/signals` | WebSocket push real-time |
 
 ### Monitor Real-Time
@@ -238,9 +242,7 @@ python main.py --config my_config.yaml
 
 ---
 
-## Docker
-
-### Comandi Operativi
+## Docker — Comandi Operativi
 
 ```bash
 # Avvio completo (PostgreSQL + App)
@@ -283,6 +285,63 @@ DATABASE_URL=postgresql+asyncpg://trading:password@localhost:5432/trading
 ```
 
 Le tabelle vengono create automaticamente al primo avvio. Asset e RSS feeds vengono importati da `config.yaml` (se presente) o da defaults nel primo avvio. Migrazioni gestite da Alembic.
+
+---
+
+## Resilienza & Sicurezza (v5.3.0+)
+
+### Error Handling
+Il sistema usa una gerarchia di eccezioni tipizzate (`TransientError` vs `PermanentError`) con retry automatico via `tenacity` per errori transitori (API timeout, rate limit). Circuit breaker pattern protegge da cascading failures: dopo 3 errori consecutivi su un'API, il circuito si apre per 5 minuti.
+
+### Caching
+Pipeline di analisi con cache in-memory TTL: prezzi 60s, news 300s, sentiment 600s, calendario 3600s. Riduce il tempo di analisi ripetuta da ~15s a <1s.
+
+### Autenticazione
+API key authentication opzionale via `TRADING_COPILOT_API_KEY`. Se impostata, tutti gli endpoint (tranne health e static) richiedono header `X-API-Key` o query param `api_key`.
+
+### Rate Limiting
+60 req/min sugli endpoint di analisi, 10 req/min su start/stop monitor. Protegge da abuse accidentale o intenzionale.
+
+### Structured Logging
+JSON logging opzionale (`TRADING_COPILOT_JSON_LOGS=true`) con correlation ID per tracciare richieste end-to-end. Log rotation automatica (10MB x 5 file).
+
+### Drawdown Protection
+Circuit breaker che monitora il P&L giornaliero/settimanale dai trade registrati. Pausa automatica dei segnali se il drawdown supera le soglie configurate.
+
+---
+
+## Backtesting (v5.5.0+)
+
+Valida le regole di trading su dati storici prima di operare live.
+
+```bash
+# Backtest singolo asset
+python -m modules.backtester --symbol NQ=F --period 6mo
+
+# Output: win rate, profit factor, max drawdown, Sharpe ratio
+```
+
+### Funzionalita':
+- **Walk-Forward Optimization**: rolling window per evitare overfitting
+- **Monte Carlo Simulation**: 1000 permutazioni dell'equity curve con bande 5th/95th percentile
+- **Kelly Position Sizing**: Half-Kelly capped per rischio ottimale (0.25%–2%)
+- **ATR-Adaptive SL/TP**: stop loss dinamico basato sul percentile di volatilita'
+- **Adaptive Indicator Weights**: pesi dinamici basati su regime di mercato (trending/ranging/volatile)
+
+---
+
+## Docker (Varianti)
+
+### Full (default, ~3GB)
+```bash
+docker build -t trading-copilot .
+```
+
+### Lite (senza torch/transformers, ~500MB)
+```bash
+docker build --target lite -t trading-copilot-lite .
+```
+La variante lite non include FinBERT come fallback per il sentiment — richiede `GROQ_API_KEY`.
 
 ---
 
@@ -356,41 +415,55 @@ trading-assistant/
 ├── run_webapp.py                    # Entry point Web Dashboard
 ├── .env.example                     # Template variabili d'ambiente (UNICO file config richiesto)
 ├── config.yaml                      # Seed data opzionale (primo avvio)
-├── Dockerfile                       # Container image multi-stage
+├── Dockerfile                       # Container image multi-stage (full + lite)
 ├── docker-compose.yml               # App + PostgreSQL stack
 ├── alembic.ini                      # Configurazione migrazioni
-├── requirements.txt                 # Dipendenze Python
+├── requirements.txt                 # Dipendenze Python (range)
+├── requirements.lock                # Dipendenze pinned (per build riproducibili)
+├── requirements-base.txt            # Dipendenze core (senza ML)
+├── requirements-ml.txt              # torch + transformers (opzionale)
 │
 ├── app/                             # Web Dashboard (FastAPI)
-│   ├── server.py                    # FastAPI app + lifespan
+│   ├── server.py                    # FastAPI app + lifespan (v6.0.0)
 │   ├── config.py                    # Pydantic Settings (env vars + YAML fallback)
 │   ├── api/
-│   │   ├── health.py                # GET /api/health
+│   │   ├── health.py                # GET /api/health (esteso: DB, cache, breakers)
 │   │   ├── assets.py                # CRUD asset (database)
-│   │   ├── analysis.py              # Analisi singolo asset
-│   │   ├── monitor.py               # Start/stop/status monitor
+│   │   ├── analysis.py              # Analisi singolo asset (rate limited)
+│   │   ├── analytics_api.py         # Portfolio heatmap endpoint
+│   │   ├── monitor.py               # Start/stop/status monitor (rate limited)
 │   │   ├── trades.py                # Trade journal + analytics + signals
 │   │   ├── settings.py              # Configurazione Telegram (database)
 │   │   └── websocket.py             # WebSocket /ws/signals
+│   ├── middleware/
+│   │   ├── auth.py                  # API key authentication
+│   │   ├── logging.py               # JSON structured logging + correlation ID
+│   │   └── rate_limit.py            # Rate limiting (slowapi)
 │   ├── services/
-│   │   ├── analyzer.py              # Wrapper async dei moduli esistenti
-│   │   ├── signal_detector.py       # 9 condizioni entry + calcolo SL/TP
-│   │   ├── monitor.py               # Background polling (APScheduler)
+│   │   ├── analyzer.py              # Pipeline async con cache + trade thesis + news summary
+│   │   ├── cache.py                 # In-memory TTL cache per pipeline stages
+│   │   ├── signal_detector.py       # 9 condizioni entry + SL/TP adattivo
+│   │   ├── monitor.py               # Background polling + graceful shutdown + drawdown check
 │   │   └── notifier.py              # Telegram + WebSocket push
 │   ├── models/
 │   │   ├── database.py              # SQLAlchemy ORM (Asset, RssFeed, Signal, Trade, etc.)
 │   │   └── engine.py                # Engine factory (SQLite / PostgreSQL)
-│   ├── templates/                   # Jinja2 HTML (7 pagine)
+│   ├── templates/                   # Jinja2 HTML (8 pagine incl. login)
 │   └── static/                      # CSS dark theme + JS (HTMX, Alpine.js, WebSocket)
 │
-├── modules/                         # Engine CLI (invariato)
-│   ├── news_fetcher.py              # Aggregatore notizie RSS
-│   ├── price_data.py                # Dati prezzo + indicatori + key levels + MTF + QS
-│   ├── sentiment.py                 # Analisi sentiment (Groq / FinBERT)
+├── modules/                         # Engine Core
+│   ├── exceptions.py                # Gerarchia eccezioni tipizzate
+│   ├── retry.py                     # Retry decorators (tenacity)
+│   ├── circuit_breaker.py           # Circuit breaker per API esterne
+│   ├── circuit_breaker_drawdown.py  # Drawdown circuit breaker (daily/weekly P&L)
+│   ├── backtester.py                # Backtesting engine + walk-forward + Monte Carlo
+│   ├── news_fetcher.py              # Aggregatore notizie RSS + LLM summarizer
+│   ├── price_data.py                # Dati prezzo + indicatori adattivi + intermarket + candle patterns
+│   ├── sentiment.py                 # Analisi sentiment (Groq / FinBERT) con retry tipizzato
 │   ├── report.py                    # Generatore report HTML
 │   ├── hallucination_guard.py       # Validazione anti-allucinazione
 │   ├── economic_calendar.py         # Calendario economico Forex Factory
-│   ├── polymarket.py                # Segnale Polymarket (v3)
+│   ├── polymarket.py                # Segnale Polymarket (v3) con retry tipizzato
 │   ├── keywords.py                  # Keyword bullish/bearish
 │   └── trade_log.py                 # Registro trade CSV
 │
@@ -399,7 +472,7 @@ trading-assistant/
 │   └── trading_copilot.pine         # Pine Script v6
 │
 ├── reports/                         # Report HTML generati
-└── tests/                           # Test suite (250+ test)
+└── tests/                           # Test suite (383 test)
 ```
 
 ---
@@ -410,13 +483,16 @@ trading-assistant/
 |----------|-----------|
 | `GROQ_API_KEY non impostata` | Crea `.env` da `.env.example` e imposta la chiave |
 | `No data returned for symbol` | Verifica il simbolo su Yahoo Finance. Configura `TWELVE_DATA_API_KEY` come fallback |
-| `Rate limit exceeded` | Aspetta qualche minuto, Groq free tier ha limiti |
-| `FinBERT download lento` | Normale al primo avvio, il modello viene cachato |
+| `Rate limit exceeded` | Aspetta qualche minuto, Groq free tier ha limiti. Il circuit breaker pausera' le chiamate automaticamente |
+| `FinBERT download lento` | Normale al primo avvio, il modello viene cachato. Usa variante `lite` Docker se non serve |
 | Porta 8000 gia' occupata | Cambia porta: `uvicorn app.server:app --port 8001` |
 | Errore connessione PostgreSQL | Verifica che `docker compose up postgres` sia running |
 | WebSocket non si connette | Controlla che il browser supporti WS e non ci siano proxy |
-| Monitor non rileva segnali | Verifica che l'asset abbia dati recenti su yfinance |
+| Monitor non rileva segnali | Verifica: asset ha dati recenti su yfinance, drawdown breaker non e' scattato (`/api/health`) |
 | `config.yaml` non trovato | Normale — il file e' opzionale. Usa `.env` per la configurazione |
+| `401 Unauthorized` | `TRADING_COPILOT_API_KEY` e' impostata. Aggiungi header `X-API-Key` o usa la login page |
+| `429 Too Many Requests` | Rate limit raggiunto. Aspetta 1 minuto per endpoint analisi, riprova |
+| Circuit breaker aperto | Un'API esterna e' down. Il circuito si richiude dopo 5 minuti. Controlla `/api/health` |
 
 ---
 

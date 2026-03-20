@@ -4,6 +4,216 @@ Storico delle modifiche al progetto, dalla versione CLI alla web dashboard.
 
 ---
 
+## v6.0.0 — 20 Marzo 2026
+
+### Advanced Trading System
+
+Sprint 6 del piano unificato: funzionalita' di trading avanzate per migliorare l'edge.
+
+#### Intermarket Analysis (T5.3)
+- `compute_intermarket_signals()` in `modules/price_data.py`
+- Analisi divergenza DXY/Gold, Yields/Equities
+- Warning automatico quando correlazioni attese divergono
+- **Files**: `modules/price_data.py`
+
+#### Advanced Candle Patterns (T1.3)
+- `_detect_candle_pattern()` rileva: ENGULFING, PIN_BAR, INSIDE_BAR
+- Pattern label incluso nell'output di analisi
+- **Files**: `modules/price_data.py`
+
+#### Kelly Criterion Position Sizing (T2.2)
+- `kelly_position_size()` nel backtester
+- Half-Kelly capped (floor 0.25%, ceiling 2%)
+- Integrato nell'output del backtesting
+- **Files**: `modules/backtester.py`
+
+#### Monte Carlo Simulation (T4.3)
+- 1000 permutazioni dell'equity curve
+- Output: median + 5th/95th percentile bands
+- Distribuzione statistica del max drawdown
+- **Files**: `modules/backtester.py`
+
+#### Portfolio Heat Map (T6.1)
+- Endpoint `GET /api/analytics/heatmap`
+- Matrice correlazione rolling 30 giorni per tutti gli asset
+- **Files**: `app/api/analytics_api.py`
+
+---
+
+## v5.7.0 — 20 Marzo 2026
+
+### Secure & Tested
+
+Sprint 5 del piano unificato: sicurezza e testing.
+
+#### API Key Authentication (E4.1)
+- `APIKeyMiddleware` in `app/middleware/auth.py`
+- Header `X-API-Key` o query param `api_key`
+- Abilitato solo con env var `TRADING_COPILOT_API_KEY`
+- Endpoint health e static esclusi
+- Login page in `app/templates/login.html`
+- **Files**: `app/middleware/auth.py`, `app/templates/login.html`, `app/server.py`
+
+#### Walk-Forward Optimization (T4.2)
+- Metodo `walk_forward()` nel `BacktestEngine`
+- Rolling window: train su N giorni, test su M
+- Confronto in-sample vs out-of-sample performance
+- **Files**: `modules/backtester.py`
+
+#### Separate ML Dependencies (E7.2)
+- `requirements-base.txt` — dipendenze core (senza torch/transformers)
+- `requirements-ml.txt` — torch + transformers
+- Dockerfile target `lite`: immagine < 500MB vs 3GB+ full
+- **Files**: `requirements-base.txt`, `requirements-ml.txt`, `Dockerfile`
+
+---
+
+## v5.6.0 — 20 Marzo 2026
+
+### Smart Signals + Async
+
+Sprint 4 del piano unificato: segnali migliori, esecuzione piu' veloce.
+
+#### Adaptive Indicator Weights (T1.1)
+- Pesi dinamici basati su ADX (trending vs ranging vs volatile)
+- TRENDING: EMA x2, ADX x2, RSI x0.5
+- RANGING: RSI x2, BB x2, Stoch x2, EMA x0.5
+- Composite score pesato: `sum(signal * weight) / sum(weights)`
+- **Files**: `modules/price_data.py`
+
+#### ATR-Adaptive SL/TP (T2.1)
+- ATR percentile vs ultimi 50 giorni
+- HIGH VOL (>80th): SL = ATR x 1.0 (stretto)
+- LOW VOL (<20th): SL = ATR x 2.0 (largo)
+- NORMAL: SL = ATR x 1.5
+- **Files**: `app/services/analyzer.py`, `modules/price_data.py`
+
+#### Async HTTP Client (E2.2)
+- `httpx` per chiamate HTTP async dirette
+- Migrazione a `AsyncGroq` per sentiment
+- **Files**: `modules/sentiment.py`, `modules/polymarket.py`, `requirements.txt`
+
+#### Query Optimization (E3.1)
+- `get_asset_by_symbol()` — query diretta con WHERE
+- Indici DB aggiunti per trade analytics e notification rate limiting
+- **Files**: `app/models/database.py`
+
+---
+
+## v5.5.0 — 20 Marzo 2026
+
+### Backtesting MVP
+
+Sprint 3 del piano unificato: validazione regole di trading su dati storici.
+
+#### Backtester Core (T4.1)
+- `BacktestEngine` in `modules/backtester.py`
+- `compute_indicators()`, `generate_signals()`, `simulate_trades()`, `compute_statistics()`
+- Metriche: win rate, profit factor, max drawdown, Sharpe ratio, avg R-multiple
+- CLI: `python -m modules.backtester --symbol NQ=F --period 6mo`
+- 36 test dedicati in `tests/test_backtester.py`
+- **Files**: `modules/backtester.py`, `tests/test_backtester.py`
+
+#### Rate Limiting (E4.2)
+- `slowapi` rate limiter middleware
+- 60 req/min per endpoint analisi, 10 req/min per monitor start/stop
+- Unlimited per health, static, WebSocket
+- **Files**: `app/middleware/rate_limit.py`, `app/api/analysis.py`, `app/api/monitor.py`, `app/server.py`
+
+#### Transaction Boundaries (E3.2)
+- Signal persistito in DB PRIMA dei side-effects (Telegram, WebSocket)
+- Ogni side-effect in try/except individuale
+- **Files**: `app/services/monitor.py`
+
+#### LLM News Summarizer (T3.2)
+- `summarize_news_with_llm()` in `modules/news_fetcher.py`
+- Distilla articoli in N bullet points concisi
+- Fallback a titoli se LLM non disponibile
+- **Files**: `modules/news_fetcher.py`, `app/services/analyzer.py`
+
+---
+
+## v5.4.0 — 20 Marzo 2026
+
+### Resilient & Fast
+
+Sprint 2 del piano unificato: resilienza e caching.
+
+#### Circuit Breaker (E1.2)
+- `CircuitBreaker` in `modules/circuit_breaker.py` (closed/open/half-open)
+- Pre-configurati: `yfinance_breaker`, `groq_breaker`, `polymarket_breaker`, `rss_breaker`
+- 3 fallimenti → circuito aperto → retry dopo 5 minuti
+- 11 test in `tests/test_circuit_breaker.py`
+- **Files**: `modules/circuit_breaker.py`, `tests/test_circuit_breaker.py`
+
+#### Response Caching (E2.1)
+- `AnalysisCache` in `app/services/cache.py` — in-memory con TTL
+- TTL: price 60s, news 300s, sentiment 600s, calendar 3600s, polymarket 600s
+- Cache hit/miss stats nel health check
+- 11 test in `tests/test_cache.py`
+- **Files**: `app/services/cache.py`, `app/services/analyzer.py`, `tests/test_cache.py`
+
+#### Extended Health Check (E6.2)
+- Verifica: DB connectivity, monitor heartbeat, cache stats, circuit breaker states, drawdown breaker
+- Ritorna 503 se degradato
+- **Files**: `app/api/health.py`
+
+#### Structured Logging (E6.3)
+- `JSONFormatter` + `CorrelationIDMiddleware` in `app/middleware/logging.py`
+- RotatingFileHandler (10MB x 5 file)
+- Attivabile via `TRADING_COPILOT_JSON_LOGS=true`
+- **Files**: `app/middleware/logging.py`, `app/server.py`
+
+#### LLM Trade Thesis (T3.1)
+- `_build_trade_thesis()` in `app/services/analyzer.py`
+- Ragionamento strutturato: direction, conviction, thesis, risks, catalysts, invalidation
+- Campo `trade_thesis` nell'output analisi
+- **Files**: `app/services/analyzer.py`
+
+---
+
+## v5.3.0 — 20 Marzo 2026
+
+### Production-Stable Foundation
+
+Sprint 1 del piano unificato: stabilita' produzione, error handling, resilienza base.
+
+#### Fix Reload in Production (E6.1)
+- `reload=True` condizionato a env var `TRADING_COPILOT_DEV=true`
+- **Files**: `run_webapp.py`
+
+#### Pin Dependencies (E7.1)
+- `requirements.lock` con versioni esatte
+- Dockerfile usa `requirements.lock`
+- **Files**: `requirements.lock`, `Dockerfile`
+
+#### Custom Exception Hierarchy (E1.1)
+- `TradingCopilotError` base → `TransientError`, `PermanentError`
+- Sotto-gerarchie: Data, API, LLM, Notification, Config, Analysis
+- Rimpiazzati 59+ bare `except Exception`
+- 17 test in `tests/test_exceptions.py`
+- **Files**: `modules/exceptions.py`, `modules/price_data.py`, `modules/sentiment.py`, `modules/polymarket.py`
+
+#### Retry with Exponential Backoff (E1.3)
+- Decoratori `tenacity`: `retry_transient()`, `retry_data_fetch()`, `retry_llm()`, `retry_external_api()`
+- Rimossi 3 loop di retry manuali (price_data, sentiment, polymarket)
+- **Files**: `modules/retry.py`, `modules/price_data.py`, `modules/sentiment.py`, `modules/polymarket.py`
+
+#### Graceful Shutdown (E6.4)
+- `wait=True` con timeout 30s nel monitor shutdown
+- SIGTERM/SIGINT handler per completare il polling cycle corrente
+- **Files**: `app/services/monitor.py`, `app/server.py`
+
+#### Drawdown Circuit Breaker (T2.3)
+- `DrawdownCircuitBreaker` in `modules/circuit_breaker_drawdown.py`
+- Query Trade table per daily/weekly P&L
+- Default: -100 pips/day, -250 pips/week
+- Monitor controlla breaker prima di generare segnali
+- 7 test in `tests/test_drawdown_breaker.py`
+- **Files**: `modules/circuit_breaker_drawdown.py`, `app/services/monitor.py`, `tests/test_drawdown_breaker.py`
+
+---
+
 ## v5.2.0 — 20 Marzo 2026
 
 ### Production-Ready Configuration
@@ -281,4 +491,4 @@ Tutti i moduli CLI (`modules/`) restano invariati — il web app e' un layer sop
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — v5.2.0*
+*Ultimo aggiornamento: 20 Marzo 2026 — v6.0.0*
