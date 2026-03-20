@@ -196,19 +196,20 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 
 ---
 
-## Next: Web App
+## Web App — COMPLETATA
 
-Tutte le fasi CLI sono completate. Il prossimo step e' la trasformazione in
-web dashboard per trading real-time.
+Tutte le fasi webapp sono state implementate (Phase 5-10, 17 sub-fasi).
 
-Vedi **[ROADMAP-WEBAPP.md](ROADMAP-WEBAPP.md)** per il piano completo:
-- Phase 5: FastAPI + Dashboard + SQLAlchemy
-- Phase 6: Single-Asset Analysis Page
-- Phase 7: Telegram Notifications
-- Phase 8: Real-Time Monitor
-- Phase 9: Trade Journal & Analytics
-- Phase 10: Docker Compose + PostgreSQL
+Il sistema e' ora una web dashboard completa con:
+- **Dashboard interattiva** — lista asset, analisi on-demand, monitor real-time
+- **Signal Detection Engine** — 9 condizioni di entry, calcolo automatico SL/TP
+- **Notifiche Telegram** — segnali push sul telefono
+- **Trade Journal** — registrazione trade con P&L e R-multiple automatici
+- **Performance Analytics** — win rate, profit factor, equity curve, insights
+- **Docker + PostgreSQL** — deploy con un comando
+
+Vedi **[CHANGELOG.md](CHANGELOG.md)** per lo storico completo delle modifiche.
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — CLI phases DONE, Web App roadmap created*
+*Ultimo aggiornamento: 20 Marzo 2026 — Tutte le fasi completate (CLI + Web App)*

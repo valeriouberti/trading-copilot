@@ -1,6 +1,9 @@
 # Trading Copilot
 
-Sistema di analisi pre-market per trader CFD retail. Genera report giornalieri con analisi tecnica, sentiment macro e notizie aggregate — tutto a costo zero (serve solo una API key Groq gratuita).
+Sistema di analisi e monitoraggio real-time per trader CFD retail. Due modalita' operative:
+
+- **CLI** (`main.py`) — Report pre-market giornaliero con analisi tecnica, sentiment macro e notizie aggregate
+- **Web Dashboard** (`run_webapp.py`) — Dashboard interattiva con monitoraggio real-time, signal detection, trade journal e analytics
 
 Pensato per chi opera manualmente su **Fineco** e usa **TradingView** per i grafici.
 
@@ -10,10 +13,48 @@ Pensato per chi opera manualmente su **Fineco** e usa **TradingView** per i graf
 
 - Python 3.10 o superiore
 - Una API key gratuita di [Groq](https://console.groq.com/) (opzionale ma consigliata)
+- Docker e Docker Compose (opzionale, per deploy con PostgreSQL)
 
 ---
 
-## Setup
+## Quick Start
+
+### Opzione 1: Web Dashboard (consigliata)
+
+```bash
+git clone <url-del-repo>
+cd trading-assistant
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+
+export GROQ_API_KEY="gsk_la_tua_chiave_qui"
+
+python run_webapp.py
+# Apri http://localhost:8000
+```
+
+### Opzione 2: Docker (PostgreSQL + App)
+
+```bash
+cp .env.example .env
+# Modifica .env con le tue API key
+
+docker compose up -d
+# Apri http://localhost:8000
+```
+
+### Opzione 3: CLI (report batch)
+
+```bash
+python main.py
+```
+
+---
+
+## Setup Dettagliato
 
 ### 1. Clona il repository e crea un ambiente virtuale
 
@@ -39,7 +80,6 @@ pip install -r requirements.txt
 ```bash
 export GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Linux/macOS
 # oppure: set GROQ_API_KEY=gsk_la_tua_chiave_qui  # Windows CMD
-# oppure: $env:GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Windows PowerShell
 ```
 
 > **Nota:** Se non imposti la chiave Groq, il sistema usa automaticamente FinBERT come fallback (richiede il download del modello al primo avvio, circa 400MB).
@@ -50,13 +90,107 @@ export GROQ_API_KEY="gsk_la_tua_chiave_qui"  # Linux/macOS
 export TWELVE_DATA_API_KEY="la_tua_chiave_qui"
 ```
 
-> **Nota:** Se non imposti la chiave Twelve Data, il sistema usa solo yfinance. Il fallback si attiva automaticamente quando yfinance fallisce.
+**Telegram (opzionale):** Per ricevere notifiche dei segnali sul telefono. Crea un bot con [@BotFather](https://t.me/BotFather).
+
+```bash
+export TELEGRAM_BOT_TOKEN="il_tuo_bot_token"
+export TELEGRAM_CHAT_ID="il_tuo_chat_id"
+```
+
+> Il Telegram bot puo' essere configurato anche dalla pagina Settings della web dashboard.
 
 Per rendere le chiavi permanenti, aggiungile al tuo `.bashrc`, `.zshrc` o profilo di sistema.
 
 ---
 
-## Come Usare
+## Web Dashboard
+
+### Avvio
+
+```bash
+# Locale con SQLite (zero config)
+python run_webapp.py
+
+# Oppure con Docker + PostgreSQL
+docker compose up -d
+```
+
+Apri **http://localhost:8000** nel browser.
+
+### Pagine
+
+| Pagina | URL | Descrizione |
+|--------|-----|-------------|
+| Dashboard | `/` | Lista asset, stato monitor, avvio analisi |
+| Dettaglio Asset | `/asset/{symbol}` | Grafico, indicatori, setup, segnali real-time |
+| Trade Journal | `/trades` | Registra e gestisci i trade |
+| Analytics | `/analytics` | Win rate, profit factor, equity curve, insights |
+| Signal History | `/signals` | Storico segnali generati con outcome |
+| Settings | `/settings` | Configurazione Telegram |
+
+### API Endpoints
+
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/assets` | Lista asset configurati |
+| POST | `/api/assets` | Aggiunge asset (valida via yfinance) |
+| DELETE | `/api/assets/{symbol}` | Rimuove asset |
+| POST | `/api/analyze/{symbol}` | Lancia analisi completa |
+| POST | `/api/analyze/{symbol}/telegram` | Analisi + invio Telegram |
+| POST | `/api/monitor/start` | Avvia monitoraggio background |
+| POST | `/api/monitor/stop` | Ferma monitoraggio |
+| GET | `/api/monitor/status` | Stato monitor attivi |
+| GET | `/api/trades` | Lista trade (con filtri) |
+| POST | `/api/trades` | Registra nuovo trade |
+| PUT | `/api/trades/{id}` | Chiudi/aggiorna trade |
+| GET | `/api/trades/analytics` | Metriche performance |
+| POST | `/api/trades/import-csv` | Importa da trade_log.csv |
+| GET | `/api/signals` | Storico segnali |
+| PUT | `/api/signals/{id}/outcome` | Aggiorna outcome segnale |
+| GET | `/api/signals/analytics` | Analytics segnali |
+| GET/PUT | `/api/settings/telegram` | Configurazione Telegram |
+| POST | `/api/telegram/test` | Invia messaggio di test |
+| WS | `/ws/signals` | WebSocket push real-time |
+
+### Monitor Real-Time
+
+Il sistema puo' monitorare gli asset in background e inviare notifiche quando le condizioni di entry si allineano:
+
+1. Dalla dashboard, clicca "Monitor" su un asset
+2. Il sistema controlla periodicamente (ogni 60s): prezzo, indicatori tecnici, regime
+3. Quando tutte le 9 condizioni sono soddisfatte → **SIGNAL FIRED**
+4. Notifica via WebSocket (browser) + Telegram (telefono)
+
+**9 condizioni di entry:**
+1. Regime direzionale (LONG o SHORT)
+2. EMA trend allineato alla direzione
+3. Prezzo sopra/sotto VWAP
+4. RSI non in zona estrema
+5. Quality Score >= 4
+6. MTF Aligned
+7. Sessione di qualita' (London/NYSE open)
+8. Nessun evento calendario entro 2h
+9. Setup tradeable
+
+### Trade Journal
+
+Registra i trade direttamente dalla dashboard:
+- Entry/exit price, SL/TP, direzione, note
+- P&L e R-multiple calcolati automaticamente
+- Import da `trade_log.csv` per migrare i dati esistenti
+
+### Performance Analytics
+
+Metriche calcolate automaticamente:
+- Win rate (totale e per asset/regime/QS/direzione)
+- Profit factor, Average R-multiple, Max drawdown
+- Equity curve, rolling win rate (20 trade)
+- Insights automatici ("QS 5 ha 72% WR vs 48% con QS 4")
+
+---
+
+## CLI (Report Batch)
 
 ### Esecuzione standard
 
@@ -92,6 +226,55 @@ python main.py --config my_config.yaml
 
 ---
 
+## Docker
+
+### Comandi Operativi
+
+```bash
+# Avvio completo (PostgreSQL + App)
+docker compose up -d
+
+# Logs in tempo reale
+docker compose logs -f trading-app
+
+# Stop
+docker compose down
+
+# Stop e cancella dati (reset completo)
+docker compose down -v
+
+# Rebuild dopo modifiche al codice
+docker compose up -d --build
+
+# Backup database PostgreSQL
+docker compose exec postgres pg_dump -U trading trading > backup.sql
+
+# Restore database
+cat backup.sql | docker compose exec -T postgres psql -U trading trading
+```
+
+### Database
+
+Il sistema supporta due backend:
+
+- **SQLite** (default locale) — Zero setup, `python run_webapp.py` e funziona
+- **PostgreSQL** (Docker) — Concurrent access, analytics query potenti, JSONB
+
+Configurazione in `config.yaml`:
+
+```yaml
+database:
+  # SQLite (default)
+  url: "sqlite+aiosqlite:///./trading.db"
+
+  # PostgreSQL (Docker)
+  # url: "postgresql+asyncpg://trading:trading@localhost:5432/trading"
+```
+
+Le tabelle vengono create automaticamente al primo avvio. Migrazioni gestite da Alembic.
+
+---
+
 ## Come Interpretare il Report
 
 ### Sentiment Macro (-3 a +3)
@@ -111,20 +294,10 @@ python main.py --config my_config.yaml
 - **vs VWAP**: Prezzo sopra VWAP = forza, sotto = debolezza intraday
 - **EMA Trend**: EMA20 > EMA50 = trend rialzista, viceversa ribassista
 - **ADX**: Sopra 25 = trend forte, sotto 20 = mercato in range (mostra +DI/-DI per direzione)
-- **Score Tecnico**: 6 indicatori direzionali (RSI, MACD, BB, Stoch, VWAP, EMA) — BULLISH/BEARISH/NEUTRAL con % di confidenza
-- **MTF**: Multi-Timeframe Alignment — ALIGNED (Weekly+Daily+1H concordano), PARTIAL (2/3), CONFLICTING (tutti diversi)
-- **QS**: Quality Score (0-5) — indica la qualita' del setup (confluenza, ADX>25, key level, candle pattern, volume)
+- **Score Tecnico**: 6 indicatori direzionali — BULLISH/BEARISH/NEUTRAL con % di confidenza
+- **MTF**: Multi-Timeframe Alignment — ALIGNED (Weekly+Daily+1H concordano), PARTIAL (2/3), CONFLICTING
+- **QS**: Quality Score (0-5) — confluenza, ADX>25, key level, candle pattern, volume
 - **Azione**: Suggerimento sintetico basato su tecnici + sentiment
-
-### Sezioni Aggiuntive nel Report
-
-- **Regime Operativo**: LONG / SHORT / NEUTRAL — determina la direzione dei trade per la giornata
-- **Calendario Economico**: Eventi high-impact (NFP, CPI, FOMC) con countdown e regime override automatico entro 2h
-- **Session Filter**: Sessione corrente (London/NYSE/Dead Zone) con qualita' (HIGH/MEDIUM/LOW) e countdown alla prossima finestra
-- **Multi-Timeframe Alignment**: Trend EMA20/50 su Weekly, Daily e 1H per ogni asset con badge di allineamento
-- **Quality Score**: Breakdown 1-5 per ogni asset — rule: trade solo setup con score >= 4
-- **Matrice Correlazione**: Correlazione 30 giorni tra asset — alert se due asset correlati (>0.7) vanno nella stessa direzione
-- **Key Levels**: PDH/PDL/PDC, PWH/PWL, Pivot Points classici, livelli psicologici con distanza % dal prezzo
 
 ### Suggerimento per il trading
 
@@ -138,14 +311,16 @@ python main.py --config my_config.yaml
 
 ## Aggiungere Nuovi Asset
 
-Modifica `config.yaml`:
+**Via Web Dashboard:** Dalla dashboard, clicca "Add Asset", inserisci il simbolo Yahoo Finance. Il sistema valida il simbolo automaticamente via yfinance.
+
+**Via config.yaml:**
 
 ```yaml
 assets:
   - symbol: "NQ=F"
     display_name: "NASDAQ 100 Futures"
-  - symbol: "CL=F" # Aggiungi qui
-    display_name: "Crude Oil" # Nome che apparira' nel report
+  - symbol: "CL=F"
+    display_name: "Crude Oil"
 ```
 
 I simboli seguono la convenzione Yahoo Finance:
@@ -157,63 +332,18 @@ I simboli seguono la convenzione Yahoo Finance:
 
 ---
 
-## Routine Giornaliera Consigliata
-
-### Pre-Market (07:00 - 08:30 ora italiana)
-
-1. **Esegui il Trading Assistant**:
-
-   ```bash
-   python main.py
-   ```
-
-2. **Leggi il report** — concentrati su:
-   - Sentiment macro: qual e' il bias generale?
-   - Risk events: ci sono eventi che possono muovere il mercato?
-   - Score tecnico dei tuoi asset principali
-
-3. **Apri TradingView** e verifica i livelli chiave:
-   - Il prezzo rispetta i livelli indicati dal report?
-   - Ci sono pattern grafici che confermano o smentiscono il bias?
-
-4. **Decidi la strategia** per la giornata:
-   - Direzione preferita (LONG/SHORT/FLAT)
-   - Livelli di ingresso e stop loss
-   - Size in base alla volatilita' (ATR)
-
-5. **Opera su Fineco** solo quando hai conferma visiva su TradingView
-
-### Tips
-
-- Esegui il report anche dopo la chiusura per avere un riepilogo della giornata
-- Se il sentiment e' neutro o conflittuale, riduci la size o resta flat
-- I report sono salvati nella cartella `reports/` — utili per tenere un diario di trading
-
----
-
 ## Integrazione Polymarket
 
-Il sistema integra i dati dei **mercati predittivi di Polymarket** come terzo segnale di conferma. Polymarket è una piattaforma dove utenti reali scommettono con denaro vero sulla probabilità di eventi futuri (decisioni della Fed, recessione, conflitti geopolitici, commodity). Queste probabilità riflettono l'opinione aggregata del mercato e possono fornire un segnale complementare all'analisi tecnica e al sentiment LLM.
+Il sistema integra i dati dei **mercati predittivi di Polymarket** come terzo segnale di conferma. Le probabilita' riflettono l'opinione aggregata del mercato e forniscono un segnale complementare all'analisi tecnica e al sentiment LLM.
 
-Il modulo (v3) utilizza l'endpoint `/events` dell'API Gamma con **tag_slug curati** per asset class (es. `fed`, `gdp`, `tariffs`, `gold`, `oil`), garantendo che vengano analizzati solo mercati finanziari rilevanti. I mercati non finanziari (sport, meteo, intrattenimento) vengono scartati automaticamente.
-
-### Utilizzo offline
-
-Se non vuoi o non puoi raggiungere l'API Polymarket (es. senza connessione), usa il flag `--no-polymarket`:
+Il modulo (v3) utilizza l'endpoint `/events` dell'API Gamma con **tag_slug curati** per asset class (es. `fed`, `gdp`, `tariffs`, `gold`, `oil`).
 
 ```bash
+# CLI senza Polymarket
 python main.py --no-polymarket
 ```
 
-Il pipeline funzionerà esattamente come prima, senza la sezione Polymarket nel report.
-
-### Come interpretare il box Confluenza
-
-- **CONFLUENZA TRIPLA** (verde): LLM, indicatori tecnici e Polymarket concordano sulla stessa direzione. Segnale più affidabile.
-- **CONFLITTO** (arancione): Polymarket dice il contrario dell'LLM con alta confidenza. Massima cautela.
-- **Segnale neutro o parziale** (grigio): Non c'è accordo forte. Usa come contesto aggiuntivo.
-
-> **Nota:** L'API Polymarket è gratuita e pubblica, non serve nessuna API key.
+> **Nota:** L'API Polymarket e' gratuita e pubblica, non serve nessuna API key.
 
 ---
 
@@ -221,40 +351,86 @@ Il pipeline funzionerà esattamente come prima, senza la sezione Polymarket nel 
 
 ```
 trading-assistant/
-├── main.py                      # Entry point
-├── config.yaml                  # Configurazione (asset, feed, parametri)
-├── modules/
-│   ├── news_fetcher.py          # Aggregatore notizie RSS
-│   ├── price_data.py            # Dati prezzo + indicatori tecnici + key levels + MTF + QS + correlazione
-│   ├── sentiment.py             # Analisi sentiment (Groq / FinBERT)
-│   ├── report.py                # Generatore report HTML (15 colonne + sezioni avanzate)
-│   ├── hallucination_guard.py   # Validazione anti-allucinazione
-│   ├── economic_calendar.py     # Calendario economico Forex Factory + regime override
-│   ├── polymarket.py            # Segnale mercati predittivi Polymarket (v3)
-│   ├── keywords.py              # Keyword condivise bullish/bearish
-│   └── trade_log.py             # Registro trade e statistiche (con quality score)
+├── main.py                          # Entry point CLI
+├── run_webapp.py                    # Entry point Web Dashboard
+├── config.yaml                      # Configurazione (asset, feed, database, telegram)
+├── Dockerfile                       # Container image multi-stage
+├── docker-compose.yml               # App + PostgreSQL stack
+├── .env.example                     # Template variabili d'ambiente
+├── alembic.ini                      # Configurazione migrazioni
+├── requirements.txt                 # Dipendenze Python
+│
+├── app/                             # Web Dashboard (FastAPI)
+│   ├── server.py                    # FastAPI app + lifespan
+│   ├── config.py                    # Gestione configurazione
+│   ├── api/
+│   │   ├── health.py                # GET /api/health
+│   │   ├── assets.py                # CRUD asset
+│   │   ├── analysis.py              # Analisi singolo asset
+│   │   ├── monitor.py               # Start/stop/status monitor
+│   │   ├── trades.py                # Trade journal + analytics + signals
+│   │   ├── settings.py              # Configurazione Telegram
+│   │   └── websocket.py             # WebSocket /ws/signals
+│   ├── services/
+│   │   ├── analyzer.py              # Wrapper async dei moduli esistenti
+│   │   ├── signal_detector.py       # 9 condizioni entry + calcolo SL/TP
+│   │   ├── monitor.py               # Background polling (APScheduler)
+│   │   └── notifier.py              # Telegram + WebSocket push
+│   ├── models/
+│   │   ├── database.py              # SQLAlchemy ORM (Signal, Trade, etc.)
+│   │   └── engine.py                # Engine factory (SQLite / PostgreSQL)
+│   ├── templates/                   # Jinja2 HTML (7 pagine)
+│   │   ├── base.html                # Layout base (nav, footer, dark theme)
+│   │   ├── dashboard.html           # Lista asset + monitor
+│   │   ├── asset_detail.html        # Grafico + analisi + setup
+│   │   ├── trades.html              # Trade journal
+│   │   ├── analytics.html           # Performance analytics
+│   │   ├── signals.html             # Storico segnali
+│   │   └── settings.html            # Configurazione Telegram
+│   └── static/
+│       ├── css/style.css            # Dark theme CSS
+│       └── js/
+│           ├── app.js               # HTMX + Alpine.js init
+│           └── websocket.js         # Client WebSocket auto-reconnect
+│
+├── modules/                         # Engine CLI (invariato)
+│   ├── news_fetcher.py              # Aggregatore notizie RSS
+│   ├── price_data.py                # Dati prezzo + indicatori + key levels + MTF + QS
+│   ├── sentiment.py                 # Analisi sentiment (Groq / FinBERT)
+│   ├── report.py                    # Generatore report HTML
+│   ├── hallucination_guard.py       # Validazione anti-allucinazione
+│   ├── economic_calendar.py         # Calendario economico Forex Factory
+│   ├── polymarket.py                # Segnale Polymarket (v3)
+│   ├── keywords.py                  # Keyword bullish/bearish
+│   └── trade_log.py                 # Registro trade CSV
+│
+├── alembic/                         # Migrazioni database
+│   ├── env.py                       # Async migration env
+│   └── versions/                    # Migration scripts
+│
 ├── tradingview/
-│   └── trading_copilot.pine     # Pine Script v6 — EMA Pullback + Trailing Stop + Session Filter
+│   └── trading_copilot.pine         # Pine Script v6
+│
 ├── docs/
-│   └── Main.md                  # Manuale operativo completo (v4.1)
-├── reports/                     # Report HTML generati
-├── tests/                       # Test suite (250+ test)
-├── requirements.txt             # Dipendenze Python
-└── README.md                    # Questa guida
+│   └── Main.md                      # Manuale operativo completo (v5.0)
+├── reports/                         # Report HTML generati
+└── tests/                           # Test suite (250+ test)
 ```
 
 ---
 
 ## Risoluzione Problemi
 
-| Problema                       | Soluzione                                                               |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `GROQ_API_KEY non impostata`   | Esporta la variabile d'ambiente (vedi Setup punto 3)                    |
-| `No data returned for symbol`  | Verifica il simbolo su Yahoo Finance. Se yfinance e' instabile, configura `TWELVE_DATA_API_KEY` come fallback |
-| `Rate limit exceeded`          | Aspetta qualche minuto, Groq free tier ha limiti                        |
-| `FinBERT download lento`       | Normale al primo avvio, il modello viene cachato                        |
-| `via twelvedata` nel report    | Normale: yfinance era temporaneamente non disponibile, i dati sono validi |
-| Report non si apre nel browser | Usa `--no-browser` e apri manualmente il file dalla cartella `reports/` |
+| Problema | Soluzione |
+|----------|-----------|
+| `GROQ_API_KEY non impostata` | Esporta la variabile d'ambiente (vedi Setup punto 3) |
+| `No data returned for symbol` | Verifica il simbolo su Yahoo Finance. Configura `TWELVE_DATA_API_KEY` come fallback |
+| `Rate limit exceeded` | Aspetta qualche minuto, Groq free tier ha limiti |
+| `FinBERT download lento` | Normale al primo avvio, il modello viene cachato |
+| Porta 8000 gia' occupata | Cambia porta: `uvicorn app.server:app --port 8001` |
+| Errore connessione PostgreSQL | Verifica che `docker compose up postgres` sia running |
+| WebSocket non si connette | Controlla che il browser supporti WS e non ci siano proxy |
+| Monitor non rileva segnali | Verifica che l'asset abbia dati recenti su yfinance |
 
 ---
 

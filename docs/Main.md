@@ -2,7 +2,7 @@
 
 ### Un sistema algoritmico multi-segnale per CFD su mercati finanziari
 
-**Versione 4.1 — Marzo 2026**
+**Versione 5.0 — Marzo 2026**
 
 ---
 
@@ -37,6 +37,7 @@
 20. [Routine Operativa Quotidiana](#20-routine-operativa-quotidiana)
 21. [Validazione e Miglioramento Continuo](#21-validazione-e-miglioramento-continuo)
 22. [Limitazioni e Rischi del Sistema](#22-limitazioni-e-rischi-del-sistema)
+23. [Web Dashboard](#23-web-dashboard)
 
 ---
 
@@ -1828,6 +1829,156 @@ La disciplina è responsabilità esclusiva del trader.
 
 ---
 
-_Trading Assistant v4.1 — Documentazione interna_
+## 23. Web Dashboard
+
+### Da CLI a Web App
+
+A partire dalla v5.0, il Trading Copilot include una **web dashboard completa**
+che affianca (e non sostituisce) il CLI originale. I moduli in `modules/`
+restano invariati — la web app e' un layer asincrono sopra l'engine esistente.
+
+```
+python run_webapp.py     # Dashboard locale (SQLite)
+docker compose up -d     # Dashboard + PostgreSQL
+python main.py           # CLI classico (invariato)
+```
+
+### Architettura
+
+```
+Browser (http://localhost:8000)
+     │
+     ├── GET  /                        → Dashboard con lista asset
+     ├── GET  /asset/{symbol}          → Pagina dettaglio singolo asset
+     ├── GET  /trades                  → Trade journal
+     ├── GET  /analytics               → Performance analytics
+     ├── GET  /signals                 → Storico segnali
+     ├── GET  /settings                → Configurazione Telegram
+     ├── POST /api/analyze/{symbol}    → Lancia analisi completa
+     ├── POST /api/monitor/start       → Avvia monitoraggio background
+     ├── WS   /ws/signals              → Push real-time segnali
+     │
+FastAPI Backend (app/server.py)
+     │
+     ├── app/services/analyzer.py      → asyncio.to_thread() su modules/
+     ├── app/services/signal_detector.py → 9 condizioni entry
+     ├── app/services/monitor.py       → APScheduler polling
+     ├── app/services/notifier.py      → Telegram push
+     │
+     ├── SQLAlchemy 2.0 Async
+     │   ├── SQLite (sviluppo locale)
+     │   └── PostgreSQL (Docker)
+     │
+     └── modules/ (INVARIATI)
+```
+
+### Stack Tecnologico
+
+| Componente | Scelta | Motivazione |
+|------------|--------|-------------|
+| Backend | FastAPI | Async nativo, WebSocket built-in, riusa modules/ |
+| Templates | Jinja2 | Built-in FastAPI, niente build step Node |
+| Frontend JS | HTMX + Alpine.js | Interattivita' senza framework pesanti |
+| Grafici | TradingView Lightweight Charts | Open source, real-time, professionale |
+| Real-time | WebSocket (FastAPI native) | Push segnali al browser |
+| Notifiche | python-telegram-bot | Standard per trader, funziona da telefono |
+| Background | APScheduler | Job periodici (polling prezzo) |
+| ORM | SQLAlchemy 2.0 + Alembic | Stesse query per SQLite e PostgreSQL |
+| Container | Docker + Compose | Un comando per tutto lo stack |
+
+### Signal Detection Engine
+
+Il cuore del monitoraggio real-time. Quando un asset e' sotto monitoraggio,
+il sistema valuta periodicamente 9 condizioni. Solo quando **tutte** sono
+vere, viene emesso un segnale:
+
+1. **Regime direzionale** — il regime e' LONG o SHORT (non NEUTRAL)
+2. **EMA trend** — EMA20 > EMA50 per LONG (o viceversa)
+3. **VWAP position** — prezzo sopra VWAP per LONG (o viceversa)
+4. **RSI non estremo** — RSI tra 30 e 70
+5. **Quality Score >= 4** — setup ad alta probabilita'
+6. **MTF Aligned** — Weekly + Daily + 1H concordano
+7. **Session quality** — London open, NYSE open, o overlap (no dead zone)
+8. **Calendario safe** — nessun evento high-impact entro 2 ore
+9. **Setup tradeable** — il setup e' marcato come tradeable dall'analisi
+
+Quando il segnale scatta:
+- **WebSocket** → browser aggiorna in tempo reale (flash animation)
+- **Telegram** → notifica con entry/SL/TP/QS/regime
+- **Database** → segnale salvato per analytics futuri
+- **Browser notification** → alert visivo anche se il tab non e' in focus
+
+### Calcolo Entry / SL / TP
+
+- **Entry** = prezzo corrente al momento del segnale
+- **Stop Loss** = entry -/+ ATR(14) x 1.5
+- **Take Profit** = entry +/- (distanza SL x 2) → R:R fisso 1:2
+
+### Trade Journal e Analytics
+
+Il trade journal registra ogni operazione con:
+- Asset, direzione, entry/exit price, SL/TP
+- Quality Score, regime, sentiment al momento del trade
+- P&L in pips e R-multiple (calcolati automaticamente)
+
+Le analytics calcolano:
+- **Win Rate** — totale e per segmento (asset, regime, QS, direzione)
+- **Profit Factor** — gross profit / gross loss
+- **Average R-Multiple** — media dei R-multiples
+- **Max Drawdown** — peggior serie consecutiva
+- **Equity Curve** — P&L cumulativo nel tempo
+- **Rolling Win Rate** — finestra mobile 20 trade
+- **Insights automatici** — il sistema genera osservazioni come:
+  - "I trade con QS 5 hanno win rate 72% vs 48% con QS 4"
+  - "La sessione NYSE produce il 65% dei profitti"
+  - "Il regime SHORT ha profit factor 2.1 vs 1.3 per LONG"
+
+### Database
+
+SQLAlchemy 2.0 con supporto dual-backend:
+
+- **SQLite** (`sqlite+aiosqlite:///`) — sviluppo locale, zero config
+- **PostgreSQL** (`postgresql+asyncpg://`) — Docker, concurrent access
+
+Tabelle principali:
+- `signals` — tutti i segnali generati (con outcome post-hoc)
+- `trades` — trade registrati manualmente
+- `monitor_sessions` — stato monitor attivi (persiste tra restart)
+- `notification_log` — log notifiche per rate limiting
+- `analysis_cache` — cache analisi (TTL per tipo)
+
+### Docker
+
+```bash
+# Avvio completo
+docker compose up -d
+
+# Solo l'app con SQLite (no PostgreSQL)
+DATABASE_URL="sqlite+aiosqlite:///./trading.db" python run_webapp.py
+
+# Logs
+docker compose logs -f trading-app
+
+# Backup
+docker compose exec postgres pg_dump -U trading trading > backup.sql
+```
+
+L'immagine Docker usa un build multi-stage (`python:3.12-slim`),
+utente non-root, e healthcheck integrato.
+
+### Routine Operativa con Web Dashboard
+
+La web dashboard cambia il workflow quotidiano:
+
+1. **Mattina** — apri `http://localhost:8000`, verifica gli asset
+2. **Avvia monitor** sugli asset di interesse per la giornata
+3. **Il sistema lavora in background** — tu fai altro
+4. **Notifica Telegram** quando un segnale scatta → verifica su TradingView
+5. **Registra il trade** nel journal dalla dashboard
+6. **Fine giornata** — consulta analytics per review
+
+---
+
+_Trading Assistant v5.0 — Documentazione interna_
 _Sviluppato per uso personale. Non distribuire senza autorizzazione._
 _Nessuna parte di questo documento costituisce consulenza finanziaria._

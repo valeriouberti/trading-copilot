@@ -1,5 +1,8 @@
 # Trading Copilot — Web App Roadmap v5.0
 
+> **Stato: COMPLETATO** — Tutte le 17 sub-fasi sono state implementate.
+> Per lo storico delle modifiche vedi **[CHANGELOG.md](CHANGELOG.md)**.
+
 Da CLI tool a web dashboard per trading CFD in tempo reale.
 
 > **Principio guida**: i moduli esistenti (`modules/`) restano invariati.
