@@ -98,6 +98,73 @@ def _run_correlation(analyses: list) -> tuple[Any, list[str]]:
     return matrix, filtered
 
 
+def _build_trade_thesis(
+    symbol: str,
+    direction: str,
+    sentiment: Any,
+    tech_result: Any,
+    setup: dict,
+    calendar_data: Any = None,
+) -> dict:
+    """Build a structured trade thesis explaining why to enter.
+
+    Returns a dict with:
+    - direction: LONG or SHORT
+    - entry_reason: why enter at this price
+    - key_risk: the primary risk to the trade
+    - confluence: list of confirming factors
+    - invalidation: what would invalidate the thesis
+    """
+    # Gather confirming factors
+    confluence = []
+
+    # Technical signals
+    if tech_result and hasattr(tech_result, "signals"):
+        for s in tech_result.signals:
+            expected_label = "BULLISH" if direction == "LONG" else "BEARISH"
+            if s.label == expected_label and s.name in ("RSI", "MACD", "EMA_TREND", "VWAP", "BBANDS", "STOCH"):
+                confluence.append(f"{s.name}: {s.detail}")
+
+    # Sentiment
+    if sentiment:
+        score = getattr(sentiment, "sentiment_score", 0)
+        bias = getattr(sentiment, "directional_bias", "NEUTRAL")
+        if (direction == "LONG" and score > 0) or (direction == "SHORT" and score < 0):
+            drivers = getattr(sentiment, "key_drivers", [])
+            confluence.append(f"Sentiment {bias} ({score:+.1f}): {drivers[0] if drivers else '?'}")
+
+    # Key risk
+    risk_events = getattr(sentiment, "risk_events", []) if sentiment else []
+    calendar_events = []
+    if calendar_data:
+        for ev in getattr(calendar_data, "high_impact_today", []):
+            if getattr(ev, "hours_away", 99) < 6:
+                calendar_events.append(f"{ev.title} in {ev.hours_away:.0f}h")
+
+    key_risk = (
+        risk_events[0] if risk_events
+        else calendar_events[0] if calendar_events
+        else "Unexpected macro event or data release"
+    )
+
+    # Invalidation
+    sl = setup.get("stop_loss")
+    invalidation = f"Price hits SL at {sl}" if sl else "Regime flips to opposite direction"
+
+    entry_reason = (
+        f"{len(confluence)} technical/sentiment factors align for {direction}. "
+        f"Quality score {setup.get('quality_score', '?')}/5."
+    )
+
+    return {
+        "direction": direction,
+        "entry_reason": entry_reason,
+        "key_risk": key_risk,
+        "confluence": confluence[:5],
+        "invalidation": invalidation,
+    }
+
+
 def _format_signal(signal: Any) -> dict:
     """Convert a TechnicalSignal to a JSON-friendly dict."""
     return {
@@ -412,6 +479,21 @@ async def analyze_single_asset(
 
     setup = _compute_setup(tech_result, sentiment, regime, qs, mtf_align)
 
+    # Phase 7: Generate trade thesis (structured reasoning)
+    trade_thesis = None
+    if regime in ("LONG", "SHORT") and sentiment and tech_result:
+        try:
+            trade_thesis = _build_trade_thesis(
+                symbol=symbol,
+                direction=regime,
+                sentiment=sentiment,
+                tech_result=tech_result,
+                setup=setup,
+                calendar_data=calendar_data,
+            )
+        except Exception as exc:
+            logger.warning("Trade thesis generation failed: %s", exc)
+
     return {
         "symbol": symbol,
         "display_name": asset.get("display_name", symbol),
@@ -424,5 +506,6 @@ async def analyze_single_asset(
         "regime_reason": regime_reason,
         "validation_flags": validation_flags,
         "setup": setup,
+        "trade_thesis": trade_thesis,
         "news_count": len(news_result),
     }
