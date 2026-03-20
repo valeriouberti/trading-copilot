@@ -194,7 +194,10 @@ function renderTrades(trades) {
             <td class="mono ${pnlClass}">${t.outcome_pips !== null ? (t.outcome_pips > 0 ? '+' : '') + t.outcome_pips.toFixed(2) : '-'}</td>
             <td class="mono ${pnlClass}">${t.r_multiple !== null ? (t.r_multiple > 0 ? '+' : '') + t.r_multiple.toFixed(2) + 'R' : '-'}</td>
             <td class="detail-text">${t.notes || ''}</td>
-            <td>${isOpen ? '<button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="openCloseModal(' + t.id + ')">Close</button>' : ''}</td>
+            <td style="white-space:nowrap;">
+                ${isOpen ? '<button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="openCloseModal(' + t.id + ')">Close</button> ' : ''}
+                <button class="btn btn-danger" style="padding:4px 10px; font-size:12px;" onclick="deleteTrade(${t.id}, \'${t.symbol}\')">Delete</button>
+            </td>
         </tr>`;
     }).join('');
 }
@@ -278,6 +281,19 @@ async function importCsv() {
     const data = await res.json();
     if (res.ok) { alert('Imported ' + data.imported + ' trades'); loadTrades(); }
     else alert(data.detail || 'Import failed');
+}
+
+async function deleteTrade(id, symbol) {
+    if (!confirm('Delete trade #' + id + ' (' + symbol + ')? This cannot be undone.')) return;
+    try {
+        const res = await fetch('/api/trades/' + id, { method: 'DELETE' });
+        if (res.ok) {
+            loadTrades();
+        } else {
+            const d = await res.json();
+            alert(d.detail || 'Delete failed');
+        }
+    } catch (e) { alert('Network error'); }
 }
 
 document.addEventListener('DOMContentLoaded', () => loadTrades());

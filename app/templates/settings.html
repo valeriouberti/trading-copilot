@@ -2,7 +2,6 @@
 
 {% block content %}
 <div class="page-header">
-    <a href="/" class="back-link">&larr; Dashboard</a>
     <h1>Settings</h1>
     <p class="subtitle">Configure notifications and integrations</p>
 </div>
@@ -12,15 +11,22 @@
     <div class="card">
         <h3>Telegram Notifications</h3>
         <p class="settings-desc">
-            Receive trade signals, regime changes, and calendar alerts on your phone.
+            Receive trade signals and regime changes on your phone via Telegram.
         </p>
 
         <div class="form-group">
             <label class="form-label" for="bot_token">Bot Token</label>
             <input type="password" id="bot_token" class="form-input"
                    x-model="telegram.bot_token"
-                   placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
-            <span class="form-hint">Create a bot via <code>@BotFather</code> on Telegram</span>
+                   :placeholder="tokenStatus">
+            <span class="form-hint">
+                <template x-if="tokenStatus !== 'Not set'">
+                    <span style="color:var(--accent-green);">Token saved. Leave blank to keep current token.</span>
+                </template>
+                <template x-if="tokenStatus === 'Not set'">
+                    <span>Create a bot via <code>@BotFather</code> on Telegram</span>
+                </template>
+            </span>
         </div>
 
         <div class="form-group">
@@ -43,7 +49,7 @@
                 <span x-show="!saving">Save</span>
                 <span x-show="saving">Saving...</span>
             </button>
-            <button class="btn btn-secondary" @click="testTelegram()" :disabled="testing">
+            <button class="btn btn-secondary" @click="testTelegram()" :disabled="testing || !telegram.chat_id">
                 <span x-show="!testing">Send Test</span>
                 <span x-show="testing">Sending...</span>
             </button>
@@ -56,11 +62,11 @@
     <!-- Notification Preferences -->
     <div class="card">
         <h3>Notification Types</h3>
-        <p class="settings-desc">Choose which notifications to receive.</p>
+        <p class="settings-desc">Notifications sent when the monitor detects events.</p>
 
         <div class="notif-option">
             <span class="notif-label">Trade Signals</span>
-            <span class="notif-desc">Entry/SL/TP when conditions align</span>
+            <span class="notif-desc">Entry/SL/TP when all 9 conditions align</span>
             <span class="badge badge-bullish">Active</span>
         </div>
         <div class="notif-option">
@@ -75,8 +81,35 @@
         </div>
         <div class="notif-option">
             <span class="notif-label">Monitor Status</span>
-            <span class="notif-desc">Background monitor start/stop</span>
-            <span class="badge badge-neutral">Phase 8</span>
+            <span class="notif-desc">Background monitor start/stop/budget alerts</span>
+            <span class="badge badge-bullish">Active</span>
+        </div>
+    </div>
+
+    <!-- Monitor Config -->
+    <div class="card">
+        <h3>Monitor Configuration</h3>
+        <p class="settings-desc">Background monitoring uses Twelve Data (800 credits/day free tier).</p>
+
+        <div class="notif-option">
+            <span class="notif-label">Heavy Analysis</span>
+            <span class="notif-desc">Full pipeline (indicators, scoring, QS, SL/TP)</span>
+            <span class="badge badge-neutral" style="font-family:'SF Mono','Fira Code',monospace;">every 30m</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Light Poll</span>
+            <span class="notif-desc">Price quote + signal re-check</span>
+            <span class="badge badge-neutral" style="font-family:'SF Mono','Fira Code',monospace;">every 2m</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Max Assets</span>
+            <span class="notif-desc">Credit budget allows up to 3 simultaneous</span>
+            <span class="badge badge-neutral" style="font-family:'SF Mono','Fira Code',monospace;">3</span>
+        </div>
+        <div class="notif-option">
+            <span class="notif-label">Credit Budget</span>
+            <span class="notif-desc" id="budget-desc">Loading...</span>
+            <span class="badge badge-neutral" id="budget-badge" style="font-family:'SF Mono','Fira Code',monospace;">...</span>
         </div>
     </div>
 </div>
@@ -87,6 +120,7 @@
 function settingsApp() {
     return {
         telegram: { bot_token: '', chat_id: '', enabled: false },
+        tokenStatus: 'Not set',
         saving: false,
         testing: false,
         message: '',
@@ -98,10 +132,19 @@ function settingsApp() {
                 const data = await res.json();
                 this.telegram.chat_id = data.chat_id || '';
                 this.telegram.enabled = data.enabled || false;
-                // Don't populate bot_token — it's masked on the server
+                this.tokenStatus = data.bot_token_masked || 'Not set';
             } catch (e) {
                 console.error('Failed to load settings:', e);
             }
+            // Load budget info
+            try {
+                const res = await fetch('/api/monitor/budget');
+                const data = await res.json();
+                const desc = document.getElementById('budget-desc');
+                const badge = document.getElementById('budget-badge');
+                if (desc) desc.textContent = `${data.used || 0} used today, ${data.remaining || 0} remaining`;
+                if (badge) badge.textContent = `${data.remaining || 0} left`;
+            } catch (e) {}
         },
 
         async saveTelegram() {
@@ -117,6 +160,11 @@ function settingsApp() {
                 if (res.ok) {
                     this.message = 'Settings saved!';
                     this.messageOk = true;
+                    // Refresh masked token status
+                    if (this.telegram.bot_token) {
+                        this.tokenStatus = '...' + this.telegram.bot_token.slice(-8);
+                    }
+                    this.telegram.bot_token = '';  // Clear after save
                 } else {
                     this.message = data.detail || 'Save failed';
                     this.messageOk = false;
@@ -136,7 +184,7 @@ function settingsApp() {
                 const res = await fetch('/api/telegram/test', { method: 'POST' });
                 const data = await res.json();
                 if (res.ok) {
-                    this.message = 'Test message sent!';
+                    this.message = 'Test message sent! Check your Telegram.';
                     this.messageOk = true;
                 } else {
                     this.message = data.detail || 'Test failed';

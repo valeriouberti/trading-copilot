@@ -164,6 +164,20 @@ async def update_trade(request: Request, trade_id: int, body: TradeUpdate):
         return _trade_to_dict(trade)
 
 
+@router.delete("/trades/{trade_id}")
+async def delete_trade(request: Request, trade_id: int):
+    """Delete a trade by ID."""
+    async for session in get_db(request):
+        result = await session.execute(select(Trade).where(Trade.id == trade_id))
+        trade = result.scalars().first()
+        if not trade:
+            raise HTTPException(status_code=404, detail="Trade not found")
+
+        await session.delete(trade)
+        await session.commit()
+        return {"message": "Trade deleted", "id": trade_id}
+
+
 # ── Analytics ─────────────────────────────────────────────────
 
 @router.get("/trades/analytics")

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.models.database import get_telegram_config, upsert_telegram_config
 from app.services.notifier import TelegramNotifier
+from modules.exceptions import NotificationPermanent
 
 router = APIRouter()
 
@@ -32,17 +33,27 @@ async def get_telegram_settings(request: Request):
 
 @router.put("/settings/telegram")
 async def update_telegram_settings(request: Request, body: TelegramConfigBody):
-    """Update Telegram configuration in database."""
+    """Update Telegram configuration in database.
+
+    If bot_token is empty, keep the existing token (the UI never sends it
+    back in plaintext for security).
+    """
+    # If token is empty, preserve the existing one
+    token_to_save = body.bot_token
+    if not token_to_save:
+        existing = await get_telegram_config(request.app.state.session_factory)
+        token_to_save = existing.get("bot_token", "")
+
     await upsert_telegram_config(
         request.app.state.session_factory,
-        body.bot_token,
+        token_to_save,
         body.chat_id,
         body.enabled,
     )
 
     # Update in-memory config dict for notifier
     request.app.state.config["telegram"] = {
-        "bot_token": body.bot_token,
+        "bot_token": token_to_save,
         "chat_id": body.chat_id,
         "enabled": body.enabled,
     }
@@ -67,7 +78,11 @@ async def test_telegram(request: Request):
         enabled=True,
     )
 
-    sent = await notifier.send_test()
+    try:
+        sent = await notifier.send_test()
+    except NotificationPermanent as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     if not sent:
         raise HTTPException(status_code=502, detail="Failed to send test message")
 
