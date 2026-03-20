@@ -30,6 +30,14 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+import warnings as _warnings
+_warnings.warn(
+    "modules.backtester is deprecated. Use modules.vbt_backtester instead, "
+    "which shares the unified strategy module (modules.strategy).",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 # ---------------------------------------------------------------------------
 # Trade outcome constants
 # ---------------------------------------------------------------------------

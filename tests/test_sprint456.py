@@ -183,13 +183,16 @@ class TestATRAdaptiveSLTP:
         assert 1.0 <= setup["sl_multiplier"] <= 2.0
 
     def test_maintains_risk_reward_ratio(self) -> None:
-        """TP distance should be SL distance * 2 (1:2 R:R)."""
+        """TP/SL ratio should match the per-class defaults from strategy module.
+
+        Symbol "ES" resolves to "index" (SL=2.0x, TP=4.0x → 1:2 R:R).
+        """
         from app.services.analyzer import _compute_setup
         from modules.price_data import AssetAnalysis, TechnicalSignal
 
         analysis = AssetAnalysis(
-            symbol="TEST",
-            display_name="Test",
+            symbol="ES",
+            display_name="S&P 500",
             price=100.0,
             change_pct=1.0,
             signals=[
@@ -198,8 +201,9 @@ class TestATRAdaptiveSLTP:
         )
         setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
         assert setup["tradeable"] is True
-        # TP distance should be exactly 2x SL distance
-        assert abs(setup["tp_distance"] - setup["sl_distance"] * 2.0) < 0.01
+        # Index: TP/SL ratio = 4.0/2.0 = 2.0
+        ratio = setup["tp_distance"] / setup["sl_distance"]
+        assert abs(ratio - 2.0) < 0.1
 
 
 # ---------------------------------------------------------------------------
