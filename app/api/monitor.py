@@ -1,4 +1,4 @@
-"""Monitor API endpoints — start, stop, and check status of background monitors."""
+"""Monitor API endpoints — start, stop, check status, and view credit budget."""
 
 from __future__ import annotations
 
@@ -12,23 +12,25 @@ router = APIRouter()
 
 class MonitorStart(BaseModel):
     symbol: str
-    interval_seconds: int = 60
 
 
 @router.post("/monitor/start")
 @limiter.limit(MONITOR_RATE)
 async def start_monitor(request: Request, body: MonitorStart):
-    """Start background monitoring for an asset."""
+    """Start background monitoring for an asset.
+
+    Uses a fixed heavy (30 min) + light (120 s) split schedule.
+    Max 3 assets simultaneously (Twelve Data free-tier budget).
+    """
     monitor = getattr(request.app.state, "monitor", None)
     if monitor is None:
         raise HTTPException(status_code=503, detail="Monitor not initialized")
 
-    if body.interval_seconds < 30:
-        raise HTTPException(status_code=400, detail="Minimum interval is 30 seconds")
-    if body.interval_seconds > 600:
-        raise HTTPException(status_code=400, detail="Maximum interval is 600 seconds")
+    result = await monitor.start(body.symbol)
 
-    result = await monitor.start(body.symbol, body.interval_seconds)
+    if result.get("status") == "REJECTED":
+        raise HTTPException(status_code=429, detail=result["reason"])
+
     return result
 
 
@@ -58,3 +60,13 @@ async def monitor_status(request: Request):
         "monitors": statuses,
         "ws_connections": manager.count,
     }
+
+
+@router.get("/monitor/budget")
+async def monitor_budget(request: Request):
+    """Return Twelve Data credit budget status for today."""
+    monitor = getattr(request.app.state, "monitor", None)
+    if monitor is None:
+        return {"error": "Monitor not initialized"}
+
+    return monitor.get_budget()

@@ -1,7 +1,9 @@
 """Twelve Data provider.
 
 Good for forex, futures, and stocks. Free tier: 800 API credits/day.
-Each time-series call costs 1 credit.
+Each time-series call costs 1 credit.  The ``/price`` endpoint also
+costs 1 credit but returns only the latest price — ideal for lightweight
+polling between full analyses.
 """
 
 from __future__ import annotations
@@ -123,3 +125,42 @@ class TwelveDataProvider(DataProvider):
             source=self.name,
             metadata={"td_symbol": td_symbol, "credits_used": 1},
         )
+
+    def fetch_quote(self, symbol: str) -> float | None:
+        """Fetch only the latest price via the /price endpoint (1 credit).
+
+        Much cheaper than a full time_series call when you only need
+        the current price for lightweight polling.
+        """
+        if not self._api_key:
+            return None
+
+        td_symbol = _TD_SYMBOL_MAP.get(symbol, symbol)
+        params = {
+            "symbol": td_symbol,
+            "apikey": self._api_key,
+        }
+
+        try:
+            resp = requests.get(
+                f"{_BASE_URL}/price",
+                params=params,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("Twelve Data /price failed for %s: %s", symbol, exc)
+            return None
+
+        price_str = data.get("price")
+        if price_str is None:
+            msg = data.get("message", data.get("status", "unknown error"))
+            logger.warning("Twelve Data no price for %s: %s", symbol, msg)
+            return None
+
+        try:
+            return float(price_str)
+        except (ValueError, TypeError):
+            logger.warning("Twelve Data invalid price for %s: %s", symbol, price_str)
+            return None

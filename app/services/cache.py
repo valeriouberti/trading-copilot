@@ -36,6 +36,7 @@ DEFAULT_TTLS: dict[str, int] = {
     "sentiment": 600,
     "calendar": 3600,
     "polymarket": 600,
+    "heavy_analysis": 1800,  # 30 min — full indicator + signal analysis
 }
 
 
