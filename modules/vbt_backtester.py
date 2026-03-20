@@ -97,13 +97,18 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate trading signals using the adaptive-weight composite score.
+    """Generate trading signals using regime-aware composite scoring.
 
-    Adds columns: signal (1=LONG, -1=SHORT, 0=none), composite_score.
+    In TRENDING markets (ADX > 25), indicators are interpreted as trend
+    confirmation (RSI < 50 = bearish, not "oversold bounce").
+    In RANGING markets (ADX < 20), classic mean-reversion rules apply.
+
+    Adds columns: signal (1=LONG, -1=SHORT, 0=none), composite_score, regime.
     """
     n = len(df)
     signals = np.zeros(n, dtype=int)
     scores = np.zeros(n, dtype=float)
+    regimes = [""] * n
 
     for i in range(50, n):  # Start after warmup
         row = df.iloc[i]
@@ -112,105 +117,138 @@ def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
         if pd.isna(adx):
             adx = 20
 
-        # Adaptive weights based on market regime
-        if adx > 25:
-            w = {"momentum": 1.5, "mean_reversion": 0.7}
-        elif adx < 20:
-            w = {"momentum": 0.7, "mean_reversion": 1.5}
+        close = row["Close"]
+        is_trending = adx > 25
+        is_ranging = adx < 20
+
+        # Determine regime
+        if is_trending:
+            regimes[i] = "TRENDING"
+        elif is_ranging:
+            regimes[i] = "RANGING"
         else:
-            w = {"momentum": 1.0, "mean_reversion": 1.0}
+            regimes[i] = "NEUTRAL"
 
         bull_score = 0.0
         bear_score = 0.0
         total_weight = 0.0
 
-        # RSI (mean reversion)
-        rsi = row.get("RSI")
-        if not pd.isna(rsi) if rsi is not None else False:
-            wt = w["mean_reversion"]
-            total_weight += wt
-            if rsi < 30:
-                bull_score += wt
-            elif rsi > 70:
-                bear_score += wt
-            elif rsi > 60:
-                bull_score += wt * 0.5
-            elif rsi < 40:
-                bear_score += wt * 0.5
-
-        # MACD (momentum)
+        # --- MACD histogram (always momentum) ---
         macd_hist = row.get("MACD_hist")
-        if not pd.isna(macd_hist) if macd_hist is not None else False:
-            wt = w["momentum"]
+        if macd_hist is not None and not pd.isna(macd_hist):
+            wt = 1.5 if is_trending else 1.0
             total_weight += wt
             if macd_hist > 0:
                 bull_score += wt
             else:
                 bear_score += wt
 
-        # Bollinger Bands (mean reversion)
-        bb_upper = row.get("BB_upper")
-        bb_lower = row.get("BB_lower")
-        bb_mid = row.get("BB_middle")
-        close = row["Close"]
-        if all(not pd.isna(v) for v in [bb_upper, bb_lower, bb_mid] if v is not None):
-            wt = w["mean_reversion"]
-            total_weight += wt
-            if close > bb_upper:
-                bear_score += wt
-            elif close < bb_lower:
-                bull_score += wt
-            elif close > bb_mid:
-                bull_score += wt * 0.3
-            else:
-                bear_score += wt * 0.3
-
-        # Stochastic (mean reversion)
-        stoch_k = row.get("STOCH_K")
-        stoch_d = row.get("STOCH_D")
-        if all(not pd.isna(v) for v in [stoch_k, stoch_d] if v is not None):
-            wt = w["mean_reversion"]
-            total_weight += wt
-            if stoch_k < 20:
-                bull_score += wt
-            elif stoch_k > 80:
-                bear_score += wt
-            elif stoch_k > stoch_d:
-                bull_score += wt * 0.3
-            else:
-                bear_score += wt * 0.3
-
-        # EMA Trend (momentum)
+        # --- EMA Trend (always momentum) ---
         ema20 = row.get("EMA20")
         ema50 = row.get("EMA50")
-        if all(not pd.isna(v) for v in [ema20, ema50] if v is not None):
-            wt = w["momentum"]
+        if all(v is not None and not pd.isna(v) for v in [ema20, ema50]):
+            wt = 1.5 if is_trending else 1.0
             total_weight += wt
             if ema20 > ema50:
                 bull_score += wt
             else:
                 bear_score += wt
 
-        # VWAP proxy: close vs EMA20 (simple substitute for daily data)
-        if not pd.isna(ema20) if ema20 is not None else False:
+        # --- RSI: regime-dependent interpretation ---
+        rsi = row.get("RSI")
+        if rsi is not None and not pd.isna(rsi):
             wt = 1.0
             total_weight += wt
-            if close > ema20:
-                bull_score += wt * 0.5
+            if is_trending:
+                # Trend confirmation: RSI > 50 = bull momentum, < 50 = bear
+                if rsi > 55:
+                    bull_score += wt
+                elif rsi < 45:
+                    bear_score += wt
+                elif rsi > 50:
+                    bull_score += wt * 0.4
+                else:
+                    bear_score += wt * 0.4
             else:
-                bear_score += wt * 0.5
+                # Mean reversion: classic oversold/overbought
+                if rsi < 30:
+                    bull_score += wt
+                elif rsi > 70:
+                    bear_score += wt
+                elif rsi < 40:
+                    bull_score += wt * 0.5
+                elif rsi > 60:
+                    bear_score += wt * 0.5
+
+        # --- Bollinger Bands: regime-dependent ---
+        bb_upper = row.get("BB_upper")
+        bb_lower = row.get("BB_lower")
+        bb_mid = row.get("BB_middle")
+        if all(v is not None and not pd.isna(v) for v in [bb_upper, bb_lower, bb_mid]):
+            wt = 1.0
+            total_weight += wt
+            if is_trending:
+                # Trend confirmation: above/below middle band
+                if close > bb_mid:
+                    bull_score += wt * 0.8
+                else:
+                    bear_score += wt * 0.8
+            else:
+                # Mean reversion: extremes
+                if close > bb_upper:
+                    bear_score += wt
+                elif close < bb_lower:
+                    bull_score += wt
+                elif close > bb_mid:
+                    bull_score += wt * 0.3
+                else:
+                    bear_score += wt * 0.3
+
+        # --- Stochastic: regime-dependent ---
+        stoch_k = row.get("STOCH_K")
+        stoch_d = row.get("STOCH_D")
+        if all(v is not None and not pd.isna(v) for v in [stoch_k, stoch_d]):
+            wt = 1.0
+            total_weight += wt
+            if is_trending:
+                # Trend confirmation: stoch direction
+                if stoch_k > 50:
+                    bull_score += wt * 0.8
+                else:
+                    bear_score += wt * 0.8
+            else:
+                # Mean reversion: oversold/overbought
+                if stoch_k < 20:
+                    bull_score += wt
+                elif stoch_k > 80:
+                    bear_score += wt
+                elif stoch_k > stoch_d:
+                    bull_score += wt * 0.3
+                else:
+                    bear_score += wt * 0.3
+
+        # --- DI+/DI- directional confirmation ---
+        di_plus = row.get("DI_plus")
+        di_minus = row.get("DI_minus")
+        if all(v is not None and not pd.isna(v) for v in [di_plus, di_minus]):
+            wt = 1.0
+            total_weight += wt
+            if di_plus > di_minus:
+                bull_score += wt
+            else:
+                bear_score += wt
 
         # Compute composite
         if total_weight > 0:
             bull_pct = bull_score / total_weight
             bear_pct = bear_score / total_weight
         else:
-            bull_pct = bear_pct = 0.5
+            continue
 
-        threshold = 0.60  # 60% agreement required
+        threshold = 0.58  # 58% agreement required
 
-        # ADX filter: only signal when trend is strong enough
-        if adx > 22:
+        # ADX filter: only signal when directional energy is present
+        if adx > 20:
             if bull_pct >= threshold:
                 signals[i] = 1
                 scores[i] = bull_pct
@@ -220,6 +258,7 @@ def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
 
     df["signal"] = signals
     df["composite_score"] = scores
+    df["regime"] = regimes
 
     # De-duplicate: only fire on first bar of a signal run
     for i in range(1, n):
@@ -317,6 +356,9 @@ class VBTBacktester:
     ) -> VBTBacktestResult | None:
         """Run a full backtest for a single symbol.
 
+        Uses bar-by-bar simulation for accurate SL/TP handling with
+        realistic spread/commission/slippage costs.
+
         Args:
             symbol: Canonical symbol (e.g. "EURUSD", "NQ", "AAPL").
             interval: Bar interval.
@@ -352,84 +394,14 @@ class VBTBacktester:
         # Get cost model
         costs = get_cost_model(spec)
 
-        # Compute ATR-adaptive SL/TP
-        sl_prices, tp_prices = self._compute_sl_tp(
+        # Compute ATR-adaptive SL/TP distances
+        sl_dist, tp_dist = self._compute_sl_tp_distance(
             df, sl_atr_mult, tp_atr_mult, adaptive_sl
         )
 
-        # Build entry/exit signals for vectorbt
-        long_entries = df["signal"] == 1
-        short_entries = df["signal"] == -1
-
-        # Calculate total cost per trade in price units
-        spread_cost = costs.spread
-        slippage_cost = df["Close"] * costs.slippage_pct
-        # Commission as fraction of price (for vbt fees parameter)
-        comm_pct = costs.commission / (df["Close"] * spec.point_value).clip(lower=1)
-
-        # Run vectorbt portfolio simulation
-        try:
-            close = df["Close"]
-
-            # Long portfolio
-            long_pf = None
-            if long_entries.any():
-                long_sl = sl_prices.where(long_entries.cumsum() > 0)
-                long_tp = tp_prices.where(long_entries.cumsum() > 0)
-                long_pf = vbt.Portfolio.from_signals(
-                    close=close,
-                    entries=long_entries,
-                    exits=pd.Series(False, index=df.index),
-                    sl_stop=((close - long_sl) / close).clip(lower=0.001),
-                    tp_stop=((long_tp - close) / close).clip(lower=0.001),
-                    fees=spread_cost / close + comm_pct,
-                    freq=interval,
-                    init_cash=100_000,
-                    size=1.0,
-                    size_type="amount",
-                    accumulate=False,
-                )
-
-            # Short portfolio
-            short_pf = None
-            if short_entries.any():
-                short_sl = sl_prices.where(short_entries.cumsum() > 0)
-                short_tp = tp_prices.where(short_entries.cumsum() > 0)
-                short_pf = vbt.Portfolio.from_signals(
-                    close=close,
-                    entries=short_entries,
-                    exits=pd.Series(False, index=df.index),
-                    short_entries=short_entries,
-                    sl_stop=((short_sl - close) / close).clip(lower=0.001),
-                    tp_stop=((close - short_tp) / close).clip(lower=0.001),
-                    fees=spread_cost / close + comm_pct,
-                    freq=interval,
-                    init_cash=100_000,
-                    size=1.0,
-                    size_type="amount",
-                    accumulate=False,
-                )
-
-            # Merge results
-            result = self._build_result(
-                symbol=symbol,
-                spec=spec,
-                interval=interval,
-                data=data,
-                df=df,
-                long_pf=long_pf,
-                short_pf=short_pf,
-                costs=costs,
-                data_warnings=data_warnings,
-            )
-            return result
-
-        except Exception as exc:
-            logger.error("vectorbt simulation failed for %s: %s", symbol, exc)
-            # Fallback to manual simulation
-            return self._manual_backtest(
-                symbol, spec, interval, data, df, sl_prices, tp_prices, costs, data_warnings
-            )
+        return self._simulate_trades(
+            symbol, spec, interval, data, df, sl_dist, tp_dist, costs, data_warnings
+        )
 
     def run_universe(
         self,
@@ -464,149 +436,51 @@ class VBTBacktester:
 
         return results
 
-    def _compute_sl_tp(
+    def _compute_sl_tp_distance(
         self,
         df: pd.DataFrame,
         sl_mult: float,
         tp_mult: float,
         adaptive: bool,
     ) -> tuple[pd.Series, pd.Series]:
-        """Compute SL/TP price levels for each bar."""
+        """Compute SL/TP distances (in price units) for each bar.
+
+        Returns (sl_distance, tp_distance) — always positive values
+        representing distance from entry price. Direction is applied
+        during trade simulation.
+        """
         atr = df.get("ATR", pd.Series(dtype=float))
-        close = df["Close"]
 
         if adaptive and len(atr.dropna()) > 20:
             # ATR percentile over rolling 50-bar window
             atr_pctile = atr.rolling(50, min_periods=20).apply(
                 lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
             )
-            # Adaptive multiplier: low vol → wider SL, high vol → tighter SL
+            # Adaptive: low vol → wider SL, high vol → tighter SL
             sl_multiplier = sl_mult * (1.0 + (0.5 - atr_pctile).clip(-0.5, 0.5))
             tp_multiplier = sl_multiplier * (tp_mult / sl_mult)
         else:
             sl_multiplier = pd.Series(sl_mult, index=df.index)
             tp_multiplier = pd.Series(tp_mult, index=df.index)
 
-        sl_distance = atr * sl_multiplier
-        tp_distance = atr * tp_multiplier
+        sl_distance = (atr * sl_multiplier).abs()
+        tp_distance = (atr * tp_multiplier).abs()
 
-        # SL/TP levels (direction-agnostic, distance from close)
-        sl_price = close - sl_distance  # For longs; inverted for shorts in simulation
-        tp_price = close + tp_distance
+        return sl_distance, tp_distance
 
-        return sl_price, tp_price
-
-    def _build_result(
+    def _simulate_trades(
         self,
         symbol: str,
         spec: AssetSpec,
         interval: str,
         data: Any,
         df: pd.DataFrame,
-        long_pf: Any,
-        short_pf: Any,
+        sl_dist: pd.Series,
+        tp_dist: pd.Series,
         costs: CostModel,
         data_warnings: list[str],
     ) -> VBTBacktestResult:
-        """Build result from vectorbt portfolio objects."""
-        result = VBTBacktestResult(
-            symbol=symbol,
-            asset_class=spec.asset_class.value,
-            interval=interval,
-            bars=len(df),
-            data_source=data.source,
-            data_warnings=data_warnings,
-        )
-
-        # Merge trade records from long and short portfolios
-        all_trades = []
-
-        for pf, direction in [(long_pf, "LONG"), (short_pf, "SHORT")]:
-            if pf is None:
-                continue
-            try:
-                trades = pf.trades.records_readable
-                for _, t in trades.iterrows():
-                    all_trades.append({
-                        "direction": direction,
-                        "entry_date": str(t.get("Entry Timestamp", "")),
-                        "exit_date": str(t.get("Exit Timestamp", "")),
-                        "entry_price": float(t.get("Avg Entry Price", 0)),
-                        "exit_price": float(t.get("Avg Exit Price", 0)),
-                        "pnl": float(t.get("PnL", 0)),
-                        "return_pct": float(t.get("Return", 0)) * 100,
-                        "status": t.get("Status", "Open"),
-                    })
-            except Exception:
-                pass
-
-        result.trades = all_trades
-        result.total_trades = len(all_trades)
-
-        if not all_trades:
-            return result
-
-        # Aggregate metrics
-        pnls = [t["pnl"] for t in all_trades]
-        winners = [p for p in pnls if p > 0]
-        losers = [p for p in pnls if p <= 0]
-
-        result.total_pnl = sum(pnls)
-        result.avg_trade_pnl = np.mean(pnls) if pnls else 0
-        result.win_rate = len(winners) / len(pnls) if pnls else 0
-
-        gross_profit = sum(winners) if winners else 0
-        gross_loss = abs(sum(losers)) if losers else 0
-        result.profit_factor = (
-            gross_profit / gross_loss if gross_loss > 0 else float("inf")
-        )
-
-        # Risk metrics from the primary portfolio
-        primary_pf = long_pf or short_pf
-        if primary_pf is not None:
-            try:
-                stats = primary_pf.stats()
-                result.max_drawdown_pct = abs(float(stats.get("Max Drawdown [%]", 0)))
-                result.sharpe_ratio = float(stats.get("Sharpe Ratio", 0))
-                result.sortino_ratio = float(stats.get("Sortino Ratio", 0))
-                result.calmar_ratio = float(stats.get("Calmar Ratio", 0))
-            except Exception:
-                pass
-
-        # Expectancy
-        avg_win = np.mean(winners) if winners else 0
-        avg_loss = np.mean([abs(l) for l in losers]) if losers else 0
-        result.expectancy = (result.win_rate * avg_win) - ((1 - result.win_rate) * avg_loss)
-
-        # Kelly criterion (half-Kelly, capped)
-        if avg_loss > 0 and avg_win > 0:
-            b = avg_win / avg_loss
-            kelly = (result.win_rate * b - (1 - result.win_rate)) / b
-            result.kelly_fraction = max(0, min(kelly / 2, 0.5))
-
-        # Cost estimate
-        result.total_costs = (
-            costs.spread * 2 * result.total_trades
-            + costs.commission * result.total_trades
-        )
-
-        result._portfolio = primary_pf
-
-        return result
-
-    def _manual_backtest(
-        self,
-        symbol: str,
-        spec: AssetSpec,
-        interval: str,
-        data: Any,
-        df: pd.DataFrame,
-        sl_prices: pd.Series,
-        tp_prices: pd.Series,
-        costs: CostModel,
-        data_warnings: list[str],
-    ) -> VBTBacktestResult:
-        """Fallback bar-by-bar simulation when vectorbt fails."""
+        """Bar-by-bar simulation with proper LONG and SHORT SL/TP handling."""
         result = VBTBacktestResult(
             symbol=symbol,
             asset_class=spec.asset_class.value,
@@ -622,9 +496,11 @@ class VBTBacktester:
         low = df["Low"]
         signals = df["signal"]
 
+        in_trade = False  # Prevent overlapping trades
+
         for i in range(len(df)):
             sig = signals.iloc[i]
-            if sig == 0:
+            if sig == 0 or in_trade:
                 continue
 
             entry_price = close.iloc[i]
@@ -632,26 +508,31 @@ class VBTBacktester:
             if pd.isna(atr_val):
                 atr_val = entry_price * 0.01
 
+            # Get SL/TP distances (always positive)
+            sl_d = sl_dist.iloc[i] if not pd.isna(sl_dist.iloc[i]) else atr_val * 1.5
+            tp_d = tp_dist.iloc[i] if not pd.isna(tp_dist.iloc[i]) else atr_val * 3.0
+
             # Apply spread + slippage at entry
             entry_cost = costs.spread + entry_price * costs.slippage_pct
 
             if sig == 1:  # LONG
-                entry_price += entry_cost
-                sl = sl_prices.iloc[i] if not pd.isna(sl_prices.iloc[i]) else entry_price - atr_val * 1.5
-                tp = tp_prices.iloc[i] if not pd.isna(tp_prices.iloc[i]) else entry_price + atr_val * 3.0
+                entry_price += entry_cost  # Worse fill for longs
+                sl = entry_price - sl_d
+                tp = entry_price + tp_d
             else:  # SHORT
-                entry_price -= entry_cost
-                sl = 2 * close.iloc[i] - sl_prices.iloc[i] if not pd.isna(sl_prices.iloc[i]) else entry_price + atr_val * 1.5
-                tp = 2 * close.iloc[i] - tp_prices.iloc[i] if not pd.isna(tp_prices.iloc[i]) else entry_price - atr_val * 3.0
+                entry_price -= entry_cost  # Worse fill for shorts
+                sl = entry_price + sl_d
+                tp = entry_price - tp_d
 
             # Walk forward to find exit
+            in_trade = True
             exit_price = close.iloc[-1]
             exit_date = str(df.index[-1])
             outcome = "STILL_OPEN"
             bars_held = len(df) - i
 
             for j in range(i + 1, len(df)):
-                if sig == 1:
+                if sig == 1:  # LONG: SL below, TP above
                     if low.iloc[j] <= sl:
                         exit_price = sl - costs.spread
                         exit_date = str(df.index[j])
@@ -664,7 +545,7 @@ class VBTBacktester:
                         outcome = "TP_HIT"
                         bars_held = j - i
                         break
-                else:
+                else:  # SHORT: SL above, TP below
                     if high.iloc[j] >= sl:
                         exit_price = sl + costs.spread
                         exit_date = str(df.index[j])
@@ -678,6 +559,8 @@ class VBTBacktester:
                         bars_held = j - i
                         break
 
+            in_trade = False  # Trade closed, allow next
+
             pnl = (exit_price - entry_price) * sig - costs.commission
 
             trades.append({
@@ -686,6 +569,8 @@ class VBTBacktester:
                 "exit_date": exit_date,
                 "entry_price": round(entry_price, 5),
                 "exit_price": round(exit_price, 5),
+                "sl": round(sl, 5),
+                "tp": round(tp, 5),
                 "pnl": round(pnl, 2),
                 "return_pct": round(pnl / entry_price * 100, 4),
                 "status": outcome,
@@ -820,6 +705,9 @@ def print_results(results: list[VBTBacktestResult]) -> None:
 
 def main() -> None:
     import argparse
+
+    from dotenv import load_dotenv
+    load_dotenv()
 
     parser = argparse.ArgumentParser(
         description="Trading Copilot — vectorbt Backtester",
