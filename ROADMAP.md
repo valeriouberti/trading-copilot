@@ -234,4 +234,13 @@ Vedi **[CHANGELOG.md](CHANGELOG.md)** per lo storico completo delle modifiche.
 
 ---
 
+## Roadmap Specializzate
+
+Per i prossimi sviluppi, il progetto ha due roadmap dedicate:
+
+- **[ROADMAP-ENGINEERING.md](ROADMAP-ENGINEERING.md)** — Architettura, performance, sicurezza, testing, deploy. 7 fasi, 21 task.
+- **[ROADMAP-TRADING.md](ROADMAP-TRADING.md)** — Signal quality, risk management, LLM avanzato, backtesting, market microstructure. 6 fasi, 17 task.
+
+---
+
 *Ultimo aggiornamento: 20 Marzo 2026 — v5.2.0*
