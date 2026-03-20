@@ -95,6 +95,20 @@ def _poly_signal_color(signal: str) -> str:
     return "#888888"
 
 
+def _mtf_cell(asset: Any) -> str:
+    """Build inline MTF alignment badge for the asset table."""
+    mtf = getattr(asset, "mtf", None)
+    if not mtf:
+        return '<span style="color:#64748b;">N/A</span>'
+    align_colors = {"ALIGNED": "#22c55e", "PARTIAL": "#eab308", "CONFLICTING": "#ef4444"}
+    color = align_colors.get(mtf.alignment, "#6b7280")
+    return (
+        f'<span style="color:{color};font-weight:bold;">{mtf.alignment}</span>'
+        f'<br><span style="color:#9ca3af;font-size:0.8em;">'
+        f'W:{mtf.weekly_trend[0]} D:{mtf.daily_trend[0]} 1H:{mtf.hourly_trend[0]}</span>'
+    )
+
+
 def _category_badge(category: str) -> str:
     """Colored HTML badge for the market category."""
     colors = {
@@ -345,6 +359,216 @@ def _build_calendar_section(calendar_data: Any | None) -> str:
     </div>"""
 
 
+def _get_session_info() -> dict[str, Any]:
+    """Determine current trading session and next high-quality window (CET/CEST).
+
+    Session windows (Italian time):
+      London Open   08:00-09:30  HIGH
+      London AM     09:30-11:00  MEDIUM
+      Dead Zone     11:00-14:00  LOW
+      Pre-NYSE      14:00-15:30  MEDIUM
+      NYSE Open     15:30-17:30  HIGH
+      NYSE PM       17:30-22:00  MEDIUM
+    """
+    now_it = datetime.now(ZoneInfo("Europe/Rome"))
+    t = now_it.hour * 60 + now_it.minute  # minutes since midnight
+    weekday = now_it.weekday()
+
+    _SESSIONS = [
+        ("London Open", 480, 570, "HIGH"),      # 08:00-09:30
+        ("London AM", 570, 660, "MEDIUM"),       # 09:30-11:00
+        ("Dead Zone", 660, 840, "LOW"),          # 11:00-14:00
+        ("Pre-NYSE", 840, 930, "MEDIUM"),        # 14:00-15:30
+        ("NYSE Open", 930, 1050, "HIGH"),        # 15:30-17:30
+        ("NYSE PM", 1050, 1320, "MEDIUM"),       # 17:30-22:00
+    ]
+
+    current = "Off-Hours"
+    quality = "NONE"
+    next_high = None
+    minutes_to_next = None
+
+    if weekday >= 5:
+        current = "Weekend"
+        days_to_monday = 7 - weekday
+        minutes_to_next = days_to_monday * 24 * 60 - t + 480
+        next_high = "London Open (Monday)"
+    else:
+        for name, start, end, q in _SESSIONS:
+            if start <= t < end:
+                current = name
+                quality = q
+                break
+
+        for name, start, _end, q in _SESSIONS:
+            if q == "HIGH" and start > t:
+                next_high = name
+                minutes_to_next = start - t
+                break
+
+        # If no high-quality session left today, next is tomorrow London
+        if next_high is None:
+            if weekday == 4:  # Friday
+                next_high = "London Open (Monday)"
+                minutes_to_next = (3 * 24 * 60) - t + 480
+            else:
+                next_high = "London Open (tomorrow)"
+                minutes_to_next = (24 * 60) - t + 480
+
+    return {
+        "current_session": current,
+        "quality": quality,
+        "next_high_session": next_high,
+        "minutes_to_next": minutes_to_next,
+        "italian_time": now_it.strftime("%H:%M"),
+        "sessions": _SESSIONS,
+    }
+
+
+def _build_session_section() -> str:
+    """Build the HTML section for session time filter info."""
+    info = _get_session_info()
+    current = info["current_session"]
+    quality = info["quality"]
+    next_high = info["next_high_session"]
+    minutes_to = info["minutes_to_next"]
+
+    quality_colors = {"HIGH": "#22c55e", "MEDIUM": "#eab308", "LOW": "#ef4444", "NONE": "#6b7280"}
+    q_color = quality_colors.get(quality, "#6b7280")
+
+    # Countdown
+    countdown_html = ""
+    if next_high and minutes_to is not None:
+        if minutes_to < 60:
+            time_str = f"{minutes_to}m"
+        else:
+            time_str = f"{minutes_to // 60}h {minutes_to % 60}m"
+        countdown_html = f"""
+        <div style="text-align:center;margin-top:12px;">
+            <span style="color:#94a3b8;">Next high-quality window:</span>
+            <span style="color:#22c55e;font-weight:bold;"> {next_high} in {time_str}</span>
+        </div>"""
+
+    # Session schedule table
+    session_rows = ""
+    for name, start, end, q in info["sessions"]:
+        s_h, s_m = divmod(start, 60)
+        e_h, e_m = divmod(end, 60)
+        sq_color = quality_colors.get(q, "#6b7280")
+        is_current = name == current
+        row_bg = "background:#374151;" if is_current else ""
+        marker = " &#9668;" if is_current else ""
+        session_rows += f"""
+            <tr style="{row_bg}">
+                <td style="padding:4px 8px;border-bottom:1px solid #1f2937;color:#d1d5db;">
+                    {name}{marker}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid #1f2937;color:#9ca3af;">
+                    {s_h:02d}:{s_m:02d} - {e_h:02d}:{e_m:02d}</td>
+                <td style="padding:4px 8px;border-bottom:1px solid #1f2937;">
+                    <span style="color:{sq_color};font-weight:bold;">{q}</span></td>
+            </tr>"""
+
+    # Dead zone warning
+    dead_zone_html = ""
+    if current == "Dead Zone":
+        dead_zone_html = """
+        <div style="background:#7f1d1d;border:1px solid #dc2626;border-radius:8px;padding:12px;margin-top:12px;">
+            <span style="color:#fca5a5;font-weight:bold;">&#9888; DEAD ZONE — Avoid new entries. Low volume, choppy price action.</span>
+        </div>"""
+
+    return f"""
+    <!-- SESSION TIME FILTER -->
+    <div style="background:#1e293b;border:2px solid {q_color};border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 12px;color:#f1f5f9;">Session Filter</h2>
+        <div style="text-align:center;margin-bottom:12px;">
+            <span style="color:#94a3b8;">Current Session:</span>
+            <span style="color:{q_color};font-size:1.5em;font-weight:bold;"> {current}</span>
+            <span style="color:{q_color};font-size:0.9em;"> ({quality})</span>
+        </div>
+        {dead_zone_html}
+        {countdown_html}
+        <table style="width:100%;max-width:400px;margin:16px auto 0;border-collapse:collapse;font-size:0.85em;">
+            <thead>
+                <tr>
+                    <th style="padding:4px 8px;text-align:left;color:#64748b;">Session</th>
+                    <th style="padding:4px 8px;text-align:left;color:#64748b;">Time (CET)</th>
+                    <th style="padding:4px 8px;text-align:left;color:#64748b;">Quality</th>
+                </tr>
+            </thead>
+            <tbody>{session_rows}</tbody>
+        </table>
+    </div>"""
+
+
+def _build_mtf_section(asset_analyses: list[Any]) -> str:
+    """Build the HTML section for multi-timeframe alignment."""
+    has_mtf = any(
+        getattr(a, "mtf", None) is not None
+        and getattr(a, "error", None) is None
+        for a in asset_analyses
+    )
+    if not has_mtf:
+        return ""
+
+    cards = ""
+    for a in asset_analyses:
+        mtf = getattr(a, "mtf", None)
+        if not mtf or getattr(a, "error", None):
+            continue
+
+        align_colors = {
+            "ALIGNED": ("#22c55e", "#1e3a2f"),
+            "PARTIAL": ("#eab308", "#3d2f0f"),
+            "CONFLICTING": ("#ef4444", "#3d1f1f"),
+        }
+        color, bg = align_colors.get(mtf.alignment, ("#6b7280", "#1f2937"))
+
+        trend_icon = {"BULLISH": "&#9650;", "BEARISH": "&#9660;", "NEUTRAL": "&#9644;"}
+        trend_color = {"BULLISH": "#22c55e", "BEARISH": "#ef4444", "NEUTRAL": "#eab308"}
+
+        w_icon = trend_icon.get(mtf.weekly_trend, "&#9644;")
+        d_icon = trend_icon.get(mtf.daily_trend, "&#9644;")
+        h_icon = trend_icon.get(mtf.hourly_trend, "&#9644;")
+        w_col = trend_color.get(mtf.weekly_trend, "#eab308")
+        d_col = trend_color.get(mtf.daily_trend, "#eab308")
+        h_col = trend_color.get(mtf.hourly_trend, "#eab308")
+
+        cards += f"""
+            <div style="background:{bg};border:1px solid {color};border-radius:8px;padding:16px;min-width:220px;flex:1;">
+                <h3 style="margin:0 0 8px;color:#f1f5f9;font-size:1em;">{a.display_name}</h3>
+                <div style="text-align:center;margin:8px 0;">
+                    <span style="color:{color};font-size:1.3em;font-weight:bold;">{mtf.alignment}</span>
+                    <span style="color:#9ca3af;font-size:0.85em;"> ({mtf.dominant_direction})</span>
+                </div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
+                    <tr>
+                        <td style="padding:4px;color:#94a3b8;">Weekly</td>
+                        <td style="padding:4px;text-align:right;">
+                            <span style="color:{w_col};">{w_icon} {mtf.weekly_trend}</span></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:4px;color:#94a3b8;">Daily</td>
+                        <td style="padding:4px;text-align:right;">
+                            <span style="color:{d_col};">{d_icon} {mtf.daily_trend}</span></td>
+                    </tr>
+                    <tr>
+                        <td style="padding:4px;color:#94a3b8;">1H</td>
+                        <td style="padding:4px;text-align:right;">
+                            <span style="color:{h_col};">{h_icon} {mtf.hourly_trend}</span></td>
+                    </tr>
+                </table>
+            </div>"""
+
+    return f"""
+    <!-- MULTI-TIMEFRAME ALIGNMENT -->
+    <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h2 style="margin:0 0 16px;color:#f1f5f9;">Multi-Timeframe Alignment</h2>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            {cards}
+        </div>
+    </div>"""
+
+
 def _build_key_levels_section(asset_analyses: list[Any]) -> str:
     """Build the HTML section for key S/R levels."""
     has_levels = any(
@@ -481,7 +705,7 @@ def generate_report(
             asset_rows += f"""
             <tr>
                 <td style="padding:10px;border-bottom:1px solid #374151;font-weight:bold;">{a.display_name}</td>
-                <td colspan="13" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
+                <td colspan="14" style="padding:10px;border-bottom:1px solid #374151;color:#f87171;">
                     Error: {a.error}
                 </td>
             </tr>"""
@@ -547,6 +771,7 @@ def generate_report(
                 <td style="padding:10px;border-bottom:1px solid #374151;">
                     <span style="color:{score_color};font-weight:bold;">{a.composite_score}</span>
                     <span style="color:#9ca3af;font-size:0.85em;"> ({a.confidence_pct}%)</span></td>
+                <td style="padding:10px;border-bottom:1px solid #374151;">{_mtf_cell(a)}</td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">
                     <span style="color:{_signal_color(bias)}">{bias}</span></td>
                 <td style="padding:10px;border-bottom:1px solid #374151;">{poly_cell}</td>
@@ -664,6 +889,10 @@ def generate_report(
 
     {_build_calendar_section(calendar_data)}
 
+    {_build_session_section()}
+
+    {_build_mtf_section(asset_analyses)}
+
     <!-- ASSETS TABLE -->
     <div style="background:#1e293b;border-radius:12px;padding:20px;margin-bottom:24px;overflow-x:auto;">
         <h2 style="margin:0 0 16px;color:#f1f5f9;">Asset Analysis</h2>
@@ -680,6 +909,7 @@ def generate_report(
                     <th style="padding:10px;text-align:left;color:#94a3b8;">EMA Trend</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">ADX</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Score</th>
+                    <th style="padding:10px;text-align:left;color:#94a3b8;">MTF</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">LLM Bias</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Poly</th>
                     <th style="padding:10px;text-align:left;color:#94a3b8;">Action</th>
@@ -791,17 +1021,33 @@ def print_terminal_summary(
     else:
         print("\n  VALIDATION: OK — no flags")
 
-    print(f"\n  {'Asset':<25} {'Price':>12} {'Score':<10} {'Action':<20}")
-    print("  " + "-" * 67)
+    # Session info
+    sess = _get_session_info()
+    quality_markers = {"HIGH": "+", "MEDIUM": "~", "LOW": "!", "NONE": " "}
+    q_mark = quality_markers.get(sess["quality"], " ")
+    print(f"\n  SESSION: {sess['current_session']} [{sess['quality']}] ({sess['italian_time']} IT)")
+    if sess.get("current_session") == "Dead Zone":
+        print("    !! DEAD ZONE — avoid new entries")
+    if sess.get("next_high_session") and sess.get("minutes_to_next"):
+        m = sess["minutes_to_next"]
+        time_str = f"{m}m" if m < 60 else f"{m // 60}h {m % 60}m"
+        print(f"    Next high-quality: {sess['next_high_session']} in {time_str}")
+
+    print(f"\n  {'Asset':<25} {'Price':>12} {'Score':<10} {'MTF':<12} {'Action':<20}")
+    print("  " + "-" * 79)
 
     asset_biases = getattr(sentiment, "asset_biases", {})
     for a in asset_analyses:
         if a.error:
-            print(f"  {a.display_name:<25} {'ERROR':>12} {'':10} {a.error[:20]}")
+            print(f"  {a.display_name:<25} {'ERROR':>12} {'':10} {'':12} {a.error[:20]}")
             continue
         price_str = f"{a.price:,.2f}" if a.price else "N/A"
         a_bias = asset_biases.get(a.symbol, bias)
         hint = _action_hint(a.composite_score, a_bias)
+
+        # MTF alignment
+        mtf = getattr(a, "mtf", None)
+        mtf_str = mtf.alignment if mtf else "N/A"
 
         # Key level proximity note
         kl = getattr(a, "key_levels", None)
@@ -811,7 +1057,7 @@ def print_terminal_summary(
             if dist < 0.5:
                 level_note = f" [!{kl.nearest_level_name} {dist:.1f}%]"
 
-        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {hint:<20}{level_note}")
+        print(f"  {a.display_name:<25} {price_str:>12} {a.composite_score:<10} {mtf_str:<12} {hint:<20}{level_note}")
 
     print(f"\n  News analyzed: {news_count}")
 

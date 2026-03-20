@@ -89,12 +89,12 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 **Problema:** Il sistema analizza daily + 5m. Il daily da' il trend, il 5m e' rumore. Manca il timeframe intermedio (1h) e quello macro (weekly).
 
 **Cosa implementare:**
-- [ ] Fetch dati weekly da yfinance/Twelve Data
-- [ ] Fetch dati 1h da yfinance/Twelve Data
-- [ ] Calcolo trend per 3 timeframe: Weekly → Daily → 1h
-- [ ] Nuovo campo "MTF Alignment" nel report (ALIGNED / PARTIAL / CONFLICTING)
-- [ ] Regola: trade solo quando Weekly + Daily + 1h concordano
-- [ ] Penalita' nel composite score se MTF non allineato
+- [x] Fetch dati weekly da yfinance/Twelve Data
+- [x] Fetch dati 1h da yfinance/Twelve Data
+- [x] Calcolo trend per 3 timeframe: Weekly → Daily → 1h
+- [x] Nuovo campo "MTF Alignment" nel report (ALIGNED / PARTIAL / CONFLICTING)
+- [x] Regola: trade solo quando Weekly + Daily + 1h concordano
+- [x] Penalita' nel composite score se MTF non allineato
 
 **Impatto atteso:** Evitare entry contro-trend su timeframe superiore. Miglioramento win-rate stimato +10-15%.
 
@@ -110,10 +110,10 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 **Problema:** Non tutte le ore sono uguali. Le migliori opportunita' sono a London open (08:00-09:00 CET), NYSE open (15:30-16:30 CET), e post-FOMC. I segnali nel "dead zone" (11:00-14:00 CET) hanno aspettativa negativa.
 
 **Cosa implementare:**
-- [ ] Filtro orario nel Pine Script: segnali solo in finestre ad alto volume
-- [ ] Configurazione finestre per sessione (London, NYSE, overlap)
-- [ ] Il report indica quale sessione e' la prossima e countdown
-- [ ] Heatmap volume per ora del giorno (basata su dati storici)
+- [x] Filtro orario nel Pine Script: segnali solo in finestre ad alto volume
+- [x] Configurazione finestre per sessione (London, NYSE, overlap)
+- [x] Il report indica quale sessione e' la prossima e countdown
+- [ ] Heatmap volume per ora del giorno (basata su dati storici) — deferred to Phase 4+
 
 **Impatto atteso:** Ridurre i trade in orari di bassa liquidita'/chop. Meno trade, ma di qualita' superiore.
 
@@ -189,8 +189,8 @@ Piano di miglioramento prioritizzato per impatto sulla profittabilita'.
 | 1.1 | Key Levels | `DONE` | PDH/PDL/PDC, PWH/PWL, Pivots, Psych levels, nearest level proximity |
 | 1.2 | Calendario Economico | `DONE` | Forex Factory API, regime override entro 2h, sezione report HTML |
 | 2.1 | Trailing Stop | `DONE` | 3 exit modes (Fixed TP, Trailing Stop, Partial+Trail), BE at +1R, trail at +2R, dynamic SL line, R-multiple markers, exit alerts |
-| 3.1 | Multi-Timeframe | `TODO` | |
-| 3.2 | Session Filter | `TODO` | |
+| 3.1 | Multi-Timeframe | `DONE` | Weekly/Daily/1H EMA trend, MTF alignment (ALIGNED/PARTIAL/CONFLICTING), composite score penalty, report cards |
+| 3.2 | Session Filter | `DONE` | Pine Script session filter (London/NYSE), dead zone blocking, session info in report, configurable windows |
 | 4.1 | Quality Score | `TODO` | |
 | 4.2 | Correlation Filter | `TODO` | |
 

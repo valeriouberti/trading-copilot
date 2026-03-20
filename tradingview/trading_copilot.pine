@@ -47,6 +47,16 @@ i_table_pos = input.string("Top Right", "Table Position", options=["Top Right", 
 i_touch_pct = input.float(0.15, "EMA Touch Threshold %", minval=0.01, maxval=1.0, step=0.01, tooltip="How close price must get to EMA20 to count as a 'touch'. Lower = stricter.", group="Pullback Settings")
 i_rejection_bars = input.int(3, "Max Bars for Rejection", minval=1, maxval=10, tooltip="After touching EMA20, how many bars to wait for rejection candle.", group="Pullback Settings")
 
+// Session filter settings
+i_session_filter = input.bool(true, "Enable Session Filter", tooltip="Only allow entry signals during high-quality trading windows. Prevents entries in dead zones.", group="Session Filter")
+i_sess_london_start = input.int(8, "London Open Start (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_sess_london_end = input.int(10, "London Open End (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_sess_nyse_start = input.int(15, "NYSE Open Start (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_sess_nyse_end = input.int(18, "NYSE/Overlap End (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_dead_start = input.int(11, "Dead Zone Start (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_dead_end = input.int(14, "Dead Zone End (CET hour)", minval=0, maxval=23, group="Session Filter")
+i_show_session_bg = input.bool(true, "Show Session Background", tooltip="Highlight active trading sessions on the chart.", group="Session Filter")
+
 // ─────────────────────────────────────────────────────────────────────
 // CALCULATIONS
 // ─────────────────────────────────────────────────────────────────────
@@ -77,6 +87,25 @@ below_vwap = close < vwap_val
 [macd_line, signal_line, hist_line] = ta.macd(close, 12, 26, 9)
 macd_bullish = hist_line > 0
 macd_bearish = hist_line < 0
+
+// ─────────────────────────────────────────────────────────────────────
+// SESSION TIME FILTER
+// ─────────────────────────────────────────────────────────────────────
+
+// Get current hour in CET/CEST (Europe/Rome handles DST automatically)
+cet_hour = hour(time, "Europe/Rome")
+
+// Session window detection
+in_london = cet_hour >= i_sess_london_start and cet_hour < i_sess_london_end
+in_nyse = cet_hour >= i_sess_nyse_start and cet_hour < i_sess_nyse_end
+in_dead_zone = cet_hour >= i_dead_start and cet_hour < i_dead_end
+in_active_session = in_london or in_nyse
+
+// Session filter: allow signals only during active sessions (or when filter is disabled)
+session_ok = not i_session_filter or in_active_session
+
+// Current session name for display
+session_name = in_london ? "London" : in_nyse ? "NYSE" : in_dead_zone ? "Dead Zone" : "Off-Hours"
 
 // ─────────────────────────────────────────────────────────────────────
 // EFFECTIVE REGIME (flags override to NEUTRAL)
@@ -119,11 +148,11 @@ long_preconditions = bullish_structure and above_vwap and rsi_ok_long
 // All pre-conditions for SHORT
 short_preconditions = bearish_structure and below_vwap and rsi_ok_short
 
-// Full LONG signal: regime allows + structure + pullback rejection + bias filter
-long_signal = effective_regime == "LONG" and long_preconditions and long_rejection and i_bias != "BEARISH"
+// Full LONG signal: regime + structure + pullback + bias + session filter
+long_signal = effective_regime == "LONG" and long_preconditions and long_rejection and i_bias != "BEARISH" and session_ok
 
-// Full SHORT signal: regime allows + structure + pullback rejection + bias filter
-short_signal = effective_regime == "SHORT" and short_preconditions and short_rejection and i_bias != "BULLISH"
+// Full SHORT signal: regime + structure + pullback + bias + session filter
+short_signal = effective_regime == "SHORT" and short_preconditions and short_rejection and i_bias != "BULLISH" and session_ok
 
 // Prevent repeated signals — only fire on first bar of signal
 var bool in_long = false
@@ -317,6 +346,10 @@ bgcolor(bg_color, title="Trend Background")
 regime_color = effective_regime == "LONG" ? color.new(#22c55e, 96) : effective_regime == "SHORT" ? color.new(#ef4444, 96) : na
 bgcolor(regime_color, title="Regime Background")
 
+// Session background — green for active, red for dead zone
+session_bg = not i_show_session_bg ? na : in_active_session ? color.new(#3b82f6, 95) : in_dead_zone ? color.new(#ef4444, 97) : na
+bgcolor(session_bg, title="Session Background")
+
 // ─────────────────────────────────────────────────────────────────────
 // PLOTTING — Entry Arrows
 // ─────────────────────────────────────────────────────────────────────
@@ -494,6 +527,11 @@ alertcondition(hit_trail, "Trail Stop Hit", "Trading Copilot: Trailing stop hit 
 alertcondition(hit_tp, "Fixed TP Hit", "Trading Copilot: Fixed TP target reached — position closed")
 alertcondition(hit_sl, "SL Hit", "Trading Copilot: Stop loss hit — position closed")
 
+// Session alerts
+alertcondition(in_london and not in_london[1], "London Open", "Trading Copilot: London session opened — high-quality window")
+alertcondition(in_nyse and not in_nyse[1], "NYSE Open", "Trading Copilot: NYSE session opened — high-quality window")
+alertcondition(in_dead_zone and not in_dead_zone[1], "Dead Zone Start", "Trading Copilot: Dead zone entered — avoid new entries")
+
 // ─────────────────────────────────────────────────────────────────────
 // INFO TABLE
 // ─────────────────────────────────────────────────────────────────────
@@ -507,8 +545,8 @@ if barstate.islast and i_show_table
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-    // Extra rows for trailing info: +4 rows (exit mode, trail stage, current R, trail SL)
-    var table info = table.new(t_pos, 2, 18, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
+    // Table rows: 18 base + 3 session rows = 21
+    var table info = table.new(t_pos, 2, 21, bgcolor=color.new(#1e1e2e, 10), border_color=color.new(#6b7280, 50), border_width=1, frame_color=color.new(#6b7280, 50), frame_width=1)
 
     // Header
     table.cell(info, 0, 0, "TRADING COPILOT", text_color=#ffffff, text_size=size.normal, bgcolor=color.new(#3b82f6, 20), text_halign=text.align_center)
@@ -616,3 +654,18 @@ if barstate.islast and i_show_table
         table.cell(info, 1, 16, "—", text_color=#6b7280, text_size=size.small)
         table.cell(info, 0, 17, "Current R", text_color=#9ca3af, text_size=size.small)
         table.cell(info, 1, 17, "—", text_color=#6b7280, text_size=size.small)
+
+    // Separator — Session
+    table.cell(info, 0, 18, "── SESSION ──", text_color=#6b7280, text_size=size.tiny, text_halign=text.align_center)
+    table.merge_cells(info, 0, 18, 1, 18)
+
+    // Current session
+    sess_col = in_active_session ? #22c55e : in_dead_zone ? #ef4444 : #eab308
+    sess_status = i_session_filter ? (session_ok ? "ACTIVE" : "BLOCKED") : "OFF"
+    table.cell(info, 0, 19, "Session", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 19, session_name, text_color=sess_col, text_size=size.small)
+
+    // Filter status
+    filter_col = not i_session_filter ? #6b7280 : session_ok ? #22c55e : #ef4444
+    table.cell(info, 0, 20, "Filter", text_color=#9ca3af, text_size=size.small)
+    table.cell(info, 1, 20, sess_status, text_color=filter_col, text_size=size.small)

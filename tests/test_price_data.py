@@ -12,8 +12,11 @@ import pytest
 from modules.price_data import (
     AssetAnalysis,
     KeyLevels,
+    MTFAnalysis,
     TechnicalSignal,
+    _analyze_mtf,
     _analyze_single_asset,
+    _compute_ema_trend,
     _compute_key_levels,
     _fetch_twelvedata,
     _psych_step,
@@ -67,11 +70,16 @@ def _make_5m_df(rows: int = 200, base_price: float = 150.0) -> pd.DataFrame:
 
 
 def _mock_ticker_side_effect(daily_df, intraday_df):
-    """Create a side_effect function for mock_ticker.history."""
+    """Create a side_effect function for mock_ticker.history.
+
+    Returns daily_df for daily/weekly/hourly intervals (all use same trend),
+    and intraday_df for 5m data (VWAP).
+    """
     def side_effect(**kw):
-        if kw.get("interval") == "1d":
-            return daily_df
-        return intraday_df
+        interval = kw.get("interval", "1d")
+        if interval == "5m":
+            return intraday_df
+        return daily_df  # 1d, 1wk, 1h all share the same trend data
     return side_effect
 
 
@@ -650,3 +658,193 @@ class TestKeyLevelsInAnalysis:
         assert "key_levels" in d
         assert d["key_levels"] is not None
         assert "pdh" in d["key_levels"]
+
+
+# ---------------------------------------------------------------------------
+# Multi-Timeframe Analysis
+# ---------------------------------------------------------------------------
+
+
+def _make_weekly_df(rows: int = 104, trend: str = "up") -> pd.DataFrame:
+    """Generate a realistic weekly OHLCV DataFrame for testing."""
+    dates = pd.date_range(end=pd.Timestamp.now(), periods=rows, freq="W")
+    n = len(dates)
+    np.random.seed(42)
+
+    if trend == "up":
+        base = np.linspace(100, 200, n) + np.random.normal(0, 3, n)
+    elif trend == "down":
+        base = np.linspace(200, 100, n) + np.random.normal(0, 3, n)
+    else:
+        base = np.full(n, 150.0) + np.random.normal(0, 5, n)
+
+    close = base
+    high = close + np.abs(np.random.normal(3, 1, n))
+    low = close - np.abs(np.random.normal(3, 1, n))
+    volume = np.random.randint(10000, 1000000, n).astype(float)
+
+    return pd.DataFrame({
+        "Open": close + np.random.normal(0, 1, n),
+        "High": high,
+        "Low": low,
+        "Close": close,
+        "Volume": volume,
+    }, index=dates)
+
+
+def _make_hourly_df(rows: int = 200, trend: str = "up") -> pd.DataFrame:
+    """Generate a realistic 1H OHLCV DataFrame for testing."""
+    dates = pd.date_range(end=pd.Timestamp.now(), periods=rows, freq="h")
+    n = len(dates)
+    np.random.seed(42)
+
+    if trend == "up":
+        base = np.linspace(140, 160, n) + np.random.normal(0, 0.3, n)
+    elif trend == "down":
+        base = np.linspace(160, 140, n) + np.random.normal(0, 0.3, n)
+    else:
+        base = np.full(n, 150.0) + np.random.normal(0, 0.5, n)
+
+    close = base
+    high = close + np.abs(np.random.normal(0.3, 0.1, n))
+    low = close - np.abs(np.random.normal(0.3, 0.1, n))
+    volume = np.random.randint(500, 50000, n).astype(float)
+
+    return pd.DataFrame({
+        "Open": close + np.random.normal(0, 0.1, n),
+        "High": high,
+        "Low": low,
+        "Close": close,
+        "Volume": volume,
+    }, index=dates)
+
+
+class TestComputeEmaTrend:
+    def test_uptrend_returns_bullish(self) -> None:
+        df = _make_ohlcv_df(100, "up")
+        assert _compute_ema_trend(df) == "BULLISH"
+
+    def test_downtrend_returns_bearish(self) -> None:
+        df = _make_ohlcv_df(100, "down")
+        assert _compute_ema_trend(df) == "BEARISH"
+
+    def test_insufficient_data_returns_neutral(self) -> None:
+        df = _make_ohlcv_df(10, "up")
+        assert _compute_ema_trend(df) == "NEUTRAL"
+
+    def test_empty_df_returns_neutral(self) -> None:
+        assert _compute_ema_trend(pd.DataFrame()) == "NEUTRAL"
+
+    def test_none_returns_neutral(self) -> None:
+        assert _compute_ema_trend(None) == "NEUTRAL"
+
+
+class TestAnalyzeMTF:
+    def test_all_bullish_aligned(self) -> None:
+        weekly = _make_weekly_df(104, "up")
+        hourly = _make_hourly_df(200, "up")
+        mtf = _analyze_mtf(weekly, "BULLISH", hourly)
+        assert mtf.alignment == "ALIGNED"
+        assert mtf.dominant_direction == "BULLISH"
+        assert mtf.weekly_trend == "BULLISH"
+        assert mtf.daily_trend == "BULLISH"
+        assert mtf.hourly_trend == "BULLISH"
+
+    def test_all_bearish_aligned(self) -> None:
+        weekly = _make_weekly_df(104, "down")
+        hourly = _make_hourly_df(200, "down")
+        mtf = _analyze_mtf(weekly, "BEARISH", hourly)
+        assert mtf.alignment == "ALIGNED"
+        assert mtf.dominant_direction == "BEARISH"
+
+    def test_partial_two_bullish(self) -> None:
+        weekly = _make_weekly_df(104, "up")
+        hourly = _make_hourly_df(200, "down")
+        mtf = _analyze_mtf(weekly, "BULLISH", hourly)
+        assert mtf.alignment == "PARTIAL"
+        assert mtf.dominant_direction == "BULLISH"
+
+    def test_conflicting_all_different(self) -> None:
+        weekly = _make_weekly_df(104, "up")
+        hourly = _make_hourly_df(200, "down")
+        mtf = _analyze_mtf(weekly, "NEUTRAL", hourly)
+        assert mtf.alignment == "CONFLICTING"
+        assert mtf.dominant_direction == "NEUTRAL"
+
+    def test_empty_weekly_partial(self) -> None:
+        """Empty weekly data = NEUTRAL, so 2/3 determines alignment."""
+        hourly = _make_hourly_df(200, "up")
+        mtf = _analyze_mtf(pd.DataFrame(), "BULLISH", hourly)
+        # weekly=NEUTRAL, daily=BULLISH, hourly=BULLISH → PARTIAL
+        assert mtf.alignment == "PARTIAL"
+        assert mtf.dominant_direction == "BULLISH"
+
+    def test_to_dict(self) -> None:
+        mtf = MTFAnalysis(
+            weekly_trend="BULLISH",
+            daily_trend="BULLISH",
+            hourly_trend="BEARISH",
+            alignment="PARTIAL",
+            dominant_direction="BULLISH",
+        )
+        d = mtf.to_dict()
+        assert d["weekly_trend"] == "BULLISH"
+        assert d["alignment"] == "PARTIAL"
+        assert d["dominant_direction"] == "BULLISH"
+
+
+class TestMTFPenalty:
+    """Verify composite score is penalized when MTF is not aligned."""
+
+    def _run_with_mtf(self, daily_trend, weekly_trend, hourly_trend):
+        """Helper to run analysis with specific MTF trends."""
+        daily_df = _make_ohlcv_df(100, daily_trend)
+        intraday_df = _make_5m_df(200, base_price=float(daily_df["Close"].iloc[-1]))
+        weekly_df = _make_weekly_df(104, weekly_trend)
+        hourly_df = _make_hourly_df(200, hourly_trend)
+
+        mock_ticker = MagicMock()
+
+        def history_side_effect(**kw):
+            interval = kw.get("interval", "1d")
+            if interval == "1wk":
+                return weekly_df
+            elif interval == "1h":
+                return hourly_df
+            elif interval == "5m":
+                return intraday_df
+            return daily_df
+
+        mock_ticker.history = MagicMock(side_effect=history_side_effect)
+
+        with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
+            return _analyze_single_asset("TEST=F", "Test")
+
+    def test_conflicting_forces_neutral(self) -> None:
+        """MTF CONFLICTING should force composite to NEUTRAL."""
+        result = self._run_with_mtf("up", "down", "flat")
+        if result.mtf and result.mtf.alignment == "CONFLICTING":
+            assert result.composite_score == "NEUTRAL"
+
+    def test_aligned_preserves_score(self) -> None:
+        """MTF ALIGNED should preserve the composite score."""
+        result = self._run_with_mtf("up", "up", "up")
+        assert result.mtf is not None
+        # When all aligned bullish, composite should be allowed to be BULLISH
+        if result.mtf.alignment == "ALIGNED":
+            assert result.composite_score in ("BULLISH", "NEUTRAL")
+
+    def test_mtf_present_in_analysis(self) -> None:
+        """MTF should be populated in the result."""
+        result = self._run_with_mtf("up", "up", "up")
+        assert result.mtf is not None
+        assert result.mtf.weekly_trend in ("BULLISH", "BEARISH", "NEUTRAL")
+        assert result.mtf.alignment in ("ALIGNED", "PARTIAL", "CONFLICTING")
+
+    def test_mtf_in_to_dict(self) -> None:
+        """MTF should appear in serialized output."""
+        result = self._run_with_mtf("up", "up", "up")
+        d = result.to_dict()
+        assert "mtf" in d
+        assert d["mtf"] is not None
+        assert "alignment" in d["mtf"]

@@ -45,6 +45,7 @@ _TD_INTERVAL_MAP: dict[str, str] = {
     "5m": "5min",
     "15m": "15min",
     "1h": "1h",
+    "1wk": "1week",
 }
 
 
@@ -104,6 +105,25 @@ class KeyLevels:
 
 
 @dataclass
+class MTFAnalysis:
+    """Multi-timeframe trend alignment analysis."""
+    weekly_trend: str = "NEUTRAL"
+    daily_trend: str = "NEUTRAL"
+    hourly_trend: str = "NEUTRAL"
+    alignment: str = "CONFLICTING"  # ALIGNED, PARTIAL, CONFLICTING
+    dominant_direction: str = "NEUTRAL"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "weekly_trend": self.weekly_trend,
+            "daily_trend": self.daily_trend,
+            "hourly_trend": self.hourly_trend,
+            "alignment": self.alignment,
+            "dominant_direction": self.dominant_direction,
+        }
+
+
+@dataclass
 class AssetAnalysis:
     """Complete technical analysis for one asset."""
     symbol: str
@@ -115,6 +135,7 @@ class AssetAnalysis:
     confidence_pct: float = 50.0
     data_source: str = "yfinance"
     key_levels: KeyLevels | None = None
+    mtf: MTFAnalysis | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,6 +149,7 @@ class AssetAnalysis:
             "confidence_pct": self.confidence_pct,
             "data_source": self.data_source,
             "key_levels": self.key_levels.to_dict() if self.key_levels else None,
+            "mtf": self.mtf.to_dict() if self.mtf else None,
             "error": self.error,
         }
 
@@ -298,6 +320,46 @@ def _fetch_intraday(symbol: str) -> tuple[pd.DataFrame, str]:
     return pd.DataFrame(), "none"
 
 
+def _fetch_weekly(symbol: str) -> tuple[pd.DataFrame, str]:
+    """Fetch weekly data, trying yfinance first then Twelve Data.
+
+    Returns (dataframe, source_name). Needs ~52+ bars for EMA50.
+    """
+    try:
+        df = _fetch_with_retry(symbol, period="2y", interval="1wk")
+        if df is not None and not df.empty:
+            return df, "yfinance"
+    except Exception as exc:
+        logger.warning("yfinance weekly failed for %s: %s", symbol, exc)
+
+    df = _fetch_twelvedata(symbol, interval="1wk", outputsize=104)
+    if df is not None and not df.empty:
+        logger.info("Using Twelve Data fallback for %s (weekly)", symbol)
+        return df, "twelvedata"
+
+    return pd.DataFrame(), "none"
+
+
+def _fetch_hourly(symbol: str) -> tuple[pd.DataFrame, str]:
+    """Fetch 1-hour data, trying yfinance first then Twelve Data.
+
+    Returns (dataframe, source_name). Needs ~50+ bars for EMA50.
+    """
+    try:
+        df = _fetch_with_retry(symbol, period="30d", interval="1h")
+        if df is not None and not df.empty:
+            return df, "yfinance"
+    except Exception as exc:
+        logger.warning("yfinance 1h failed for %s: %s", symbol, exc)
+
+    df = _fetch_twelvedata(symbol, interval="1h", outputsize=200)
+    if df is not None and not df.empty:
+        logger.info("Using Twelve Data fallback for %s (1h)", symbol)
+        return df, "twelvedata"
+
+    return pd.DataFrame(), "none"
+
+
 # ---------------------------------------------------------------------------
 # Key Levels (Support / Resistance)
 # ---------------------------------------------------------------------------
@@ -382,6 +444,80 @@ def _compute_key_levels(df_daily: pd.DataFrame, current_price: float) -> KeyLeve
 
 
 # ---------------------------------------------------------------------------
+# Multi-Timeframe Analysis
+# ---------------------------------------------------------------------------
+
+def _compute_ema_trend(df: pd.DataFrame, min_bars: int = 50) -> str:
+    """Compute trend direction from EMA20/EMA50 on any timeframe.
+
+    Returns "BULLISH", "BEARISH", or "NEUTRAL".
+    """
+    if df is None or df.empty or len(df) < min_bars:
+        return "NEUTRAL"
+    try:
+        ema20 = ta.ema(df["Close"], length=20)
+        ema50 = ta.ema(df["Close"], length=50)
+        if ema20 is None or ema50 is None or ema20.empty or ema50.empty:
+            return "NEUTRAL"
+        e20 = float(ema20.iloc[-1])
+        e50 = float(ema50.iloc[-1])
+        if e20 > e50:
+            return "BULLISH"
+        elif e20 < e50:
+            return "BEARISH"
+        return "NEUTRAL"
+    except Exception:
+        return "NEUTRAL"
+
+
+def _analyze_mtf(
+    df_weekly: pd.DataFrame,
+    daily_trend: str,
+    df_hourly: pd.DataFrame,
+) -> MTFAnalysis:
+    """Compute multi-timeframe trend alignment.
+
+    Args:
+        df_weekly: Weekly OHLCV data.
+        daily_trend: Already-computed daily EMA trend label.
+        df_hourly: 1-hour OHLCV data.
+
+    Returns:
+        MTFAnalysis with alignment assessment.
+    """
+    weekly = _compute_ema_trend(df_weekly)
+    hourly = _compute_ema_trend(df_hourly)
+
+    trends = [weekly, daily_trend, hourly]
+    bullish = trends.count("BULLISH")
+    bearish = trends.count("BEARISH")
+
+    if bullish == 3:
+        alignment = "ALIGNED"
+        dominant = "BULLISH"
+    elif bearish == 3:
+        alignment = "ALIGNED"
+        dominant = "BEARISH"
+    elif bullish >= 2:
+        alignment = "PARTIAL"
+        dominant = "BULLISH"
+    elif bearish >= 2:
+        alignment = "PARTIAL"
+        dominant = "BEARISH"
+    else:
+        alignment = "CONFLICTING"
+        dominant = "NEUTRAL"
+
+    return MTFAnalysis(
+        weekly_trend=weekly,
+        daily_trend=daily_trend,
+        hourly_trend=hourly,
+        alignment=alignment,
+        dominant_direction=dominant,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Technical analysis
 # ---------------------------------------------------------------------------
 
@@ -392,6 +528,10 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
 
     # 5-minute data for intraday context
     df_5m, _ = _fetch_intraday(symbol)
+
+    # Weekly and hourly data for multi-timeframe analysis
+    df_weekly, _ = _fetch_weekly(symbol)
+    df_hourly, _ = _fetch_hourly(symbol)
 
     current_price = float(df_daily["Close"].iloc[-1])
     prev_close = float(df_daily["Close"].iloc[-2]) if len(df_daily) >= 2 else current_price
@@ -614,6 +754,35 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         composite = "NEUTRAL"
         confidence = 50.0
 
+    # --- Multi-Timeframe Analysis ---
+    mtf = None
+    try:
+        ema_signal = next((s for s in signals if s.name == "EMA_TREND"), None)
+        daily_trend = ema_signal.label if ema_signal else "NEUTRAL"
+        mtf = _analyze_mtf(df_weekly, daily_trend, df_hourly)
+
+        # Apply MTF penalty to composite score
+        if mtf.alignment == "CONFLICTING" and composite != "NEUTRAL":
+            logger.info(
+                "%s: MTF CONFLICTING — forcing composite %s → NEUTRAL",
+                symbol, composite,
+            )
+            composite = "NEUTRAL"
+            confidence = 50.0
+        elif mtf.alignment == "PARTIAL":
+            if composite != "NEUTRAL" and composite != mtf.dominant_direction:
+                logger.info(
+                    "%s: MTF PARTIAL (%s) contradicts composite %s → NEUTRAL",
+                    symbol, mtf.dominant_direction, composite,
+                )
+                composite = "NEUTRAL"
+                confidence = 50.0
+            elif composite != "NEUTRAL":
+                # Partial alignment in same direction: reduce confidence
+                confidence = max(confidence - 15, 50.0)
+    except Exception as exc:
+        logger.warning("MTF analysis failed for %s: %s", symbol, exc)
+
     # --- Key Levels ---
     try:
         key_levels = _compute_key_levels(df_daily, current_price)
@@ -631,6 +800,7 @@ def _analyze_single_asset(symbol: str, display_name: str) -> AssetAnalysis:
         confidence_pct=round(confidence, 1),
         data_source=daily_source,
         key_levels=key_levels,
+        mtf=mtf,
     )
 
 
