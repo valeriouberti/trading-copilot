@@ -870,8 +870,8 @@ class TestDetectCandlePattern:
             "Low": [99, 97, 97],
             "Close": [102, 99, 106],  # last wraps prev body (99→105)
         }, index=dates)
-        assert _detect_candle_pattern(df, "BULLISH") is True
-        assert _detect_candle_pattern(df, "BEARISH") is False
+        assert _detect_candle_pattern(df, "BULLISH") == "ENGULFING"
+        assert _detect_candle_pattern(df, "BEARISH") is None
 
     def test_bearish_engulfing(self) -> None:
         """Bearish engulfing: prev green, current red wrapping prev body."""
@@ -882,8 +882,8 @@ class TestDetectCandlePattern:
             "Low": [99, 97, 97],
             "Close": [102, 105, 97],  # last wraps prev body (105→98)
         }, index=dates)
-        assert _detect_candle_pattern(df, "BEARISH") is True
-        assert _detect_candle_pattern(df, "BULLISH") is False
+        assert _detect_candle_pattern(df, "BEARISH") == "ENGULFING"
+        assert _detect_candle_pattern(df, "BULLISH") is None
 
     def test_bullish_pin_bar(self) -> None:
         """Bullish pin bar: long lower wick relative to body."""
@@ -894,7 +894,7 @@ class TestDetectCandlePattern:
             "Low": [99, 99, 96.0],     # lower_wick = 99.5-96=3.5, body=0.5, upper=0.2
             "Close": [100.5, 100.5, 100.0],
         }, index=dates)
-        assert _detect_candle_pattern(df, "BULLISH") is True
+        assert _detect_candle_pattern(df, "BULLISH") == "PIN_BAR"
 
     def test_bearish_pin_bar(self) -> None:
         """Bearish pin bar: long upper wick relative to body."""
@@ -905,7 +905,7 @@ class TestDetectCandlePattern:
             "Low": [99, 99, 99.8],
             "Close": [100.5, 100.5, 100.0],
         }, index=dates)
-        assert _detect_candle_pattern(df, "BEARISH") is True
+        assert _detect_candle_pattern(df, "BEARISH") == "PIN_BAR"
 
     def test_no_pattern(self) -> None:
         """No special pattern detected."""
@@ -913,12 +913,12 @@ class TestDetectCandlePattern:
         # Most bars in a flat series won't form engulfing/pin bar
         # At least test that it doesn't crash
         result = _detect_candle_pattern(df, "NEUTRAL")
-        assert isinstance(result, bool)
+        assert result is None or isinstance(result, str)
 
     def test_insufficient_data(self) -> None:
-        """Should return False with < 2 bars."""
+        """Should return None with < 2 bars."""
         df = _make_ohlcv_df(1, "up")
-        assert _detect_candle_pattern(df, "BULLISH") is False
+        assert _detect_candle_pattern(df, "BULLISH") is None
 
 
 class TestComputeQualityScore:
