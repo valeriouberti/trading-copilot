@@ -95,6 +95,8 @@ class BacktestResult:
     expectancy: float = 0.0
     equity_curve: list[float] = field(default_factory=list)
 
+    kelly_fraction: float = 0.0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "total_trades": self.total_trades,
@@ -105,6 +107,7 @@ class BacktestResult:
             "total_pnl": round(self.total_pnl, 4),
             "avg_trade": round(self.avg_trade, 4),
             "expectancy": round(self.expectancy, 4),
+            "kelly_fraction": round(self.kelly_fraction, 4),
             "equity_curve_len": len(self.equity_curve),
             "trades": [t.to_dict() for t in self.trades],
         }
@@ -506,7 +509,99 @@ def compute_statistics(trades: list[Trade]) -> BacktestResult:
     loss_r = len(losers) / len(pnls) if pnls else 0.0
     result.expectancy = (win_r * avg_win) - (loss_r * avg_loss)
 
+    # Kelly criterion
+    result.kelly_fraction = kelly_position_size(win_r, avg_win, avg_loss)
+
     return result
+
+
+def kelly_position_size(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """Compute the half-Kelly position size fraction.
+
+    Kelly fraction = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+
+    The result is capped at half-Kelly (max 0.5) for safety and floored at 0.
+
+    Parameters
+    ----------
+    win_rate : float
+        Probability of winning (0-1).
+    avg_win : float
+        Average winning trade PnL (positive).
+    avg_loss : float
+        Average losing trade PnL (positive magnitude).
+
+    Returns
+    -------
+    float
+        Kelly fraction between 0.0 and 0.5.
+    """
+    if avg_win <= 0 or win_rate <= 0:
+        return 0.0
+
+    kelly = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+    # Half-Kelly for safety, capped at 0.5, floored at 0
+    half_kelly = kelly / 2.0
+    return max(0.0, min(0.5, half_kelly))
+
+
+def monte_carlo(
+    trades: list[Trade],
+    n_simulations: int = 1000,
+) -> dict[str, float]:
+    """Run Monte Carlo simulation by randomly permuting trade PnL sequences.
+
+    Shuffles the order of trade PnLs *n_simulations* times and computes
+    final equity and max drawdown for each permutation to give confidence
+    intervals on backtest results.
+
+    Parameters
+    ----------
+    trades : list[Trade]
+        List of trades (must have ``.pnl`` attribute).
+    n_simulations : int
+        Number of random permutations (default 1000).
+
+    Returns
+    -------
+    dict
+        Keys: ``median_final``, ``p5_final``, ``p95_final``,
+        ``median_max_drawdown``.
+    """
+    if not trades:
+        return {
+            "median_final": 0.0,
+            "p5_final": 0.0,
+            "p95_final": 0.0,
+            "median_max_drawdown": 0.0,
+        }
+
+    pnls = np.array([t.pnl for t in trades])
+    n = len(pnls)
+
+    finals = np.empty(n_simulations)
+    max_dds = np.empty(n_simulations)
+
+    rng = np.random.default_rng()
+
+    for i in range(n_simulations):
+        shuffled = rng.permutation(pnls)
+        equity = np.cumsum(shuffled)
+        finals[i] = equity[-1]
+
+        # Max drawdown
+        peak = np.maximum.accumulate(equity)
+        # Avoid division by zero: use absolute drawdown when peak is 0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dd = np.where(peak > 0, (peak - equity) / peak, np.abs(equity))
+        max_dds[i] = float(np.max(dd)) if len(dd) > 0 else 0.0
+
+    return {
+        "median_final": round(float(np.median(finals)), 4),
+        "p5_final": round(float(np.percentile(finals, 5)), 4),
+        "p95_final": round(float(np.percentile(finals, 95)), 4),
+        "median_max_drawdown": round(float(np.median(max_dds)), 4),
+    }
 
 
 # ---------------------------------------------------------------------------

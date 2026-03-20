@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.api import analysis as analysis_router
+from app.api import analytics_api as analytics_router
 from app.api import assets as assets_router
 from app.api import health as health_router
 from app.api import monitor as monitor_router
@@ -129,6 +130,7 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 app.include_router(health_router.router, prefix="/api", tags=["health"])
 app.include_router(assets_router.router, prefix="/api", tags=["assets"])
 app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
+app.include_router(analytics_router.router, prefix="/api", tags=["analytics"])
 app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(monitor_router.router, prefix="/api", tags=["monitor"])
 app.include_router(trades_router.router, prefix="/api", tags=["trades"])

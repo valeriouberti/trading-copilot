@@ -599,10 +599,15 @@ def _analyze_mtf(
 # ---------------------------------------------------------------------------
 
 
-def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
-    """Detect engulfing or pin bar pattern on the last daily candle."""
+def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> str | None:
+    """Detect candle patterns on the last daily candle.
+
+    Returns a string label: "ENGULFING", "PIN_BAR", "INSIDE_BAR", or None.
+    The return value is truthy when a pattern is detected (backward-compatible
+    with the previous bool return).
+    """
     if len(df_daily) < 2:
-        return False
+        return None
 
     last = df_daily.iloc[-1]
     prev = df_daily.iloc[-2]
@@ -611,8 +616,15 @@ def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
     lower_wick = min(float(last["Close"]), float(last["Open"])) - float(last["Low"])
     total_range = float(last["High"]) - float(last["Low"])
 
+    # Inside bar: high < prev high AND low > prev low
+    if (
+        float(last["High"]) < float(prev["High"])
+        and float(last["Low"]) > float(prev["Low"])
+    ):
+        return "INSIDE_BAR"
+
     if total_range <= 0 or body <= 0:
-        return False
+        return None
 
     # Bullish engulfing
     if (
@@ -622,7 +634,7 @@ def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
         and float(last["Close"]) > float(prev["Open"])
         and float(last["Open"]) < float(prev["Close"])
     ):
-        return True
+        return "ENGULFING"
 
     # Bearish engulfing
     if (
@@ -632,17 +644,17 @@ def _detect_candle_pattern(df_daily: pd.DataFrame, direction: str) -> bool:
         and float(last["Close"]) < float(prev["Open"])
         and float(last["Open"]) > float(prev["Close"])
     ):
-        return True
+        return "ENGULFING"
 
     # Bullish pin bar (long lower wick)
     if direction == "BULLISH" and lower_wick > body * 2 and lower_wick > upper_wick * 2:
-        return True
+        return "PIN_BAR"
 
     # Bearish pin bar (long upper wick)
     if direction == "BEARISH" and upper_wick > body * 2 and upper_wick > lower_wick * 2:
-        return True
+        return "PIN_BAR"
 
-    return False
+    return None
 
 
 def _compute_quality_score(
@@ -1204,6 +1216,87 @@ def filter_correlated_assets(
                     skip.add(sym_a)
 
     return list(skip)
+
+
+# ---------------------------------------------------------------------------
+# Intermarket analysis
+# ---------------------------------------------------------------------------
+
+# Known intermarket relationships (inverse correlations)
+_INTERMARKET_PAIRS: list[tuple[str, str, str]] = [
+    # (symbol_a_pattern, symbol_b_pattern, relationship_description)
+    # DXY (US Dollar) inverse to Gold
+    ("DX", "GC", "DXY/Gold inverse"),
+    # Yields inverse to Equities (simplified: TNX/TLT vs SPY/ES/NQ)
+    ("TNX", "ES", "Yields/Equities inverse"),
+    ("TNX", "NQ", "Yields/Equities inverse"),
+    ("TLT", "ES", "Bonds/Equities inverse"),
+    ("TLT", "NQ", "Bonds/Equities inverse"),
+]
+
+
+def _match_symbol(analysis_symbol: str, pattern: str) -> bool:
+    """Check if an analysis symbol matches an intermarket pattern."""
+    return pattern in analysis_symbol.upper()
+
+
+def compute_intermarket_signals(analyses: list[AssetAnalysis]) -> list[str]:
+    """Check for known intermarket divergences across analysed assets.
+
+    Takes a list of AssetAnalysis objects and checks for known inverse
+    relationships (e.g. DXY vs Gold, Yields vs Equities). Returns
+    informational warning strings when a divergence is detected.
+
+    This is purely informational and does not block signals.
+
+    Args:
+        analyses: List of AssetAnalysis objects from analyze_assets().
+
+    Returns:
+        List of warning strings describing detected divergences.
+    """
+    if not analyses or len(analyses) < 2:
+        return []
+
+    warnings: list[str] = []
+    by_symbol: dict[str, AssetAnalysis] = {
+        a.symbol: a for a in analyses if a.error is None and a.composite_score != "NEUTRAL"
+    }
+
+    for pattern_a, pattern_b, desc in _INTERMARKET_PAIRS:
+        matches_a = [
+            (sym, a) for sym, a in by_symbol.items()
+            if _match_symbol(sym, pattern_a)
+        ]
+        matches_b = [
+            (sym, b) for sym, b in by_symbol.items()
+            if _match_symbol(sym, pattern_b)
+        ]
+
+        for sym_a, a in matches_a:
+            for sym_b, b in matches_b:
+                # Divergence: both in the same direction when they should be inverse
+                if a.composite_score == b.composite_score:
+                    warnings.append(
+                        f"{desc}: {sym_a} {a.composite_score} + "
+                        f"{sym_b} {b.composite_score} -> divergence warning"
+                    )
+                # Also flag if the expected-inverse asset contradicts the signal
+                # e.g. DXY strong BULLISH + Gold LONG
+                if a.composite_score == "BULLISH" and b.composite_score == "BULLISH":
+                    warnings.append(
+                        f"{sym_a} strong + {sym_b} LONG -> {desc} divergence warning"
+                    )
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for w in warnings:
+        if w not in seen:
+            seen.add(w)
+            unique.append(w)
+
+    return unique
 
 
 if __name__ == "__main__":
