@@ -82,6 +82,73 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+.action-plan {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+}
+.action-plan.plan-go {
+    border-color: rgba(63, 185, 80, 0.4);
+    background: linear-gradient(135deg, rgba(63,185,80,0.03) 0%, var(--bg-card) 100%);
+}
+.action-plan.plan-short {
+    border-color: rgba(248, 81, 73, 0.4);
+    background: linear-gradient(135deg, rgba(248,81,73,0.03) 0%, var(--bg-card) 100%);
+}
+.action-plan.plan-skip {
+    border-color: var(--border);
+}
+.action-plan h3 {
+    margin: 0 0 12px 0;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.action-step {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    line-height: 1.5;
+}
+.action-step:last-child { border-bottom: none; }
+.step-num {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.plan-skip .step-num { background: var(--text-muted); }
+.step-text { color: var(--text-primary); }
+.step-text strong { color: var(--accent-blue); }
+.step-text .val {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-weight: 700;
+}
+.step-text .val-entry { color: var(--accent-blue); }
+.step-text .val-sl { color: var(--accent-red); }
+.step-text .val-tp { color: var(--accent-green); }
+.action-warn {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(210, 153, 34, 0.08);
+    border: 1px solid rgba(210, 153, 34, 0.2);
+    color: var(--accent-yellow);
+    font-size: 12px;
+    line-height: 1.5;
+}
 .live-badge {
     display: inline-flex;
     align-items: center;
@@ -161,6 +228,9 @@
 
 <!-- Setup box (hidden until analysis runs) -->
 <div id="setup-box" class="setup-box" style="display:none;"></div>
+
+<!-- Action Plan (hidden until analysis runs) -->
+<div id="action-plan" class="action-plan" style="display:none;"></div>
 
 <!-- Main grid -->
 <div class="detail-grid">
@@ -315,6 +385,7 @@ async function runAnalysis() {
 function renderAnalysis(data) {
     renderChart(data);
     renderSetupBox(data);
+    renderActionPlan(data);
     renderRegime(data);
     renderSentiment(data);
     renderTechnicals(data);
@@ -575,6 +646,134 @@ function renderSetupBox(data) {
             <span>ATR ${fmt(s.atr)}</span>
         </div>
     `;
+}
+
+function renderActionPlan(data) {
+    const plan = document.getElementById("action-plan");
+    const s = data.setup;
+    const regime = data.regime || "NEUTRAL";
+    const tech = data.analysis && data.analysis.technicals;
+    const qs = tech && tech.quality_score ? tech.quality_score.total : 0;
+    const mtf = tech && tech.mtf ? tech.mtf.alignment : null;
+    const composite = tech ? tech.composite_score : "NEUTRAL";
+    const sentiment = data.sentiment;
+    const calendar = data.calendar;
+    const poly = data.polymarket;
+    const displayName = data.display_name || SYMBOL;
+    const price = data.analysis && data.analysis.price ? data.analysis.price.current : null;
+
+    plan.style.display = "block";
+
+    // ── NOT TRADEABLE ──
+    if (!s || !s.tradeable) {
+        plan.className = "action-plan plan-skip";
+        let reasons = [];
+
+        if (regime === "NEUTRAL") {
+            reasons.push("The market regime is <strong>NEUTRAL</strong> — there is no clear directional bias. The system requires a LONG or SHORT regime to generate a trade.");
+        } else if (s && s.reason) {
+            reasons.push(`Signal blocked: <strong>${s.reason}</strong>.`);
+        }
+
+        if (qs < 4) {
+            reasons.push(`Quality Score is <strong>${qs}/5</strong> (minimum 4 required). Missing conditions reduce confidence in the setup.`);
+        }
+
+        if (mtf && mtf !== "ALIGNED") {
+            reasons.push(`Multi-timeframe alignment is <strong>${mtf}</strong>. Weekly, daily, and hourly trends are not all pointing in the same direction.`);
+        }
+
+        if (composite === "NEUTRAL") {
+            reasons.push("The composite indicator score is <strong>NEUTRAL</strong> — technical indicators are mixed, with no clear directional consensus.");
+        }
+
+        let steps = reasons.map((r, i) => `<div class="action-step"><span class="step-num">${i+1}</span><span class="step-text">${r}</span></div>`).join('');
+
+        let action = "Stay flat. Do not force a trade.";
+        if (regime !== "NEUTRAL" && qs < 4) {
+            action = `The regime favours <strong>${regime}</strong>, but quality is too low. Wait for a higher-quality setup to form.`;
+        }
+
+        plan.innerHTML = `
+            <h3>Action Plan — <span style="color:var(--text-muted);">No Trade</span></h3>
+            ${steps}
+            <div class="action-step">
+                <span class="step-num" style="background:var(--accent-yellow);">!</span>
+                <span class="step-text"><strong>${action}</strong></span>
+            </div>
+        `;
+        return;
+    }
+
+    // ── TRADEABLE ──
+    const dir = s.direction;
+    const isLong = dir === "LONG";
+    const planClass = isLong ? "plan-go" : "plan-short";
+    const verb = isLong ? "Buy" : "Sell";
+    const exitVerb = isLong ? "sell" : "buy back";
+    const slSide = isLong ? "below" : "above";
+    const tpSide = isLong ? "above" : "below";
+
+    plan.className = `action-plan ${planClass}`;
+
+    let steps = [];
+
+    // Step 1 — Direction & Entry
+    steps.push(`<strong>${verb} ${displayName}</strong> at market price around <span class="val val-entry">${fmt(s.entry_price)}</span>. The regime is <strong>${regime}</strong>, composite score is <strong>${composite}</strong>, and ${qs}/5 quality conditions are met.`);
+
+    // Step 2 — Stop Loss
+    steps.push(`Place your <strong>stop loss</strong> at <span class="val val-sl">${fmt(s.stop_loss)}</span> (${fmt(s.sl_distance)} points ${slSide} entry). This is based on ${s.sl_multiplier || '1.5'}x ATR (${fmt(s.atr)}). If price hits this level, exit immediately — the thesis is invalidated.`);
+
+    // Step 3 — Take Profit
+    steps.push(`Set your <strong>take profit</strong> at <span class="val val-tp">${fmt(s.take_profit)}</span> (${fmt(s.tp_distance)} points ${tpSide} entry). Risk-to-reward ratio is <strong>${s.risk_reward}</strong>. When price reaches TP, ${exitVerb} and close the position.`);
+
+    // Step 4 — MTF context
+    if (mtf) {
+        const mtfData = tech.mtf;
+        steps.push(`Multi-timeframe alignment is <strong>${mtf}</strong>. Weekly trend: ${mtfData.weekly_trend}, Daily: ${mtfData.daily_trend}, Hourly: ${mtfData.hourly_trend}. ${mtf === "ALIGNED" ? "All timeframes confirm the direction — higher conviction." : "Not all timeframes agree — manage with tighter risk."}`);
+    }
+
+    // Step 5 — Sentiment / Polymarket context
+    let context = [];
+    if (sentiment && sentiment.score !== undefined) {
+        const sentDir = sentiment.score > 0 ? "bullish" : sentiment.score < 0 ? "bearish" : "neutral";
+        const agrees = (isLong && sentiment.score > 0) || (!isLong && sentiment.score < 0);
+        context.push(`News sentiment is <strong>${sentDir}</strong> (${sentiment.score > 0 ? '+' : ''}${sentiment.score.toFixed(1)})${agrees ? ' — confirms the trade direction' : ' — watch for conflicting headlines'}.`);
+    }
+    if (poly && poly.signal) {
+        const agrees = (isLong && poly.signal === "BULLISH") || (!isLong && poly.signal === "BEARISH");
+        context.push(`Polymarket prediction markets signal <strong>${poly.signal}</strong> (${poly.confidence}% confidence)${agrees ? ' — aligns with the trade' : ' — diverges from the trade, exercise caution'}.`);
+    }
+    if (context.length > 0) {
+        steps.push(context.join(' '));
+    }
+
+    // Step 6 — Execution
+    steps.push(`Once in the trade, <strong>do not move your stop loss</strong>. Let the trade play out to either SL or TP. If you must intervene, only ${exitVerb} early if the regime changes to ${isLong ? 'SHORT' : 'LONG'} or a high-impact economic event is imminent.`);
+
+    let html = `<h3>Action Plan — <span style="color:${isLong ? 'var(--accent-green)' : 'var(--accent-red)'};">${dir} ${displayName}</span></h3>`;
+    html += steps.map((step, i) => `<div class="action-step"><span class="step-num">${i+1}</span><span class="step-text">${step}</span></div>`).join('');
+
+    // Warnings
+    let warnings = [];
+    if (calendar && calendar.events_today && calendar.events_today.length > 0) {
+        const soon = calendar.events_today.filter(e => e.hours_away !== null && e.hours_away <= 2);
+        if (soon.length > 0) {
+            warnings.push(`High-impact event in < 2 hours: <strong>${soon[0].title}</strong>. Consider waiting until after the release or reducing position size.`);
+        }
+    }
+    if (qs === 4) {
+        warnings.push("Quality Score is 4/5 — borderline. A score of 5/5 would give higher conviction.");
+    }
+    if (poly && poly.signal && ((isLong && poly.signal === "BEARISH") || (!isLong && poly.signal === "BULLISH"))) {
+        warnings.push("Polymarket signal conflicts with the trade direction. Prediction markets see the opposite outcome — consider reducing size.");
+    }
+
+    if (warnings.length > 0) {
+        html += warnings.map(w => `<div class="action-warn">${w}</div>`).join('');
+    }
+
+    plan.innerHTML = html;
 }
 
 function renderRegime(data) {

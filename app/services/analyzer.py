@@ -336,8 +336,8 @@ def _compute_setup(
     symbol = getattr(analysis, "symbol", "")
     _FOREX_SYMS = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD"}
     _COMMODITY_SYMS = {"GC", "SI", "CL", "NG"}
-    _INDEX_SYMS = {"NQ", "ES", "YM", "RTY"}
-    sym_base = symbol.replace("=F", "").replace("=X", "")
+    _INDEX_SYMS = {"NQ", "ES", "YM", "RTY", "GSPC", "SPX", "IXIC"}
+    sym_base = symbol.replace("=F", "").replace("=X", "").lstrip("^")
     if sym_base in _FOREX_SYMS:
         asset_class = "forex"
     elif sym_base in _COMMODITY_SYMS:
