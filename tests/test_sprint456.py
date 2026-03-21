@@ -1,8 +1,12 @@
-"""Tests for Sprint 4, 5, and 6 features."""
+"""Tests for Sprint 4, 5, and 6 features.
+
+Tests active production code only. Deprecated backtester tests (WalkForward,
+KellyPositionSize, MonteCarlo) were removed when modules/backtester.py was
+deleted in favour of modules/vbt_backtester.py.
+"""
 
 from __future__ import annotations
 
-import math
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,30 +22,10 @@ import pytest
 class TestAdaptiveWeights:
     """Test that composite score uses ADX-adaptive weighting."""
 
-    def _make_signals(self, adx_value: float, labels: dict[str, str]):
-        """Create a list of TechnicalSignal objects for testing."""
-        from modules.price_data import TechnicalSignal
-
-        signals = []
-        for name, label in labels.items():
-            signals.append(TechnicalSignal(name, 50.0, label, f"{name} test"))
-        signals.append(TechnicalSignal("ADX", adx_value, "NEUTRAL", f"ADX {adx_value}"))
-        signals.append(TechnicalSignal("ATR", 2.0, "NEUTRAL", "ATR test"))
-        return signals
-
     def test_trending_regime_favors_momentum(self) -> None:
         """When ADX > 25, momentum indicators (MACD, EMA_TREND) get 1.5x weight."""
-        # With ADX > 25 (trending), momentum gets boosted
-        # 4 momentum-aligned + 2 mean-reversion-against should still be BULLISH
-        # because momentum has 1.5x weight
         from modules.price_data import TechnicalSignal
 
-        # MACD=BULLISH (momentum, 1.5x), EMA_TREND=BULLISH (momentum, 1.5x),
-        # RSI=BEARISH (mean-rev, 0.7x), BBANDS=BEARISH (mean-rev, 0.7x),
-        # VWAP=BULLISH (neutral, 1.0x), STOCH=BEARISH (neutral, 1.0x)
-        # bullish_weight = 1.5 + 1.5 + 1.0 = 4.0
-        # total_weight = 1.5 + 1.5 + 0.7 + 0.7 + 1.0 + 1.0 = 6.4
-        # 4.0 / 6.4 = 0.625 >= 0.6 threshold -> BULLISH
         signals = [
             TechnicalSignal("MACD", 1.0, "BULLISH", "MACD bullish"),
             TechnicalSignal("EMA_TREND", 100.0, "BULLISH", "EMA bullish"),
@@ -52,12 +36,10 @@ class TestAdaptiveWeights:
             TechnicalSignal("ADX", 30.0, "NEUTRAL", "ADX 30"),
             TechnicalSignal("ATR", 2.0, "NEUTRAL", "ATR"),
         ]
-        # Simulate the composite logic inline to verify
         momentum_names = {"MACD", "EMA_TREND"}
         mean_reversion_names = {"RSI", "BBANDS"}
         directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
 
-        adx_value = 30.0
         momentum_weight = 1.5
         mean_rev_weight = 0.7
 
@@ -84,12 +66,6 @@ class TestAdaptiveWeights:
         """When ADX < 20, mean-reversion indicators (RSI, BBANDS) get 1.5x weight."""
         from modules.price_data import TechnicalSignal
 
-        # RSI=BULLISH (mean-rev, 1.5x), BBANDS=BULLISH (mean-rev, 1.5x),
-        # MACD=BEARISH (momentum, 0.7x), EMA_TREND=BEARISH (momentum, 0.7x),
-        # VWAP=BULLISH (neutral, 1.0x), STOCH=BEARISH (neutral, 1.0x)
-        # bullish_weight = 1.5 + 1.5 + 1.0 = 4.0
-        # total = 1.5 + 1.5 + 0.7 + 0.7 + 1.0 + 1.0 = 6.4
-        # ratio = 4.0/6.4 = 0.625 -> BULLISH
         momentum_names = {"MACD", "EMA_TREND"}
         mean_reversion_names = {"RSI", "BBANDS"}
         directional_names = {"RSI", "MACD", "VWAP", "EMA_TREND", "BBANDS", "STOCH"}
@@ -103,7 +79,6 @@ class TestAdaptiveWeights:
             TechnicalSignal("STOCH", 40.0, "BEARISH", "STOCH bearish"),
         ]
 
-        adx_value = 15.0  # Ranging
         momentum_weight = 0.7
         mean_rev_weight = 1.5
 
@@ -127,10 +102,8 @@ class TestAdaptiveWeights:
     def test_neutral_adx_equal_weights(self) -> None:
         """When 20 <= ADX <= 25, all weights are 1.0."""
         adx_value = 22.0
-        # Neither > 25 nor < 20
         assert not (adx_value > 25)
         assert not (adx_value < 20)
-        # In this range, momentum_weight = 1.0 and mean_rev_weight = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +129,6 @@ class TestATRAdaptiveSLTP:
             ],
         )
         setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
-        # With no OHLC data to compute ATR avg, atr_percentile defaults to 1.0
-        # sl_multiplier interpolated at 1.0 percentile = ~1.29
         assert setup["tradeable"] is True
         assert "sl_multiplier" in setup
         assert "atr_percentile" in setup
@@ -185,7 +156,7 @@ class TestATRAdaptiveSLTP:
     def test_maintains_risk_reward_ratio(self) -> None:
         """TP/SL ratio should match the per-class defaults from strategy module.
 
-        Symbol "ES" resolves to "index" (SL=2.0x, TP=4.0x → 1:2 R:R).
+        Symbol "ES" resolves to "index" (SL=2.0x, TP=4.0x -> 1:2 R:R).
         """
         from app.services.analyzer import _compute_setup
         from modules.price_data import AssetAnalysis, TechnicalSignal
@@ -201,7 +172,6 @@ class TestATRAdaptiveSLTP:
         )
         setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
         assert setup["tradeable"] is True
-        # Index: TP/SL ratio = 4.0/2.0 = 2.0
         ratio = setup["tp_distance"] / setup["sl_distance"]
         assert abs(ratio - 2.0) < 0.1
 
@@ -227,7 +197,7 @@ class TestGetAssetBySymbol:
     @pytest.mark.asyncio
     async def test_get_asset_by_symbol_found(self) -> None:
         """Should return a dict when the symbol exists."""
-        from app.models.database import Asset, get_asset_by_symbol
+        from app.models.database import get_asset_by_symbol
 
         mock_asset = MagicMock()
         mock_asset.symbol = "NQ=F"
@@ -301,7 +271,6 @@ class TestAuthMiddleware:
 
         mock_app = MagicMock()
         middleware = APIKeyMiddleware(mock_app, api_key="")
-        # api_key is empty -> all requests pass
         assert middleware.api_key == ""
 
     @pytest.mark.asyncio
@@ -321,7 +290,6 @@ class TestAuthMiddleware:
         mock_call_next = AsyncMock()
         response = await middleware.dispatch(mock_request, mock_call_next)
 
-        # Should return 401, not call next
         assert response.status_code == 401
         mock_call_next.assert_not_called()
 
@@ -355,7 +323,7 @@ class TestAuthMiddleware:
 
         mock_request = MagicMock()
         mock_request.url.path = "/api/assets"
-        mock_request.headers = {}  # No header
+        mock_request.headers = {}
         mock_request.query_params = {"api_key": "secret-key-123"}
 
         mock_response = MagicMock()
@@ -382,91 +350,6 @@ class TestAuthMiddleware:
         response = await middleware.dispatch(mock_request, mock_call_next)
 
         mock_call_next.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Sprint 5: T4.2 — Walk-forward optimization
-# ---------------------------------------------------------------------------
-
-
-def _make_trending_df(
-    rows: int = 200,
-    trend: str = "up",
-    base_price: float = 100.0,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """Generate a trending OHLCV DataFrame."""
-    np.random.seed(seed)
-    dates = pd.date_range(end=pd.Timestamp("2025-06-15"), periods=rows, freq="D")
-
-    if trend == "up":
-        close = base_price + np.linspace(0, 40, rows) + np.random.normal(0, 0.5, rows)
-    elif trend == "down":
-        close = base_price + np.linspace(0, -40, rows) + np.random.normal(0, 0.5, rows)
-    else:
-        close = np.full(rows, base_price) + np.random.normal(0, 2, rows)
-
-    high = close + np.abs(np.random.normal(1.0, 0.3, rows))
-    low = close - np.abs(np.random.normal(1.0, 0.3, rows))
-    open_ = close + np.random.normal(0, 0.3, rows)
-    volume = np.random.randint(5000, 50000, rows).astype(float)
-
-    return pd.DataFrame(
-        {"Open": open_, "High": high, "Low": low, "Close": close, "Volume": volume},
-        index=dates,
-    )
-
-
-class TestWalkForward:
-    def test_walk_forward_returns_dict(self) -> None:
-        """walk_forward should return a dict with oos_results and aggregate."""
-        from modules.backtester import BacktestEngine
-
-        df = _make_trending_df(rows=200, trend="up")
-        engine = BacktestEngine()
-        result = engine.walk_forward(symbol="TEST", df=df, train_bars=120, test_bars=30)
-
-        assert "oos_results" in result
-        assert "is_results" in result
-        assert "aggregate" in result
-        assert isinstance(result["oos_results"], list)
-        assert len(result["oos_results"]) >= 1
-
-    def test_walk_forward_multiple_windows(self) -> None:
-        """With enough data, walk_forward should produce multiple windows."""
-        from modules.backtester import BacktestEngine
-
-        df = _make_trending_df(rows=300, trend="up")
-        engine = BacktestEngine()
-        result = engine.walk_forward(symbol="TEST", df=df, train_bars=120, test_bars=30)
-
-        # 300 bars, window=150, step=30 -> (300-150)/30 + 1 = 6 windows
-        assert len(result["oos_results"]) >= 2
-
-    def test_walk_forward_aggregate_has_oos_is_ratio(self) -> None:
-        """Aggregate stats should include OOS/IS performance ratio."""
-        from modules.backtester import BacktestEngine
-
-        df = _make_trending_df(rows=200, trend="up")
-        engine = BacktestEngine()
-        result = engine.walk_forward(symbol="TEST", df=df, train_bars=120, test_bars=30)
-
-        agg = result["aggregate"]
-        assert "oos_is_ratio" in agg
-        assert "windows" in agg
-        assert "is_total_pnl" in agg
-        assert "oos_total_pnl" in agg
-
-    def test_walk_forward_insufficient_data(self) -> None:
-        """With insufficient data, should return a single-window result."""
-        from modules.backtester import BacktestEngine
-
-        df = _make_trending_df(rows=50, trend="up")
-        engine = BacktestEngine()
-        result = engine.walk_forward(symbol="TEST", df=df, train_bars=120, test_bars=30)
-
-        # Not enough for even one window, returns single backtest
-        assert len(result["oos_results"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -618,8 +501,8 @@ class TestAdvancedCandlePatterns:
 
         df = pd.DataFrame({
             "Open": [100.0, 101.0],
-            "High": [105.0, 103.0],  # last high < prev high
-            "Low": [95.0, 97.0],     # last low > prev low
+            "High": [105.0, 103.0],
+            "Low": [95.0, 97.0],
             "Close": [102.0, 100.0],
         })
         result = _detect_candle_pattern(df, "BULLISH")
@@ -629,10 +512,6 @@ class TestAdvancedCandlePatterns:
         """Bullish engulfing should return 'ENGULFING'."""
         from modules.price_data import _detect_candle_pattern
 
-        # prev: bearish candle (close < open): open=102, close=99
-        # last: bullish candle (close > open): open=97, close=104
-        # last close(104) > prev open(102), last open(97) < prev close(99)
-        # last high > prev high so NOT an inside bar
         df = pd.DataFrame({
             "Open": [102.0, 97.0],
             "High": [103.0, 105.0],
@@ -646,10 +525,6 @@ class TestAdvancedCandlePatterns:
         """Bearish engulfing should return 'ENGULFING'."""
         from modules.price_data import _detect_candle_pattern
 
-        # prev: bullish candle (close > open): open=98, close=101
-        # last: bearish candle (close < open): open=103, close=96
-        # last close(96) < prev open(98), last open(103) > prev close(101)
-        # last high > prev high so NOT inside bar
         df = pd.DataFrame({
             "Open": [98.0, 103.0],
             "High": [102.0, 104.0],
@@ -665,9 +540,9 @@ class TestAdvancedCandlePatterns:
 
         df = pd.DataFrame({
             "Open": [100.0, 101.0],
-            "High": [105.0, 101.5],  # small upper wick
-            "Low": [95.0, 95.0],     # long lower wick
-            "Close": [102.0, 101.2],  # small body
+            "High": [105.0, 101.5],
+            "Low": [95.0, 95.0],
+            "Close": [102.0, 101.2],
         })
         result = _detect_candle_pattern(df, "BULLISH")
         assert result == "PIN_BAR"
@@ -682,9 +557,7 @@ class TestAdvancedCandlePatterns:
             "Low": [98.0, 97.0],
             "Close": [101.0, 101.0],
         })
-        # Not inside bar (high > prev high), not engulfing, not pin bar
         result = _detect_candle_pattern(df, "BULLISH")
-        # Could be None or PIN_BAR depending on wick ratios
         assert result in (None, "PIN_BAR", "ENGULFING", "INSIDE_BAR")
 
     def test_return_type_truthy_compatible(self) -> None:
@@ -698,7 +571,7 @@ class TestAdvancedCandlePatterns:
             "Close": [102.0, 100.0],
         })
         result = _detect_candle_pattern(df, "BULLISH")
-        assert result  # Should be truthy (INSIDE_BAR string)
+        assert result
         assert isinstance(result, str)
 
     def test_insufficient_data_returns_none(self) -> None:
@@ -716,178 +589,6 @@ class TestAdvancedCandlePatterns:
 
 
 # ---------------------------------------------------------------------------
-# Sprint 6: T2.2 — Kelly criterion position sizing
-# ---------------------------------------------------------------------------
-
-
-class TestKellyPositionSize:
-    def test_kelly_basic(self) -> None:
-        """50% win rate, 2:1 R:R should give positive Kelly fraction."""
-        from modules.backtester import kelly_position_size
-
-        # win_rate=0.5, avg_win=6, avg_loss=3
-        # kelly = (0.5*6 - 0.5*3) / 6 = 1.5/6 = 0.25
-        # half_kelly = 0.125
-        result = kelly_position_size(0.5, 6.0, 3.0)
-        assert result == pytest.approx(0.125, abs=0.01)
-
-    def test_kelly_all_losses(self) -> None:
-        """0% win rate should return 0."""
-        from modules.backtester import kelly_position_size
-
-        result = kelly_position_size(0.0, 6.0, 3.0)
-        assert result == 0.0
-
-    def test_kelly_high_win_rate(self) -> None:
-        """Very high win rate should be capped at 0.5 (half-Kelly)."""
-        from modules.backtester import kelly_position_size
-
-        # win_rate=0.9, avg_win=10, avg_loss=1
-        # kelly = (0.9*10 - 0.1*1) / 10 = 8.9/10 = 0.89
-        # half_kelly = 0.445
-        result = kelly_position_size(0.9, 10.0, 1.0)
-        assert 0 < result <= 0.5
-
-    def test_kelly_zero_avg_win(self) -> None:
-        """Zero average win should return 0."""
-        from modules.backtester import kelly_position_size
-
-        result = kelly_position_size(0.5, 0.0, 3.0)
-        assert result == 0.0
-
-    def test_kelly_negative_expectancy(self) -> None:
-        """Negative expectancy should return 0."""
-        from modules.backtester import kelly_position_size
-
-        # win_rate=0.3, avg_win=2, avg_loss=5
-        # kelly = (0.3*2 - 0.7*5) / 2 = (0.6 - 3.5) / 2 = -1.45
-        # half_kelly = -0.725 -> clamped to 0
-        result = kelly_position_size(0.3, 2.0, 5.0)
-        assert result == 0.0
-
-    def test_kelly_in_backtest_result(self) -> None:
-        """BacktestResult should include kelly_fraction."""
-        from modules.backtester import BacktestResult
-
-        result = BacktestResult()
-        d = result.to_dict()
-        assert "kelly_fraction" in d
-
-    def test_compute_statistics_sets_kelly(self) -> None:
-        """compute_statistics should set kelly_fraction on the result."""
-        from modules.backtester import OUTCOME_SL, OUTCOME_TP, Trade, compute_statistics
-
-        trades = [
-            Trade(
-                entry_bar=0, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=1, exit_date="d", exit_price=106,
-                outcome=OUTCOME_TP, pnl=6.0, bars_held=1,
-            ),
-            Trade(
-                entry_bar=2, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=3, exit_date="d", exit_price=97,
-                outcome=OUTCOME_SL, pnl=-3.0, bars_held=1,
-            ),
-        ]
-        result = compute_statistics(trades)
-        assert result.kelly_fraction > 0
-
-
-# ---------------------------------------------------------------------------
-# Sprint 6: T4.3 — Monte Carlo simulation
-# ---------------------------------------------------------------------------
-
-
-class TestMonteCarlo:
-    def test_monte_carlo_returns_dict(self) -> None:
-        """monte_carlo should return a dict with expected keys."""
-        from modules.backtester import OUTCOME_TP, Trade, monte_carlo
-
-        trades = [
-            Trade(
-                entry_bar=i, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=i+1, exit_date="d", exit_price=106,
-                outcome=OUTCOME_TP, pnl=6.0 if i % 2 == 0 else -3.0,
-                bars_held=1,
-            )
-            for i in range(20)
-        ]
-        result = monte_carlo(trades, n_simulations=100)
-        assert "median_final" in result
-        assert "p5_final" in result
-        assert "p95_final" in result
-        assert "median_max_drawdown" in result
-
-    def test_monte_carlo_empty_trades(self) -> None:
-        """Empty trade list should return zeros."""
-        from modules.backtester import monte_carlo
-
-        result = monte_carlo([], n_simulations=100)
-        assert result["median_final"] == 0.0
-        assert result["p5_final"] == 0.0
-        assert result["p95_final"] == 0.0
-        assert result["median_max_drawdown"] == 0.0
-
-    def test_monte_carlo_all_winners(self) -> None:
-        """All winning trades should have positive median final equity."""
-        from modules.backtester import OUTCOME_TP, Trade, monte_carlo
-
-        trades = [
-            Trade(
-                entry_bar=i, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=i+1, exit_date="d", exit_price=106,
-                outcome=OUTCOME_TP, pnl=6.0, bars_held=1,
-            )
-            for i in range(10)
-        ]
-        result = monte_carlo(trades, n_simulations=200)
-        assert result["median_final"] == pytest.approx(60.0, abs=0.1)
-        assert result["p5_final"] == pytest.approx(60.0, abs=0.1)
-        assert result["p95_final"] == pytest.approx(60.0, abs=0.1)
-
-    def test_monte_carlo_confidence_interval(self) -> None:
-        """p5 should be <= median <= p95."""
-        from modules.backtester import OUTCOME_SL, OUTCOME_TP, Trade, monte_carlo
-
-        trades = [
-            Trade(
-                entry_bar=i, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=i+1, exit_date="d", exit_price=106 if i % 3 != 0 else 97,
-                outcome=OUTCOME_TP if i % 3 != 0 else OUTCOME_SL,
-                pnl=6.0 if i % 3 != 0 else -3.0,
-                bars_held=1,
-            )
-            for i in range(30)
-        ]
-        result = monte_carlo(trades, n_simulations=500)
-        assert result["p5_final"] <= result["median_final"]
-        assert result["median_final"] <= result["p95_final"]
-
-    def test_monte_carlo_max_drawdown_positive(self) -> None:
-        """Max drawdown should be non-negative."""
-        from modules.backtester import OUTCOME_SL, OUTCOME_TP, Trade, monte_carlo
-
-        trades = [
-            Trade(
-                entry_bar=i, entry_date="d", direction="LONG",
-                entry_price=100, stop_loss=97, take_profit=106,
-                exit_bar=i+1, exit_date="d", exit_price=106 if i % 2 == 0 else 97,
-                outcome=OUTCOME_TP if i % 2 == 0 else OUTCOME_SL,
-                pnl=6.0 if i % 2 == 0 else -3.0,
-                bars_held=1,
-            )
-            for i in range(20)
-        ]
-        result = monte_carlo(trades, n_simulations=200)
-        assert result["median_max_drawdown"] >= 0
-
-
-# ---------------------------------------------------------------------------
 # Sprint 6: T6.1 — Portfolio heatmap endpoint
 # ---------------------------------------------------------------------------
 
@@ -902,8 +603,6 @@ class TestHeatmapEndpoint:
         """_compute_heatmap should return a dict with symbols and matrix."""
         from app.api.analytics_api import _compute_heatmap
 
-        # With no real data, it will try analyze_assets which calls yfinance
-        # Just mock it
         mock_analysis_1 = MagicMock()
         mock_analysis_1.symbol = "A"
         mock_analysis_1.daily_closes = pd.Series(
