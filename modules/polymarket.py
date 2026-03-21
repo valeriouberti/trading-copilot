@@ -528,10 +528,10 @@ Rules:
         from modules.llm_client import llm_call
         raw = llm_call(
             system_msg="Classify events as bullish/bearish for markets "
-            "and assign an impact score 1-5. Respond only in JSON.",
+            "and assign an impact score 1-5. Respond only in JSON. Do not use <think> tags.",
             user_msg=prompt,
             temperature=0.1,
-            max_tokens=600,
+            max_tokens=1200,
         )
 
         if raw.startswith("```"):

@@ -380,7 +380,7 @@ def _analyze_with_groq_two_pass(
         system_msg="You are a senior quant analyst. Reason step-by-step about the impact "
         "of news on financial markets.",
         user_msg=reasoning_prompt,
-        max_tokens=1000,
+        max_tokens=2000,
         temperature=0.4,
     )
     logger.debug("LLM Pass 1 reasoning: %s", reasoning[:200])
@@ -390,9 +390,9 @@ def _analyze_with_groq_two_pass(
     logger.info("LLM Pass 2: structured extraction...")
     raw_json = _llm_call(
         system_msg="You are a data extraction engine. Convert the analysis to valid JSON. "
-        "Respond ONLY with JSON.",
+        "Respond ONLY with JSON. Do not use <think> tags.",
         user_msg=extraction_prompt,
-        max_tokens=600,
+        max_tokens=1200,
         temperature=0.1,
     )
     logger.debug("Groq Pass 2 raw: %s", raw_json[:200])
@@ -425,9 +425,9 @@ def _analyze_with_groq_single_pass(
     prompt = _build_prompt(news, assets, poly_data=poly_data)
 
     raw = _llm_call(
-        system_msg="You are a financial analyst. Respond only in valid JSON.",
+        system_msg="You are a financial analyst. Respond only in valid JSON. Do not use <think> tags.",
         user_msg=prompt,
-        max_tokens=600,
+        max_tokens=1200,
         temperature=0.3,
     )
 

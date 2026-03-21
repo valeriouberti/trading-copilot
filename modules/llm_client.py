@@ -33,13 +33,25 @@ _ollama_client: Any = None
 
 # Regex for stripping Qwen 3 <think> blocks
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_TRUNCATED_RE = re.compile(r"<think>.*", re.DOTALL)
 
 
 def _strip_think(content: str) -> str:
-    """Strip Qwen 3 <think>...</think> reasoning blocks from output."""
-    if "<think>" in content:
-        content = _THINK_RE.sub("", content).strip()
-    return content
+    """Strip Qwen 3 <think>...</think> reasoning blocks from output.
+
+    Handles both complete and truncated think blocks (when max_tokens
+    cuts off the response mid-reasoning).
+    """
+    if "<think>" not in content:
+        return content
+    # First try to strip complete <think>...</think> blocks
+    stripped = _THINK_RE.sub("", content).strip()
+    if stripped:
+        return stripped
+    # If nothing left, the response was truncated mid-think block.
+    # Try removing the incomplete <think> block (everything from <think> onward)
+    stripped = _THINK_TRUNCATED_RE.sub("", content).strip()
+    return stripped
 
 
 # ---------------------------------------------------------------------------
