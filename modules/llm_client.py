@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 _ollama_lock = threading.Lock()
 _ollama_client: Any = None
 
-# Default Ollama model — small, fast, good for sentiment/classification
-OLLAMA_DEFAULT_MODEL = "llama3.1:8b"
+# Default Ollama model — Qwen 2.5 14B excels at financial analysis + JSON output
+OLLAMA_DEFAULT_MODEL = "qwen2.5:14b"
 OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 
 
