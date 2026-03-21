@@ -1,10 +1,150 @@
 # Trading Copilot — Changelog
 
-Storico delle modifiche al progetto, dalla versione CLI alla web dashboard.
+All notable changes to this project are documented here.
 
 ---
 
-## v6.0.0 — 20 Marzo 2026
+## v6.3.0 — 21 March 2026
+
+### Strategy Audit & Production Fixes
+
+Full audit of the trading system from a senior trader and software engineer perspective. Six bugs fixed that affected signal reliability for live trading.
+
+#### Signal Detector Fixes
+- **Missing RSI no longer passes**: `rsi_ok` default changed from `True` to `False`. Signals now require valid RSI data — missing RSI blocks the signal instead of silently passing.
+- **Missing MTF no longer counts as ALIGNED**: Both `signal_detector.py` and `analyzer.py` now require explicit `"ALIGNED"` MTF. `None` (missing data) no longer passes the check or marks a setup as tradeable.
+- **Files**: `app/services/signal_detector.py`, `app/services/analyzer.py`
+
+#### Strategy Module Fixes
+- **RSI label text corrected**: In ranging mode, RSI 35 now reads "approaching oversold" (was incorrectly "bearish momentum"). RSI 65 reads "approaching overbought" (was "bullish momentum"). Logic was correct; only display text was inverted.
+- **ADX filter threshold lowered**: Composite scoring now only blocks signals at ADX < 15 (was ≤ 20). The 20-25 transition zone no longer suppresses valid setups.
+- **Adaptive SL/TP aligned between live and backtest**: `compute_sl_tp_series()` (backtester) now uses the same formula as `compute_sl_tp()` (live) — 20-bar ATR window, ratio-based percentile, linear interpolation. Previously used a different 50-bar rank-based formula, causing live/backtest SL/TP divergence. Verified: 0.0% difference on identical data.
+- **Files**: `modules/strategy.py`
+
+#### Hallucination Guard Fix
+- **Keyword sentiment denominator**: `_keyword_sentiment()` now divides by matched article count (`total`) instead of all articles (`len(news)`). Fixes deflated keyword baseline that made the guard too lenient against LLM overconfidence.
+- **Files**: `modules/hallucination_guard.py`
+
+#### Test Updates
+- Updated ADX filter test to match new threshold (ADX < 15)
+- Added new test `test_adx_filter_allows_transition_zone` (ADX 18 should pass)
+- **454 tests pass, 0 failures**
+- **Files**: `tests/test_strategy.py`
+
+---
+
+## v6.2.0 — 21 March 2026
+
+### Dashboard Overhaul, ^GSPC Migration & Documentation
+
+Major dashboard enhancements and complete documentation rewrite.
+
+#### ^GSPC Migration (Cash Index)
+- Switched S&P 500 from futures (`ES=F`) to cash index (`^GSPC`) — CFDs track the spot price, not the futures contract
+- Added `"GSPC": "SPX"` mapping in Twelve Data provider for ^GSPC support
+- Added `GSPC`, `SPX`, `IXIC` to `_INDEX_SYMS` set in analyzer for correct asset class detection
+- Symbol normalization strips `^` prefix for Twelve Data and asset class matching
+- **Files**: `config.yaml`, `modules/data/twelvedata_provider.py`, `app/services/analyzer.py`
+
+#### Timeframe Selector
+- 6 timeframes switchable with one click: 5m, 15m, 1H, 4H, 1D (default), 1W
+- New `GET /api/ohlc/{symbol}?tf=` endpoint with per-timeframe data range config
+- 4H timeframe created by resampling 1H data via pandas `.resample("4h")`
+- EMA20/50 overlays on all timeframes
+- Intraday charts use unix timestamps, daily/weekly use date strings
+- **Files**: `app/api/analysis.py`, `app/templates/asset_detail.html`
+
+#### Live Chart Updates
+- 30-second polling via `GET /api/quote/{symbol}` (yfinance `fast_info`, free, zero credits)
+- WebSocket push from monitor's light poll (every 2 min, when active)
+- Last candle's close/high/low update with each tick via `candleSeries.update()`
+- Blinking LIVE badge on chart when updates are active
+- New `GET /api/quote/{symbol}` endpoint
+- **Files**: `app/api/analysis.py`, `app/templates/asset_detail.html`
+
+#### EMA50 Data Fix
+- Increased daily data fetch from 60 days to 10 months (`period="10mo"`)
+- Twelve Data fallback increased from 60 to 200 bars
+- Result: 211 candles, 162 EMA50 data points (was only 1)
+- **Files**: `modules/price_data.py`
+
+#### Action Plan
+- Plain-English step-by-step trading instructions below the chart
+- **Tradeable**: entry instruction, SL placement, TP target, MTF context, sentiment/Polymarket confirmation, execution rules
+- **Non-tradeable**: numbered reasons why, what needs to change, "Stay flat" instruction
+- Yellow warnings for imminent calendar events, borderline QS, Polymarket conflicts
+- **Files**: `app/templates/asset_detail.html`
+
+#### Enhanced Polymarket Card
+- Signal badge (BULLISH/BEARISH/NEUTRAL) with confidence
+- Summary stats: market count, total volume, bull/bear probability breakdown
+- Top 5 markets with: question, YES/NO probability bar, impact direction, magnitude (1-5), volume, expiry
+- Pass-through of `net_score`, `bullish_prob`, `bearish_prob`, `total_volume` from pipeline
+- **Files**: `app/templates/asset_detail.html`, `app/services/analyzer.py`
+
+#### Delete Trade
+- New `DELETE /api/trades/{trade_id}` endpoint with 404 handling
+- Delete button on each trade row with confirmation dialog
+- **Files**: `app/api/trades.py`, `app/templates/trades.html`
+
+#### Telegram Test Fix
+- `POST /api/telegram/test` returned 500 when chat ID was wrong — `NotificationPermanent` was uncaught
+- Now returns 400 with clear error message ("Chat not found")
+- **Files**: `app/api/settings.py`
+
+#### Documentation Rewrite
+- Deleted `ROADMAP.md`, `ROADMAP-ENGINEERING.md`, `ROADMAP-TRADING.md`
+- Complete README rewrite: English, reflects current 3-asset system, all features, project structure, wiki links
+- New `docs/architecture.md`: system design, component diagram, data flows, DB schema, caching, resilience
+- New `docs/strategy.md`: indicators, composite scoring, QS, MTF, SL/TP, 9 entry conditions, backtest gaps
+- New `docs/api.md`: complete API reference with request/response JSON examples
+- New `docs/deployment.md`: local dev, Docker (full vs lite), PostgreSQL, backups, production setup
+- New `docs/configuration.md`: all env vars, .env setup, config.yaml, priority chain, external API keys
+- **Files**: `README.md`, `docs/architecture.md`, `docs/strategy.md`, `docs/api.md`, `docs/deployment.md`, `docs/configuration.md`
+
+---
+
+## v6.1.0 — 21 March 2026
+
+### Unified Strategy Module & VBT Backtester
+
+Single source of truth for trading strategy shared between live system and backtester.
+
+#### Unified Strategy Module
+- New `modules/strategy.py` — regime classification, indicator labeling, composite scoring, quality score, SL/TP computation
+- Regime-aware indicator labeling: RSI, MACD, EMA, BBands, Stochastic adapt thresholds based on ADX (TRENDING/RANGING/NEUTRAL)
+- Weighted composite scoring: momentum indicators 1.5x in trending, mean-reversion 1.5x in ranging, 60% threshold
+- Quality Score from OHLCV: confluence, strong trend, near key level, candle pattern, volume above average
+- Candle pattern detection: engulfing, pin bar, inside bar
+- Key levels: pivot points (PP, R1, R2, S1, S2), PDH/PDL/PDC, psychological levels
+- Per-class SL/TP defaults: forex (1.2x/3.0x ATR), commodity (1.5x/3.5x), index (2.0x/4.0x), stock (1.8x/3.0x)
+- Adaptive SL/TP: ATR percentile adjustment based on 20-bar rolling mean
+- **Files**: `modules/strategy.py`
+
+#### VectorBT Backtester
+- New `modules/vbt_backtester.py` — production backtester using shared strategy module
+- Realistic trade simulation: spread, slippage, commission modeling
+- Walk-forward bar-by-bar SL/TP exit simulation
+- Per-class cost models and point values from `ASSET_UNIVERSE`
+- Signal deduplication (suppress consecutive same-direction signals)
+- USD-denominated P&L and equity curve
+- Risk metrics: Sharpe, Sortino, Calmar, max drawdown, Kelly fraction
+- **Files**: `modules/vbt_backtester.py`
+
+#### Data Providers
+- Twelve Data provider with symbol mapping and quote fetching
+- yfinance provider with retry logic and data validation
+- **Files**: `modules/data/twelvedata_provider.py`, `modules/data/yfinance_provider.py`
+
+#### Live System Refactored
+- `modules/price_data.py` uses `strategy.label_*()` for indicator labeling
+- `modules/price_data.py` uses `strategy.compute_composite()` for scoring
+- `app/services/analyzer.py` uses `strategy.compute_sl_tp()` for SL/TP
+- Old backtester (`modules/backtester.py`) marked as deprecated
+
+---
+
+## v6.0.0 — 20 March 2026
 
 ### Advanced Trading System
 
@@ -491,4 +631,4 @@ Tutti i moduli CLI (`modules/`) restano invariati — il web app e' un layer sop
 
 ---
 
-*Ultimo aggiornamento: 20 Marzo 2026 — v6.0.0*
+*Last updated: 21 March 2026 — v6.3.0*
