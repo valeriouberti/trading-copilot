@@ -247,6 +247,10 @@ def _format_polymarket(poly_data: dict | None) -> dict | None:
         "signal": poly_data.get("signal", "N/A"),
         "confidence": poly_data.get("confidence", 0),
         "market_count": poly_data.get("market_count", 0),
+        "net_score": poly_data.get("net_score", 0),
+        "bullish_prob": poly_data.get("bullish_prob", 0),
+        "bearish_prob": poly_data.get("bearish_prob", 0),
+        "total_volume": poly_data.get("total_volume", 0),
         "top_markets": poly_data.get("top_markets", [])[:5],
     }
 

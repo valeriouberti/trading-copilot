@@ -3,6 +3,85 @@
 {% block head %}
 <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 <style>
+.poly-market {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+.poly-market:last-child { border-bottom: none; }
+.poly-question {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    line-height: 1.4;
+}
+.poly-meta {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    align-items: center;
+}
+.poly-prob {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-weight: 700;
+    font-size: 13px;
+}
+.poly-prob-yes { color: var(--accent-green); }
+.poly-prob-no { color: var(--accent-red); }
+.poly-bar {
+    flex: 1;
+    min-width: 60px;
+    max-width: 120px;
+    height: 6px;
+    background: var(--accent-red);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.poly-bar-fill {
+    height: 100%;
+    background: var(--accent-green);
+    border-radius: 3px;
+    transition: width 0.3s;
+}
+.poly-vol {
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: var(--text-secondary);
+}
+.poly-impact {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+.poly-impact-bull { background: rgba(63,185,80,0.1); color: var(--accent-green); }
+.poly-impact-bear { background: rgba(248,81,73,0.1); color: var(--accent-red); }
+.poly-summary {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-bottom: 12px;
+    padding: 8px 0;
+    font-size: 13px;
+}
+.poly-summary-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.poly-summary-val {
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-weight: 700;
+    font-size: 15px;
+}
+.poly-summary-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 .live-badge {
     display: inline-flex;
     align-items: center;
@@ -688,14 +767,77 @@ function renderPolymarket(data) {
     card.style.display = "block";
 
     const p = data.polymarket;
-    content.innerHTML = `
-        <div style="text-align:center; margin-bottom:12px;">
+
+    // Signal badge + summary stats
+    let html = `
+        <div style="text-align:center; margin-bottom:8px;">
             <span class="badge ${biasClass(p.signal)}" style="font-size:14px; padding:4px 12px;">
                 ${p.signal} (${p.confidence}%)
             </span>
         </div>
-        <div class="info-row"><span>Markets analyzed</span><span>${p.market_count}</span></div>
+        <div class="poly-summary">
+            <div class="poly-summary-item">
+                <span class="poly-summary-val">${p.market_count}</span>
+                <span class="poly-summary-label">Markets</span>
+            </div>
+            <div class="poly-summary-item">
+                <span class="poly-summary-val">${p.total_volume ? '$' + fmtVol(p.total_volume) : '-'}</span>
+                <span class="poly-summary-label">Volume</span>
+            </div>
+            <div class="poly-summary-item">
+                <span class="poly-summary-val" style="color:var(--accent-green);">${p.bullish_prob ? p.bullish_prob.toFixed(0) + '%' : '-'}</span>
+                <span class="poly-summary-label">Bull</span>
+            </div>
+            <div class="poly-summary-item">
+                <span class="poly-summary-val" style="color:var(--accent-red);">${p.bearish_prob ? p.bearish_prob.toFixed(0) + '%' : '-'}</span>
+                <span class="poly-summary-label">Bear</span>
+            </div>
+        </div>
     `;
+
+    // Top markets list
+    const markets = p.top_markets || [];
+    if (markets.length > 0) {
+        html += '<div style="border-top:1px solid var(--border); padding-top:8px;">';
+        html += '<div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Top Markets</div>';
+
+        for (const m of markets) {
+            const isBull = (m.impact || '').includes('BULLISH');
+            const impactLabel = isBull ? 'BULL' : 'BEAR';
+            const impactClass = isBull ? 'poly-impact-bull' : 'poly-impact-bear';
+            const mag = m.impact_magnitude || 3;
+            const magDots = '\u2B24'.repeat(mag) + '\u25CB'.repeat(5 - mag);
+            const probYes = m.prob_yes != null ? m.prob_yes : 50;
+            const probNo = m.prob_no != null ? m.prob_no : 50;
+            const vol = m.volume_usd ? '$' + fmtVol(m.volume_usd) : '';
+            const endStr = m.end_date ? new Date(m.end_date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : '';
+
+            html += `
+                <div class="poly-market">
+                    <div class="poly-question">${m.question}</div>
+                    <div class="poly-meta">
+                        <span class="poly-prob poly-prob-yes">${probYes.toFixed(0)}%</span>
+                        <div class="poly-bar"><div class="poly-bar-fill" style="width:${probYes}%"></div></div>
+                        <span class="poly-prob poly-prob-no">${probNo.toFixed(0)}%</span>
+                        <span class="poly-impact ${impactClass}">${impactLabel}</span>
+                        <span style="font-size:10px;letter-spacing:-1px;" title="Magnitude ${mag}/5">${magDots}</span>
+                        ${vol ? `<span class="poly-vol">${vol}</span>` : ''}
+                        ${endStr ? `<span style="color:var(--text-muted);">${endStr}</span>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+        html += '</div>';
+    }
+
+    content.innerHTML = html;
+}
+
+function fmtVol(n) {
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+    return n.toFixed(0);
 }
 
 function renderCalendar(data) {
