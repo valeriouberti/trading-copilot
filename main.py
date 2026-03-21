@@ -185,7 +185,7 @@ def main() -> None:
     assets = config.get("assets", [])
     feeds = config.get("rss_feeds", [])
     lookback_hours = args.hours or config.get("lookback_hours", 16)
-    groq_model = config.get("groq_model", "llama-3.3-70b-versatile")
+    groq_model = config.get("groq_model", "qwen/qwen3-32b")
 
     # Override assets if specified via CLI
     if args.assets:

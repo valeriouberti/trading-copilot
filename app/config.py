@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     telegram_enabled: bool = Field(default=False, description="Enable Telegram notifications")
 
     # ── App config (env overrides YAML) ───────────────────────────────
-    groq_model: str = Field(default="llama-3.3-70b-versatile")
+    groq_model: str = Field(default="qwen/qwen3-32b")
     lookback_hours: int = Field(default=16, ge=1, le=168)
     report_language: str = Field(default="italian")
 

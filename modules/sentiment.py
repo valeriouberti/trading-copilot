@@ -483,7 +483,7 @@ def _analyze_with_groq(
 def analyze_sentiment(
     news: list[dict[str, Any]],
     assets: list[dict[str, str]],
-    groq_model: str = "llama-3.3-70b-versatile",
+    groq_model: str = "qwen/qwen3-32b",
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
     """Analyze market sentiment from news.

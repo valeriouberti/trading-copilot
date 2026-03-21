@@ -337,7 +337,7 @@ Respond ONLY with {max_bullets} bullet points (one per line, starting with "- ")
 No preamble, no numbering, no markdown."""
 
     try:
-        groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        groq_model = os.environ.get("GROQ_MODEL", "qwen/qwen3-32b")
         response = client.chat.completions.create(
             model=groq_model,
             messages=[

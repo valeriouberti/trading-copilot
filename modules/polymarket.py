@@ -461,7 +461,7 @@ def _classify_markets_with_keywords(
 
 def classify_markets_with_llm(
     markets: list[dict[str, Any]],
-    groq_model: str = "llama-3.3-70b-versatile",
+    groq_model: str = "qwen/qwen3-32b",
     api_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """Use Groq LLM to classify markets with direction AND impact magnitude.
@@ -693,7 +693,7 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
 
 def get_polymarket_context(
     assets: list[dict[str, str]],
-    groq_model: str = "llama-3.3-70b-versatile",
+    groq_model: str = "qwen/qwen3-32b",
     groq_api_key: str | None = None,
 ) -> dict[str, Any]:
     """High-level function called from main.py.

@@ -426,7 +426,7 @@ async def analyze_single_asset(
         )
     feeds = config.get("rss_feeds", [])
     lookback_hours = config.get("lookback_hours", 16)
-    groq_model = config.get("groq_model", "llama-3.3-70b-versatile")
+    groq_model = config.get("groq_model", "qwen/qwen3-32b")
 
     # Phase 1: Parallel data fetching — check cache first
     cached_tech = _cache.get(symbol, "price")

@@ -108,8 +108,8 @@ class ETFScheduler:
             existing = result.scalars().first()
 
         if existing is None:
-            logger.info("Morning briefing missed today — running catch-up (technicals only, no LLM)")
-            await self._morning_briefing(skip_llm=True)
+            logger.info("Morning briefing missed today — running catch-up (technicals only)")
+            await self._morning_briefing(skip_llm=True, skip_polymarket=True)
 
     def stop(self) -> None:
         """Stop the scheduler."""
@@ -159,9 +159,9 @@ class ETFScheduler:
     # Morning briefing (08:00 CET)
     # ------------------------------------------------------------------
 
-    async def _morning_briefing(self, skip_llm: bool = False) -> dict[str, Any]:
+    async def _morning_briefing(self, skip_llm: bool = False, skip_polymarket: bool = False) -> dict[str, Any]:
         """Analyze all ETFs, rank, send Telegram daily briefing."""
-        logger.info("=== MORNING BRIEFING START (skip_llm=%s) ===", skip_llm)
+        logger.info("=== MORNING BRIEFING START (skip_llm=%s, skip_poly=%s) ===", skip_llm, skip_polymarket)
         config = self.app.state.config
         session_factory = self.app.state.session_factory
 
@@ -170,7 +170,7 @@ class ETFScheduler:
             logger.warning("No assets configured — skipping briefing")
             return {"status": "no_assets"}
 
-        analyses = await self._analyze_all(assets, config, skip_llm=skip_llm)
+        analyses = await self._analyze_all(assets, config, skip_llm=skip_llm, skip_polymarket=skip_polymarket)
 
         # Classify each: BUY / SELL_IF_HOLDING / HOLD
         buy_signals: list[dict] = []
@@ -293,25 +293,32 @@ class ETFScheduler:
     async def _analyze_all(
         self, assets: list[dict], config: dict,
         skip_llm: bool = False,
+        skip_polymarket: bool = False,
     ) -> list[dict[str, Any]]:
-        """Run analyze_single_asset for all ETFs sequentially.
+        """Run analyze_single_asset for all ETFs in parallel.
 
         Args:
-            skip_llm: If True, skip Groq LLM calls (technicals + Polymarket only).
-                      Used for startup catch-up to avoid rate limits.
+            skip_llm: If True, skip LLM sentiment calls (technicals only).
+            skip_polymarket: If True, skip Polymarket data fetch + LLM classification.
         """
+        tasks = [
+            analyze_single_asset(
+                symbol=asset["symbol"],
+                config=config,
+                asset=asset,
+                skip_llm=skip_llm,
+                skip_polymarket=skip_polymarket,
+            )
+            for asset in assets
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
         analyses: list[dict[str, Any]] = []
-        for asset in assets:
-            try:
-                result = await analyze_single_asset(
-                    symbol=asset["symbol"],
-                    config=config,
-                    asset=asset,
-                    skip_llm=skip_llm,
-                )
-                analyses.append(result)
-            except Exception as exc:
-                logger.error("Analysis failed for %s: %s", asset["symbol"], exc)
+        for asset, result in zip(assets, results):
+            if isinstance(result, Exception):
+                logger.error("Analysis failed for %s: %s", asset["symbol"], result)
+                continue
+            analyses.append(result)
         return analyses
 
     async def _fetch_current_price(self, symbol: str) -> float | None:

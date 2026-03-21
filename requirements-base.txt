@@ -2,7 +2,6 @@ feedparser>=6.0
 yfinance>=0.2.30
 pandas-ta>=0.3.14b1
 groq>=0.4.0
-openai>=1.0.0          # Ollama OpenAI-compatible client
 pyyaml>=6.0
 pydantic-settings>=2.0.0
 tqdm>=4.66.0
