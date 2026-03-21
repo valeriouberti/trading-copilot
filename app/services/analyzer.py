@@ -128,15 +128,14 @@ def _build_trade_thesis(
     # Technical signals
     if tech_result and hasattr(tech_result, "signals"):
         for s in tech_result.signals:
-            expected_label = "BULLISH" if direction == "LONG" else "BEARISH"
-            if s.label == expected_label and s.name in ("RSI", "MACD", "EMA_TREND", "VWAP", "BBANDS", "STOCH"):
+            if s.label == "BULLISH" and s.name in ("RSI", "MACD", "EMA_TREND", "BBANDS", "STOCH"):
                 confluence.append(f"{s.name}: {s.detail}")
 
     # Sentiment
     if sentiment:
         score = getattr(sentiment, "sentiment_score", 0)
         bias = getattr(sentiment, "directional_bias", "NEUTRAL")
-        if (direction == "LONG" and score > 0) or (direction == "SHORT" and score < 0):
+        if score > 0:
             drivers = getattr(sentiment, "key_drivers", [])
             confluence.append(f"Sentiment {bias} ({score:+.1f}): {drivers[0] if drivers else '?'}")
 
@@ -291,7 +290,8 @@ def _compute_setup(
     Uses the unified strategy module for per-class SL/TP computation
     with adaptive ATR percentile adjustment.
     """
-    from modules.strategy import compute_sl_tp
+    from modules.data.universe import ASSET_UNIVERSE
+    from modules.strategy import compute_sl_tp, is_commission_viable
 
     if analysis is None or getattr(analysis, "error", True):
         return {"tradeable": False, "reason": "No technical data"}
@@ -310,8 +310,19 @@ def _compute_setup(
     if not atr_value or atr_value <= 0:
         return {"tradeable": False, "reason": "No ATR data"}
 
-    direction = regime if regime in ("LONG", "SHORT") else None
-    if not direction:
+    # LONG-only: only compute entry/SL/TP for LONG regime
+    # BEARISH regime = advisory to sell if holding (not a new entry)
+    if regime == "LONG":
+        direction = "LONG"
+    elif regime in ("SHORT", "BEARISH"):
+        return {
+            "tradeable": False,
+            "direction": "SELL_IF_HOLDING",
+            "reason": "Regime is bearish — sell if holding",
+            "entry_price": price,
+            "atr": round(atr_value, 2),
+        }
+    else:
         return {
             "tradeable": False,
             "reason": f"Regime is {regime}",
@@ -331,21 +342,10 @@ def _compute_setup(
         except Exception:
             pass
 
-    # Determine asset class from symbol (best effort)
-    asset_class = "index"  # default
+    # Determine asset class from universe (ETF default)
     symbol = getattr(analysis, "symbol", "")
-    _FOREX_SYMS = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCHF", "USDCAD"}
-    _COMMODITY_SYMS = {"GC", "SI", "CL", "NG"}
-    _INDEX_SYMS = {"NQ", "ES", "YM", "RTY", "GSPC", "SPX", "IXIC"}
-    sym_base = symbol.replace("=F", "").replace("=X", "").lstrip("^")
-    if sym_base in _FOREX_SYMS:
-        asset_class = "forex"
-    elif sym_base in _COMMODITY_SYMS:
-        asset_class = "commodity"
-    elif sym_base in _INDEX_SYMS:
-        asset_class = "index"
-    elif symbol.isalpha() and len(symbol) <= 5:
-        asset_class = "stock"
+    spec = ASSET_UNIVERSE.get(symbol)
+    asset_class = spec.asset_class.value if spec else "etf"
 
     sl_tp = compute_sl_tp(
         atr_value=atr_value,
@@ -354,14 +354,33 @@ def _compute_setup(
         adaptive=True,
     )
 
-    if direction == "LONG":
-        stop_loss = price - sl_tp.sl_distance
-        take_profit = price + sl_tp.tp_distance
-    else:
-        stop_loss = price + sl_tp.sl_distance
-        take_profit = price - sl_tp.tp_distance
+    # LONG-only: SL below entry, TP above entry
+    stop_loss = price - sl_tp.sl_distance
+    take_profit = price + sl_tp.tp_distance
 
-    tradeable = quality_score >= 4 and mtf_alignment == "ALIGNED"
+    # Commission viability check
+    commission_ok = is_commission_viable(
+        entry_price=price,
+        tp_distance=sl_tp.tp_distance,
+    )
+
+    tradeable = (
+        quality_score >= 4
+        and mtf_alignment == "ALIGNED"
+        and commission_ok
+    )
+
+    if not tradeable:
+        if quality_score < 4:
+            reason = f"QS {quality_score} < 4"
+        elif mtf_alignment != "ALIGNED":
+            reason = f"MTF {mtf_alignment}"
+        elif not commission_ok:
+            reason = "Expected move below 2x commission"
+        else:
+            reason = "Unknown"
+    else:
+        reason = "OK"
 
     return {
         "direction": direction,
@@ -375,10 +394,9 @@ def _compute_setup(
         "atr_percentile": sl_tp.atr_percentile,
         "sl_multiplier": sl_tp.sl_multiplier,
         "quality_score": quality_score,
+        "commission_viable": commission_ok,
         "tradeable": tradeable,
-        "reason": "OK" if tradeable else (
-            f"QS {quality_score} < 4" if quality_score < 4 else f"MTF {mtf_alignment}"
-        ),
+        "reason": reason,
     }
 
 
@@ -543,9 +561,9 @@ async def analyze_single_asset(
         except Exception as exc:
             logger.warning("News summary failed: %s", exc)
 
-    # Phase 8: Generate trade thesis (structured reasoning)
+    # Phase 8: Generate trade thesis (structured reasoning) — LONG-only
     trade_thesis = None
-    if regime in ("LONG", "SHORT") and sentiment and tech_result:
+    if regime == "LONG" and sentiment and tech_result:
         try:
             trade_thesis = _build_trade_thesis(
                 symbol=symbol,

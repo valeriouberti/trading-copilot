@@ -34,34 +34,21 @@ async def get_quote(request: Request, symbol: str):
     import yfinance as yf
 
     price = None
-    source = "yfinance"
 
-    # Try yfinance fast_info first (free, no credits)
     try:
         def _yf_price():
             ticker = yf.Ticker(symbol)
             info = ticker.fast_info
-            return info.get("lastPrice") or info.get("last_price")
+            return getattr(info, "last_price", None) or getattr(info, "previous_close", None)
 
         price = await asyncio.to_thread(_yf_price)
     except Exception:
         pass
 
-    # Fallback to Twelve Data if configured
-    if price is None:
-        try:
-            from modules.data.twelvedata_provider import TwelveDataProvider
-            td = TwelveDataProvider(request.app.state.config)
-            price = await asyncio.to_thread(td.fetch_quote, symbol)
-            if price is not None:
-                source = "twelvedata"
-        except Exception:
-            pass
-
     if price is None:
         raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}")
 
-    return {"symbol": symbol, "price": price, "source": source}
+    return {"symbol": symbol, "price": price, "source": "yfinance"}
 
 
 @router.get("/chart/{symbol}")
@@ -81,14 +68,10 @@ async def get_chart_data(request: Request, symbol: str):
     }
 
 
-# Timeframe → (yfinance period, yfinance interval, Twelve Data outputsize)
+# Timeframe → (yfinance period, yfinance interval)
 _TF_CONFIG = {
-    "5m":  ("5d",  "5m",  200),
-    "15m": ("30d", "15m", 200),
-    "1h":  ("60d", "1h",  200),
-    "4h":  ("60d", "1h",  200),   # yfinance has no 4h; we resample from 1h
-    "1d":  ("10mo", "1d", 200),
-    "1wk": ("2y",  "1wk", 104),
+    "1d":  ("10mo", "1d"),
+    "1wk": ("2y",  "1wk"),
 }
 
 
@@ -102,7 +85,7 @@ async def get_ohlc(
     if tf not in _TF_CONFIG:
         raise HTTPException(status_code=400, detail=f"Invalid timeframe: {tf}. Use: {', '.join(_TF_CONFIG)}")
 
-    yf_period, yf_interval, td_size = _TF_CONFIG[tf]
+    yf_period, yf_interval = _TF_CONFIG[tf]
 
     def _fetch():
         import yfinance as yf
@@ -113,13 +96,6 @@ async def get_ohlc(
         df = ticker.history(period=yf_period, interval=yf_interval)
         if df is None or df.empty:
             return None
-
-        # For 4h: resample from 1h
-        if tf == "4h":
-            df = df.resample("4h").agg({
-                "Open": "first", "High": "max", "Low": "min",
-                "Close": "last", "Volume": "sum",
-            }).dropna(subset=["Open"])
 
         # Build OHLC
         ohlc = []

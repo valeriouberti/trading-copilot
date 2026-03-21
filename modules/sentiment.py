@@ -8,7 +8,6 @@ Features:
 - Temporal weighting: recent news weighted more heavily
 - Per-asset scores: each asset gets its own directional score
 - Few-shot calibration: anchored scoring examples
-- FinBERT ensemble: cross-validation when Groq succeeds
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ class SentimentResult:
     directional_bias: str = ""  # "BULLISH", "BEARISH", "NEUTRAL"
     risk_events: list[str] = field(default_factory=list)
     confidence: float = 0.0
-    source: str = "groq"  # "groq", "groq-2pass", "finbert"
+    source: str = "groq"  # "groq", "groq-2pass"
     error: str | None = None
     # v2: per-asset scoring
     asset_scores: dict[str, float] = field(default_factory=dict)
@@ -144,7 +143,7 @@ PREDICTION MARKET DATA (Polymarket — real money at stake):
 {lines}
 """
 
-    return f"""You are a senior quant analyst specializing in macro analysis for CFD trading.
+    return f"""You are a senior quant analyst specializing in macro analysis for UCITS ETF swing trading.
 Analyze these news articles step-by-step.
 
 FUNDAMENTAL RULE: Recent news ([1h ago], [2h ago]) weighs MUCH more heavily
@@ -252,7 +251,7 @@ Take this data into account in your sentiment analysis.
     asset_score_lines = ",\n    ".join(f'"{s}": <-3.0 to +3.0>' for s in asset_symbols)
 
     return f"""You are an expert financial analyst. Analyze the following market news
-and provide a macro sentiment analysis for a retail CFD trader operating on: {asset_names}.
+and provide a macro sentiment analysis for a retail ETF investor operating on: {asset_names}.
 
 IMPORTANT: More recent news (lower time tag) weighs more heavily.
 
@@ -506,156 +505,6 @@ def _analyze_with_groq(
 
 
 # ---------------------------------------------------------------------------
-# FinBERT (fallback + ensemble cross-validation)
-# ---------------------------------------------------------------------------
-
-
-def _get_finbert_score(news: list[dict[str, Any]]) -> float | None:
-    """Run FinBERT on headlines and return a -3 to +3 score, or None on failure."""
-    try:
-        from transformers import pipeline
-    except ImportError:
-        return None
-
-    try:
-        classifier = pipeline(
-            "sentiment-analysis",
-            model="ProsusAI/finbert",
-            truncation=True,
-            max_length=512,
-        )
-    except Exception as exc:
-        logger.warning("Failed to load FinBERT: %s", exc)
-        return None
-
-    texts = [a["title"] for a in news[:30]]
-    if not texts:
-        return None
-
-    results = classifier(texts)
-    total_score = 0.0
-    for res in results:
-        label = res["label"].lower()
-        score = res["score"]
-        if label == "positive":
-            total_score += score
-        elif label == "negative":
-            total_score -= score
-
-    avg = total_score / len(results) if results else 0
-    return round(max(-3.0, min(3.0, avg * 3)), 1)
-
-
-def _compute_finbert_agreement(
-    groq_score: float,
-    finbert_score: float | None,
-) -> tuple[str, float]:
-    """Compute agreement level between Groq and FinBERT.
-
-    Returns (agreement_label, confidence_modifier).
-    - AGREE: scores within 1.0 → boost confidence
-    - PARTIAL: scores within 2.0 → no change
-    - DISAGREE: scores diverge > 2.0 → reduce confidence
-    """
-    if finbert_score is None:
-        return "", 0.0
-
-    divergence = abs(groq_score - finbert_score)
-    if divergence <= 1.0:
-        return "AGREE", 5.0  # boost
-    elif divergence <= 2.0:
-        return "PARTIAL", 0.0
-    else:
-        return "DISAGREE", -15.0  # reduce
-
-
-def _analyze_with_finbert(news: list[dict[str, Any]]) -> SentimentResult:
-    """Fallback sentiment analysis using FinBERT."""
-    try:
-        from transformers import pipeline
-    except ImportError:
-        logger.error("transformers library not installed for FinBERT fallback")
-        return SentimentResult(
-            sentiment_score=0.0,
-            sentiment_label="Not available",
-            key_drivers=["Analysis not available — install transformers and torch"],
-            directional_bias="NEUTRAL",
-            confidence=0.0,
-            source="finbert",
-            error="transformers not installed",
-        )
-
-    try:
-        classifier = pipeline(
-            "sentiment-analysis",
-            model="ProsusAI/finbert",
-            truncation=True,
-            max_length=512,
-        )
-    except Exception as exc:
-        logger.error("Failed to load FinBERT model: %s", exc)
-        return SentimentResult(
-            sentiment_score=0.0,
-            sentiment_label="Model error",
-            key_drivers=["Error loading FinBERT model"],
-            directional_bias="NEUTRAL",
-            confidence=0.0,
-            source="finbert",
-            error=str(exc),
-        )
-
-    # Analyze each headline
-    texts = [a["title"] for a in news[:30]]
-    results = classifier(texts)
-
-    positive_count = 0
-    negative_count = 0
-    total_score = 0.0
-
-    for res in results:
-        label = res["label"].lower()
-        score = res["score"]
-        if label == "positive":
-            positive_count += 1
-            total_score += score
-        elif label == "negative":
-            negative_count += 1
-            total_score -= score
-
-    n = len(results)
-    avg_score = total_score / n if n > 0 else 0
-    sentiment_score = round(max(-3.0, min(3.0, avg_score * 3)), 1)
-
-    if sentiment_score > 1:
-        label = "Bullish"
-        bias = "BULLISH"
-    elif sentiment_score > 0.3:
-        label = "Moderately Bullish"
-        bias = "BULLISH"
-    elif sentiment_score < -1:
-        label = "Bearish"
-        bias = "BEARISH"
-    elif sentiment_score < -0.3:
-        label = "Moderately Bearish"
-        bias = "BEARISH"
-    else:
-        label = "Neutral"
-        bias = "NEUTRAL"
-
-    confidence = (max(positive_count, negative_count) / n * 100) if n > 0 else 0
-    drivers = [texts[i] for i in range(min(3, len(texts)))]
-
-    return SentimentResult(
-        sentiment_score=sentiment_score,
-        sentiment_label=label,
-        key_drivers=drivers,
-        directional_bias=bias,
-        confidence=round(confidence, 1),
-        source="finbert",
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -671,8 +520,7 @@ def analyze_sentiment(
     Pipeline:
     1. Tag news with temporal recency
     2. Try two-pass Groq LLM (chain-of-thought → extraction)
-    3. If Groq succeeds, run FinBERT ensemble cross-validation
-    4. If Groq fails, use FinBERT as fallback
+    3. If Groq fails, return a neutral SentimentResult
 
     Args:
         news: List of articles from news_fetcher.
@@ -710,41 +558,27 @@ def analyze_sentiment(
                 poly_data=poly_data,
             )
         except (LLMRateLimited, LLMUnavailable) as exc:
-            logger.warning("Groq transient failure, falling back to FinBERT: %s", exc)
+            logger.warning("Groq transient failure, returning neutral: %s", exc)
         except LLMResponseInvalid as exc:
-            logger.warning("Groq response invalid, falling back to FinBERT: %s", exc)
+            logger.warning("Groq response invalid, returning neutral: %s", exc)
         except Exception as exc:
-            logger.warning("Groq analysis failed, falling back to FinBERT: %s", exc)
+            logger.warning("Groq analysis failed, returning neutral: %s", exc)
 
-    # Step 3: FinBERT ensemble (if Groq succeeded) or fallback
+    # Step 3: Return result if Groq succeeded, otherwise neutral fallback
     if result is not None:
-        # Run FinBERT as cross-validation
-        try:
-            finbert_score = _get_finbert_score(news)
-            if finbert_score is not None:
-                agreement, conf_mod = _compute_finbert_agreement(
-                    result.sentiment_score,
-                    finbert_score,
-                )
-                result.finbert_score = finbert_score
-                result.finbert_agreement = agreement
-                result.confidence = max(
-                    0.0,
-                    min(100.0, result.confidence + conf_mod),
-                )
-                logger.info(
-                    "FinBERT ensemble: score=%.1f, agreement=%s (Groq=%.1f)",
-                    finbert_score,
-                    agreement,
-                    result.sentiment_score,
-                )
-        except Exception as exc:
-            logger.debug("FinBERT ensemble skipped: %s", exc)
         return result
 
-    # Step 4: FinBERT fallback
-    logger.info("Using FinBERT fallback for sentiment analysis")
-    return _analyze_with_finbert(news)
+    logger.info("Groq unavailable — returning neutral sentiment")
+    return SentimentResult(
+        sentiment_score=0.0,
+        sentiment_label="Neutral",
+        key_drivers=["LLM analysis unavailable"],
+        directional_bias="NEUTRAL",
+        confidence=0.0,
+        source="groq",
+        error="Groq analysis failed; neutral fallback",
+        prompt_version=PROMPT_VERSION,
+    )
 
 
 if __name__ == "__main__":

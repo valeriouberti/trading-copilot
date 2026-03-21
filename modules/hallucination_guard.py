@@ -247,6 +247,6 @@ def determine_regime(
     if score >= 0.9 and tech_direction in ("BULLISH", "NEUTRAL"):
         return "LONG", "LLM bullish + favorable technicals"
     elif score <= -0.9 and tech_direction in ("BEARISH", "NEUTRAL"):
-        return "SHORT", "LLM bearish + favorable technicals"
+        return "BEARISH", "LLM bearish + favorable technicals — sell if holding"
     else:
         return "NEUTRAL", "Non-directional or conflicting signals"

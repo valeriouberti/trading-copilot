@@ -1,72 +1,78 @@
-"""Monitor API endpoints — start, stop, check status, and view credit budget."""
+"""Monitor API endpoints — start/stop scheduler, view schedule, trigger analysis."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from app.middleware.rate_limit import MONITOR_RATE, limiter
 
 router = APIRouter()
 
 
-class MonitorStart(BaseModel):
-    symbol: str
-
-
 @router.post("/monitor/start")
 @limiter.limit(MONITOR_RATE)
-async def start_monitor(request: Request, body: MonitorStart):
-    """Start background monitoring for an asset.
+async def start_scheduler(request: Request):
+    """Start the ETF cron scheduler (08:00 / 13:00 / 17:00 CET)."""
+    scheduler = getattr(request.app.state, "monitor", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Scheduler not initialized")
 
-    Uses a fixed heavy (30 min) + light (120 s) split schedule.
-    Max 3 assets simultaneously (Twelve Data free-tier budget).
-    """
-    monitor = getattr(request.app.state, "monitor", None)
-    if monitor is None:
-        raise HTTPException(status_code=503, detail="Monitor not initialized")
-
-    result = await monitor.start(body.symbol)
-
-    if result.get("status") == "REJECTED":
-        raise HTTPException(status_code=429, detail=result["reason"])
-
-    return result
+    scheduler.start()
+    return {"status": "RUNNING", "schedule": scheduler.get_schedule()}
 
 
 @router.post("/monitor/stop")
 @limiter.limit(MONITOR_RATE)
-async def stop_monitor(request: Request, body: MonitorStart):
-    """Stop background monitoring for an asset."""
-    monitor = getattr(request.app.state, "monitor", None)
-    if monitor is None:
-        raise HTTPException(status_code=503, detail="Monitor not initialized")
+async def stop_scheduler(request: Request):
+    """Stop the ETF cron scheduler."""
+    scheduler = getattr(request.app.state, "monitor", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Scheduler not initialized")
 
-    result = await monitor.stop(body.symbol)
-    return result
+    scheduler.stop()
+    return {"status": "STOPPED"}
 
 
 @router.get("/monitor/status")
 async def monitor_status(request: Request):
-    """Return status of all active monitors."""
-    monitor = getattr(request.app.state, "monitor", None)
-    if monitor is None:
-        return {"monitors": [], "ws_connections": 0}
+    """Return scheduler status and next scheduled runs."""
+    scheduler = getattr(request.app.state, "monitor", None)
+    if scheduler is None:
+        return {"status": "NOT_INITIALIZED", "schedule": []}
 
     from app.api.websocket import manager
 
-    statuses = await monitor.get_status()
     return {
-        "monitors": statuses,
+        "status": "RUNNING" if scheduler._started else "STOPPED",
+        "schedule": scheduler.get_schedule(),
         "ws_connections": manager.count,
     }
 
 
-@router.get("/monitor/budget")
-async def monitor_budget(request: Request):
-    """Return Twelve Data credit budget status for today."""
-    monitor = getattr(request.app.state, "monitor", None)
-    if monitor is None:
-        return {"error": "Monitor not initialized"}
+@router.get("/monitor/schedule")
+async def monitor_schedule(request: Request):
+    """Show next scheduled analysis times."""
+    scheduler = getattr(request.app.state, "monitor", None)
+    if scheduler is None:
+        return {"schedule": []}
 
-    return monitor.get_budget()
+    return {"schedule": scheduler.get_schedule()}
+
+
+@router.post("/api/analyze-all")
+@limiter.limit(MONITOR_RATE)
+async def analyze_all_now(request: Request):
+    """Trigger the morning briefing on demand (Analyze Now button)."""
+    scheduler = getattr(request.app.state, "monitor", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Scheduler not initialized")
+
+    result = await scheduler.run_morning_briefing()
+    return {
+        "status": "completed",
+        "buy_count": len(result.get("buy", [])),
+        "sell_count": len(result.get("sell", [])),
+        "hold_count": len(result.get("hold", [])),
+        "buy_signals": result.get("buy", []),
+        "sell_signals": result.get("sell", []),
+    }

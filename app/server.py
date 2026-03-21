@@ -74,29 +74,30 @@ async def lifespan(app: FastAPI):
             settings.telegram_enabled,
         )
 
-    # Initialize background monitor
-    from app.services.monitor import AssetMonitor
+    # Initialize ETF scheduler (cron-based)
+    from app.services.monitor import ETFScheduler
 
-    monitor = AssetMonitor(app)
-    app.state.monitor = monitor
-    monitor.install_signal_handlers()
-    await monitor.restore_from_db()
+    scheduler = ETFScheduler(app)
+    app.state.monitor = scheduler
+    scheduler.install_signal_handlers()
+    scheduler.start()
+    await scheduler.startup_catchup()
 
     db_type = "PostgreSQL" if "postgresql" in settings.database_url else "SQLite"
-    logger.info("Trading Copilot started — database: %s", db_type)
+    logger.info("ETF Swing Trader started — database: %s", db_type)
 
     yield
 
     # Shutdown
-    await monitor.shutdown()
+    await scheduler.shutdown()
     await engine.dispose()
     logger.info("Trading Copilot stopped")
 
 
 app = FastAPI(
-    title="Trading Copilot",
-    description="Real-time CFD trading dashboard",
-    version="5.3.0",
+    title="ETF Swing Trader",
+    description="UCITS ETF swing trading assistant",
+    version="6.0.0",
     lifespan=lifespan,
 )
 

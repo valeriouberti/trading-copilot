@@ -507,10 +507,60 @@ _CLASS_SL_TP: dict[str, dict[str, float]] = {
     "commodity": {"sl_atr_mult": 1.5, "tp_atr_mult": 3.5},
     "index":     {"sl_atr_mult": 2.0, "tp_atr_mult": 4.0},
     "stock":     {"sl_atr_mult": 1.8, "tp_atr_mult": 3.0},
+    "etf":       {"sl_atr_mult": 1.5, "tp_atr_mult": 3.0},
 }
 
 # Fallback
 _DEFAULT_SL_TP = {"sl_atr_mult": 1.5, "tp_atr_mult": 3.0}
+
+# ---------------------------------------------------------------------------
+# ETF-specific constants
+# ---------------------------------------------------------------------------
+
+# Maximum holding period for swing trades (days/bars)
+MAX_HOLD_DAYS = 10
+
+
+def is_commission_viable(
+    entry_price: float,
+    tp_distance: float,
+    position_size_eur: float = 1500.0,
+    commission_eur: float = 2.95,
+) -> bool:
+    """Check if the expected gain exceeds 2x round-trip commission.
+
+    For a Fineco account with €2.95/trade (€5.90 round-trip),
+    the expected TP move must generate more than €11.80 on the position.
+
+    Args:
+        entry_price: ETF price at entry.
+        tp_distance: TP distance in price units (always positive).
+        position_size_eur: Capital allocated to this position.
+        commission_eur: Per-trade commission (Fineco: €2.95).
+
+    Returns:
+        True if the trade is worth taking after commissions.
+    """
+    if entry_price <= 0 or tp_distance <= 0:
+        return False
+    round_trip_cost = commission_eur * 2
+    shares = position_size_eur / entry_price
+    expected_gain = shares * tp_distance
+    return expected_gain > round_trip_cost * 2
+
+
+def should_force_exit(entry_date, now) -> bool:
+    """Check if a position has exceeded the maximum holding period.
+
+    Args:
+        entry_date: datetime of position entry.
+        now: current datetime.
+
+    Returns:
+        True if the position should be closed (held > MAX_HOLD_DAYS).
+    """
+    delta = now - entry_date
+    return delta.days > MAX_HOLD_DAYS
 
 
 @dataclass

@@ -110,7 +110,7 @@ class TelegramNotifier:
         calendar: dict | None = None,
         session: AsyncSession | None = None,
     ) -> bool:
-        """Send a trade signal notification."""
+        """Send a trade signal notification (LONG-only for ETFs)."""
         if not setup.get("tradeable"):
             return False
 
@@ -118,17 +118,31 @@ class TelegramNotifier:
             logger.debug("Rate-limited: %s SIGNAL", symbol)
             return False
 
-        direction = setup.get("direction", "?")
-        arrow = "LONG" if direction == "LONG" else "SHORT"
-        color = "🟢" if direction == "LONG" else "🔴"
+        entry_price = setup.get("entry_price")
+        sl_price = setup.get("stop_loss")
+        tp_price = setup.get("take_profit")
 
-        entry = _format_number(setup.get("entry_price"))
-        sl = _format_number(setup.get("stop_loss"))
-        tp = _format_number(setup.get("take_profit"))
-        sl_dist = _format_number(setup.get("sl_distance"))
-        tp_dist = _format_number(setup.get("tp_distance"))
+        entry = _format_number(entry_price)
+        sl = _format_number(sl_price)
+        tp = _format_number(tp_price)
+
+        # Calculate percentages instead of points
+        sl_pct = ""
+        tp_pct = ""
+        if entry_price and sl_price:
+            sl_pct = f" (-{abs((sl_price - entry_price) / entry_price * 100):.1f}%)"
+        if entry_price and tp_price:
+            tp_pct = f" (+{abs((tp_price - entry_price) / entry_price * 100):.1f}%)"
+
         rr = setup.get("risk_reward", "1:2.0")
         qs = setup.get("quality_score", 0)
+
+        # Position size hint
+        shares_hint = ""
+        if entry_price and entry_price > 0:
+            import math
+            shares = math.floor(1500.0 / entry_price)
+            shares_hint = f"\n💰 ~{shares} shares at €{entry_price:.2f} (€1,500)"
 
         # Sentiment info
         sent_score = ""
@@ -145,19 +159,19 @@ class TelegramNotifier:
             if hours and hours > 0:
                 h = int(hours)
                 m = int((hours - h) * 60)
-                next_event = f"\nNext event: {ev['title']} in {h}h {m}m"
+                next_event = f"\n📅 Next event: {ev['title']} in {h}h {m}m"
 
         text = (
-            f"{color} <b>{arrow} SIGNAL — {symbol}</b> ({display_name})\n"
+            f"🟢 <b>BUY SIGNAL — {symbol}</b> ({display_name})\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📍 Entry:  <code>{entry}</code>\n"
-            f"🔴 SL:     <code>{sl}</code>  (-{sl_dist} pts)\n"
-            f"🟢 TP:     <code>{tp}</code>  (+{tp_dist} pts)\n"
+            f"🔴 SL:     <code>{sl}</code>{sl_pct}\n"
+            f"🟢 TP:     <code>{tp}</code>{tp_pct}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚡ R:R      {rr}\n"
             f"📊 QS:      {qs}/5\n"
-            f"🎯 Regime:  {regime}{sent_score}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
+            f"🎯 Regime:  {regime}{sent_score}"
+            f"{shares_hint}"
             f"{next_event}"
         )
 
@@ -179,7 +193,7 @@ class TelegramNotifier:
         if session and not await self._check_rate_limit(session, None, "REGIME_CHANGE"):
             return False
 
-        icon = {"LONG": "🟢", "SHORT": "🔴", "NEUTRAL": "⚪"}.get(new_regime, "⚪")
+        icon = {"LONG": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(new_regime, "⚪")
 
         text = (
             f"🔄 <b>REGIME CHANGE</b>\n"
@@ -242,7 +256,7 @@ class TelegramNotifier:
     async def send_test(self) -> bool:
         """Send a test message to verify configuration."""
         text = (
-            "✅ <b>Trading Copilot — Test</b>\n"
+            "✅ <b>ETF Swing Trader — Test</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "Telegram notifications are working!\n"
             f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"

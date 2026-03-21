@@ -6,6 +6,8 @@ The engine is selected at runtime from config.yaml or DATABASE_URL env var.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import (
     Boolean,
     Column,
@@ -89,6 +91,29 @@ class Trade(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     signal = relationship("Signal", back_populates="trades")
+
+
+class Position(Base):
+    """Open and closed ETF positions for portfolio tracking."""
+
+    __tablename__ = "positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    entry_date = Column(DateTime(timezone=True), nullable=False)
+    entry_price = Column(Float, nullable=False)
+    shares = Column(Integer, nullable=False)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    status = Column(String(10), nullable=False, default="OPEN")  # OPEN / CLOSED
+    exit_date = Column(DateTime(timezone=True))
+    exit_price = Column(Float)
+    pnl_eur = Column(Float)
+    commission_paid = Column(Float, default=5.90)  # round-trip: 2.95 x 2
+    notes = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_positions_status", "status"),)
 
 
 class MonitorSession(Base):
@@ -288,3 +313,92 @@ async def upsert_telegram_config(
                 )
             )
         await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Position helpers
+# ---------------------------------------------------------------------------
+
+
+async def get_open_positions(session_factory) -> list[dict]:
+    """Return all OPEN positions as list of dicts."""
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Position).where(Position.status == "OPEN").order_by(Position.entry_date)
+        )
+        rows = result.scalars().all()
+    return [
+        {
+            "id": r.id,
+            "symbol": r.symbol,
+            "entry_date": r.entry_date.isoformat() if r.entry_date else None,
+            "entry_price": r.entry_price,
+            "shares": r.shares,
+            "stop_loss": r.stop_loss,
+            "take_profit": r.take_profit,
+            "status": r.status,
+            "commission_paid": r.commission_paid,
+            "notes": r.notes,
+        }
+        for r in rows
+    ]
+
+
+async def create_position(
+    session_factory,
+    symbol: str,
+    entry_price: float,
+    shares: int,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    entry_date: datetime | None = None,
+    notes: str | None = None,
+) -> int:
+    """Create a new OPEN position. Returns the position ID."""
+    async with session_factory() as session:
+        pos = Position(
+            symbol=symbol,
+            entry_date=entry_date or datetime.now(timezone.utc),
+            entry_price=entry_price,
+            shares=shares,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            status="OPEN",
+            notes=notes,
+        )
+        session.add(pos)
+        await session.commit()
+        await session.refresh(pos)
+        return pos.id
+
+
+async def close_position(
+    session_factory,
+    position_id: int,
+    exit_price: float,
+    notes: str | None = None,
+) -> dict | None:
+    """Close a position, computing P&L. Returns updated position dict or None."""
+    async with session_factory() as session:
+        pos = await session.get(Position, position_id)
+        if pos is None or pos.status != "OPEN":
+            return None
+
+        pos.status = "CLOSED"
+        pos.exit_date = datetime.now(timezone.utc)
+        pos.exit_price = exit_price
+        commission = pos.commission_paid or 5.90
+        pos.pnl_eur = round((exit_price - pos.entry_price) * pos.shares - commission, 2)
+        if notes:
+            pos.notes = f"{pos.notes or ''}\n{notes}".strip()
+        await session.commit()
+
+        return {
+            "id": pos.id,
+            "symbol": pos.symbol,
+            "entry_price": pos.entry_price,
+            "exit_price": pos.exit_price,
+            "shares": pos.shares,
+            "pnl_eur": pos.pnl_eur,
+            "status": pos.status,
+        }

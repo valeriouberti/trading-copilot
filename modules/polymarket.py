@@ -48,94 +48,19 @@ MAX_MARKETS = 20  # Final cap on returned markets
 # ---------------------------------------------------------------------------
 # These map to real Polymarket tag_slugs on the /events endpoint.
 _ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
-    # Order matters: longer/more specific keys first to avoid substring false matches
-    # (e.g. "ES" in "futures" would wrongly match Gold Futures)
-    (
-        "IXIC",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
-    (
-        "NAS",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
-    (
-        "NQ",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
-    (
-        "GSPC",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
-    (
-        "SPX",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
-    ("GOLD", ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
-    ("GC", ["gold", "commodities", "geopolitics", "fed", "inflation", "oil"]),
-    ("OIL", ["oil", "commodities", "geopolitics", "fed"]),
-    ("CL", ["oil", "commodities", "geopolitics", "fed"]),
-    (
-        "EUR",
-        ["fed", "inflation", "interest-rates", "economy", "tariffs", "geopolitics"],
-    ),
-    (
-        "ES",
-        [
-            "fed",
-            "inflation",
-            "gdp",
-            "unemployment",
-            "tariffs",
-            "stocks",
-            "economy",
-            "geopolitics",
-        ],
-    ),
+    # UCITS ETFs traded on Borsa Italiana (.MI suffix)
+    # Equity ETFs — broad developed-world / US / Nasdaq / Europe
+    ("SWDA.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
+    ("CSSPX.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
+    ("EQQQ.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
+    ("MEUD.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
+    # Emerging Markets ETF
+    ("IEEM.MI", ["tariffs", "geopolitics", "economy"]),
+    # Gold ETC
+    ("SGLD.MI", ["fed", "inflation", "geopolitics", "gold"]),
+    # Bond ETFs — Euro govt & global aggregate
+    ("IEGA.MI", ["fed", "inflation", "economy"]),
+    ("AGGH.MI", ["fed", "inflation", "economy"]),
 ]
 
 _DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics", "tariffs"]
@@ -260,81 +185,41 @@ def _get_tags_for_assets(assets: list[dict[str, str]]) -> list[str]:
 
 
 def _get_keywords_for_assets(assets: list[dict[str, str]]) -> list[str]:
-    """Build keyword list based on configured assets for client-side filtering.
+    """Build keyword list based on configured ETF assets for client-side filtering.
 
     Used only as a secondary safety net — the /events tag_slug endpoint
     already provides good server-side filtering.
     """
-    keywords: list[str] = []
+    # Common macro keywords relevant to all UCITS ETFs
+    keywords: list[str] = [
+        "federal reserve",
+        "fed rate",
+        "fomc",
+        "recession",
+        "inflation",
+        "cpi",
+        "gdp",
+        "unemployment",
+        "tariff",
+        "trade war",
+        "interest rate",
+        "ecb",
+        "eurozone",
+    ]
+
     for asset in assets:
         symbol = asset.get("symbol", "").upper()
-        display_name = asset.get("display_name", "").lower()
 
-        if any(s in symbol for s in ("NQ", "NAS", "IXIC")):
-            keywords.extend(
-                [
-                    "federal reserve",
-                    "fed rate",
-                    "fomc",
-                    "recession",
-                    "inflation",
-                    "cpi",
-                    "nasdaq",
-                    "s&p 500",
-                    "sp500",
-                    "gdp",
-                    "unemployment",
-                    "tariff",
-                    "trade war",
-                    "interest rate",
-                ]
-            )
-        elif any(s in symbol for s in ("ES", "SPX", "GSPC")):
-            keywords.extend(
-                [
-                    "federal reserve",
-                    "fed rate",
-                    "fomc",
-                    "recession",
-                    "inflation",
-                    "cpi",
-                    "s&p 500",
-                    "sp500",
-                    "gdp",
-                    "unemployment",
-                    "tariff",
-                    "trade war",
-                    "interest rate",
-                ]
-            )
-        elif "EUR" in symbol:
-            keywords.extend(
-                [
-                    "ecb",
-                    "euro",
-                    "federal reserve",
-                    "eurozone",
-                    "dollar",
-                    "tariff",
-                    "interest rate",
-                ]
-            )
-        elif "GC" in symbol or "gold" in display_name:
-            keywords.extend(
-                [
-                    "gold",
-                    "inflation",
-                    "federal reserve",
-                    "geopolitical",
-                    "war",
-                    "tariff",
-                    "interest rate",
-                ]
-            )
-        else:
-            keywords.extend(
-                ["recession", "federal reserve", "gdp", "interest rate", "inflation"]
-            )
+        if "SGLD" in symbol:
+            keywords.extend(["gold", "geopolitical", "war"])
+        elif "IEEM" in symbol:
+            keywords.extend(["emerging", "geopolitical", "sanctions"])
+        elif any(s in symbol for s in ("EQQQ", "CSSPX")):
+            keywords.extend(["nasdaq", "s&p 500", "sp500", "stocks"])
+        elif "MEUD" in symbol:
+            keywords.extend(["euro", "european", "stoxx"])
+        elif any(s in symbol for s in ("IEGA", "AGGH")):
+            keywords.extend(["bond", "treasury", "yield"])
 
     return list(dict.fromkeys(keywords))
 

@@ -1,526 +1,501 @@
-"""Background price monitor — split heavy/light architecture.
+"""ETF Swing Trader — cron-based scheduler.
 
-Uses APScheduler to run two types of jobs per monitored asset:
+Replaces the old 2-minute Twelve Data polling with three daily cron jobs
+running in the Europe/Rome timezone:
 
-**Heavy analysis** (every 30 min, ~1 credit):
-  Full pipeline via ``analyze_single_asset()`` — indicators, scoring,
-  quality score, SL/TP.  Result is cached for 30 min.
+  08:00  morning_briefing  — full analysis of all 8 ETFs, rank, Telegram briefing
+  13:00  midday_check      — check open positions (price vs SL/TP, max hold)
+  17:00  closing_check     — position check + end-of-day summary
 
-**Light poll** (every 120 s, ~1 credit):
-  Calls Twelve Data ``/price`` for a single quote, merges the fresh
-  price into the cached heavy analysis, and re-runs signal detection.
-
-Credit budget: 800/day free tier → ~256 credits/asset/day → max 3 assets.
+On startup the scheduler checks if today's morning briefing was missed
+(no NotificationLog entry) and runs it immediately if before 17:30 CET.
 """
 
 from __future__ import annotations
 
 import asyncio
-import copy
-import json
 import logging
+import math
 import signal
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, update
+from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import select
 
-from app.models.database import MonitorSession, Signal
+from app.models.database import (
+    NotificationLog,
+    Position,
+    Signal,
+    get_all_assets,
+    get_open_positions,
+)
 from app.services.analyzer import analyze_single_asset
-from app.services.cache import AnalysisCache
 from app.services.signal_detector import check_entry_conditions
-from modules.data.credit_tracker import CreditTracker
-from modules.data.twelvedata_provider import TwelveDataProvider
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
 
-GRACEFUL_SHUTDOWN_TIMEOUT = 30  # seconds
-
-# Scheduling defaults
-HEAVY_INTERVAL = 1800  # 30 min
-LIGHT_INTERVAL = 120   # 2 min
-MAX_ASSETS = 3          # hard cap for free-tier budget
+ROME_TZ = ZoneInfo("Europe/Rome")
+GRACEFUL_SHUTDOWN_TIMEOUT = 30
 
 
-class AssetMonitor:
-    """Manages background monitoring jobs for one or more assets."""
+class ETFScheduler:
+    """Manages the three daily cron jobs for ETF swing trading."""
 
     def __init__(self, app: FastAPI):
         self.app = app
-        self.scheduler = AsyncIOScheduler()
+        self.scheduler = AsyncIOScheduler(timezone=ROME_TZ)
         self._started = False
-        self._drawdown_breaker = None
-        self._cache = AnalysisCache()
-        self._credit_tracker = CreditTracker()
-        self._td_provider = TwelveDataProvider()
-        self._active_symbols: set[str] = set()
 
-    def _get_drawdown_breaker(self):
-        """Lazy-init drawdown circuit breaker."""
-        if self._drawdown_breaker is None:
-            from modules.circuit_breaker_drawdown import DrawdownCircuitBreaker
-            self._drawdown_breaker = DrawdownCircuitBreaker(
-                self.app.state.session_factory,
-            )
-        return self._drawdown_breaker
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
-    def ensure_running(self) -> None:
-        """Start the scheduler if not already running."""
-        if not self._started:
-            self.scheduler.start()
-            self._started = True
+    def start(self) -> None:
+        """Register cron jobs and start the scheduler."""
+        if self._started:
+            return
 
-    async def start(self, symbol: str) -> dict:
-        """Start monitoring an asset with heavy + light jobs.
-
-        Returns the monitor status dict.
-        """
-        self.ensure_running()
-
-        # Enforce asset cap
-        if symbol not in self._active_symbols and len(self._active_symbols) >= MAX_ASSETS:
-            return {
-                "symbol": symbol,
-                "status": "REJECTED",
-                "reason": f"Max {MAX_ASSETS} assets (credit budget). "
-                          f"Stop another asset first.",
-            }
-
-        heavy_id = f"heavy_{symbol}"
-        light_id = f"light_{symbol}"
-
-        # Remove existing jobs before re-adding
-        for jid in (heavy_id, light_id):
-            if self.scheduler.get_job(jid):
-                self.scheduler.remove_job(jid)
-
-        # Heavy analysis: every 30 min, run immediately on start
         self.scheduler.add_job(
-            self._heavy_analysis,
-            trigger="interval",
-            seconds=HEAVY_INTERVAL,
-            id=heavy_id,
-            args=[symbol],
+            self._morning_briefing,
+            CronTrigger(hour=8, minute=0, timezone=ROME_TZ),
+            id="morning_briefing",
             replace_existing=True,
             max_instances=1,
-            next_run_time=datetime.now(timezone.utc),  # run now
         )
-
-        # Light poll: every 120 s (starts after a short delay to let heavy finish first)
         self.scheduler.add_job(
-            self._light_poll,
-            trigger="interval",
-            seconds=LIGHT_INTERVAL,
-            id=light_id,
-            args=[symbol],
+            self._position_check,
+            CronTrigger(hour=13, minute=0, timezone=ROME_TZ),
+            id="midday_check",
+            replace_existing=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            self._position_check,
+            CronTrigger(hour=17, minute=0, timezone=ROME_TZ),
+            id="closing_check",
             replace_existing=True,
             max_instances=1,
         )
 
-        self._active_symbols.add(symbol)
+        self.scheduler.start()
+        self._started = True
+        logger.info("ETF Scheduler started — jobs at 08:00 / 13:00 / 17:00 CET")
 
-        # Persist to DB
-        await self._upsert_session(symbol, LIGHT_INTERVAL, "ACTIVE")
+    async def startup_catchup(self) -> None:
+        """If the morning briefing was missed today, run it now (before 17:30)."""
+        now_rome = datetime.now(ROME_TZ)
 
-        logger.info(
-            "Monitor started: %s (heavy=%ds, light=%ds)",
-            symbol, HEAVY_INTERVAL, LIGHT_INTERVAL,
-        )
-        return {
-            "symbol": symbol,
-            "status": "ACTIVE",
-            "heavy_interval": HEAVY_INTERVAL,
-            "light_interval": LIGHT_INTERVAL,
-        }
+        # Only catch up between 08:00 and 17:30
+        if now_rome.hour < 8 or (now_rome.hour >= 17 and now_rome.minute > 30):
+            return
 
-    async def stop(self, symbol: str) -> dict:
-        """Stop monitoring an asset."""
-        for prefix in ("heavy_", "light_"):
-            jid = f"{prefix}{symbol}"
-            if self.scheduler.get_job(jid):
-                self.scheduler.remove_job(jid)
-
-        self._active_symbols.discard(symbol)
-        self._cache.invalidate(symbol)
-
-        await self._upsert_session(symbol, status="STOPPED")
-
-        logger.info("Monitor stopped: %s", symbol)
-        return {"symbol": symbol, "status": "STOPPED"}
-
-    async def get_status(self) -> list[dict]:
-        """Return status of all monitored assets."""
+        # Check if we already sent a briefing today
         session_factory = self.app.state.session_factory
-        async with session_factory() as session:
-            result = await session.execute(select(MonitorSession))
-            rows = result.scalars().all()
-
-        statuses = []
-        for row in rows:
-            light_job = self.scheduler.get_job(f"light_{row.symbol}")
-            statuses.append({
-                "symbol": row.symbol,
-                "status": "ACTIVE" if light_job else row.status,
-                "interval_seconds": row.interval_seconds,
-                "started_at": row.started_at.isoformat() if row.started_at else None,
-                "last_check": row.last_check.isoformat() if row.last_check else None,
-                "last_price": row.last_price,
-            })
-        return statuses
-
-    def get_budget(self) -> dict:
-        """Return credit budget status."""
-        stats = self._credit_tracker.stats()
-        stats["active_assets"] = len(self._active_symbols)
-        stats["max_assets"] = MAX_ASSETS
-        stats["assets"] = sorted(self._active_symbols)
-        return stats
-
-    async def restore_from_db(self) -> None:
-        """Restore ACTIVE monitors from the database (called at startup)."""
-        session_factory = self.app.state.session_factory
+        today_start = now_rome.replace(hour=0, minute=0, second=0, microsecond=0)
         async with session_factory() as session:
             result = await session.execute(
-                select(MonitorSession).where(MonitorSession.status == "ACTIVE")
+                select(NotificationLog).where(
+                    NotificationLog.type == "DAILY_BRIEFING",
+                    NotificationLog.timestamp >= today_start,
+                )
             )
-            rows = result.scalars().all()
+            existing = result.scalars().first()
 
-        for row in rows:
-            logger.info("Restoring monitor: %s", row.symbol)
-            await self.start(row.symbol)
+        if existing is None:
+            logger.info("Morning briefing missed today — running catch-up now")
+            await self._morning_briefing()
+
+    def stop(self) -> None:
+        """Stop the scheduler."""
+        if self._started:
+            self.scheduler.shutdown(wait=False)
+            self._started = False
+            logger.info("ETF Scheduler stopped")
 
     async def shutdown(self) -> None:
-        """Shut down the scheduler gracefully."""
-        if self._started:
-            logger.info(
-                "Shutting down monitor (waiting up to %ds for running jobs)...",
-                GRACEFUL_SHUTDOWN_TIMEOUT,
-            )
-            self.scheduler.shutdown(wait=True)
-            self._started = False
-            logger.info("Monitor shutdown complete")
+        """Graceful async shutdown."""
+        self.stop()
 
     def install_signal_handlers(self) -> None:
         """Install SIGTERM/SIGINT handlers for graceful shutdown."""
         loop = asyncio.get_event_loop()
 
-        def _handle_signal(sig: signal.Signals) -> None:
-            logger.info("Received %s — initiating graceful shutdown", sig.name)
+        def _handle(sig: signal.Signals) -> None:
+            logger.info("Received %s — shutting down scheduler", sig.name)
             loop.create_task(self.shutdown())
 
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
-                loop.add_signal_handler(sig, _handle_signal, sig)
+                loop.add_signal_handler(sig, _handle, sig)
             except NotImplementedError:
                 pass  # Windows
 
-    # ─── Heavy analysis (full pipeline, every 30 min) ─────────────
+    def get_schedule(self) -> list[dict[str, str]]:
+        """Return scheduled job info for the API."""
+        jobs = []
+        for job in self.scheduler.get_jobs():
+            next_run = job.next_run_time
+            jobs.append({
+                "id": job.id,
+                "next_run": next_run.isoformat() if next_run else "paused",
+            })
+        return jobs
 
-    async def _heavy_analysis(self, symbol: str) -> None:
-        """Run full analysis pipeline, cache the result."""
-        if not self._credit_tracker.try_spend(1):
-            logger.warning("Skipping heavy analysis for %s — budget exhausted", symbol)
-            return
+    # ------------------------------------------------------------------
+    # Public trigger (for "Analyze Now" button / API)
+    # ------------------------------------------------------------------
 
-        try:
-            config = self.app.state.config
+    async def run_morning_briefing(self) -> dict[str, Any]:
+        """Run the morning briefing on demand. Returns the briefing data."""
+        return await self._morning_briefing()
 
-            from app.models.database import get_all_assets
-            assets = await get_all_assets(self.app.state.session_factory)
-            asset = next(
-                (a for a in assets if a["symbol"] == symbol),
-                {"symbol": symbol, "display_name": symbol},
-            )
+    # ------------------------------------------------------------------
+    # Morning briefing (08:00 CET)
+    # ------------------------------------------------------------------
 
-            analysis = await analyze_single_asset(
-                symbol=symbol,
-                config=config,
-                skip_polymarket=True,
-                asset=asset,
-            )
+    async def _morning_briefing(self) -> dict[str, Any]:
+        """Analyze all ETFs, rank, send Telegram daily briefing."""
+        logger.info("=== MORNING BRIEFING START ===")
+        config = self.app.state.config
+        session_factory = self.app.state.session_factory
 
-            # Cache the full analysis for 30 min
-            self._cache.set(symbol, "heavy_analysis", analysis)
+        assets = await get_all_assets(session_factory)
+        if not assets:
+            logger.warning("No assets configured — skipping briefing")
+            return {"status": "no_assets"}
 
-            # Extract SL/TP distances for price merging
-            setup = analysis.get("setup", {})
-            entry = setup.get("entry_price")
-            sl = setup.get("stop_loss")
-            tp = setup.get("take_profit")
-            if entry and sl:
-                self._cache.set(symbol, "sl_distance", abs(entry - sl), ttl=HEAVY_INTERVAL)
-            if entry and tp:
-                self._cache.set(symbol, "tp_distance", abs(entry - tp), ttl=HEAVY_INTERVAL)
+        # Analyze all ETFs in parallel
+        analyses = await self._analyze_all(assets, config)
 
-            price = None
-            if analysis.get("analysis") and analysis["analysis"].get("price"):
-                price = analysis["analysis"]["price"].get("current")
+        # Classify each: BUY / SELL_IF_HOLDING / HOLD
+        buy_signals: list[dict] = []
+        sell_signals: list[dict] = []
+        hold_signals: list[dict] = []
 
-            # Run signal detection on fresh analysis
-            detection = check_entry_conditions(analysis)
-            await self._update_check(symbol, price, detection)
-            await self._handle_detection(symbol, price, analysis, detection)
+        for a in analyses:
+            regime = a.get("regime", "NEUTRAL")
+            setup = a.get("setup", {})
+            detection = check_entry_conditions(a)
+            symbol = a.get("symbol", "?")
 
-            logger.info(
-                "Heavy analysis done: %s price=%s credits_remaining=%d",
-                symbol, price, self._credit_tracker.remaining,
-            )
+            if detection.fired and regime == "LONG":
+                buy_signals.append({
+                    "symbol": symbol,
+                    "display_name": a.get("display_name", symbol),
+                    "quality_score": setup.get("quality_score", 0),
+                    "entry_price": setup.get("entry_price"),
+                    "stop_loss": setup.get("stop_loss"),
+                    "take_profit": setup.get("take_profit"),
+                    "regime": regime,
+                    "risk_reward": setup.get("risk_reward", "1:2.0"),
+                })
+            elif regime in ("SHORT", "BEARISH"):
+                sell_signals.append({
+                    "symbol": symbol,
+                    "display_name": a.get("display_name", symbol),
+                    "reason": a.get("regime_reason", "Bearish momentum"),
+                })
+            else:
+                hold_signals.append({
+                    "symbol": symbol,
+                    "display_name": a.get("display_name", symbol),
+                })
 
-        except Exception as exc:
-            self._handle_error(symbol, "heavy", exc)
+        # Rank BUY signals by quality score descending
+        buy_signals.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
 
-    # ─── Light poll (quote only, every 120 s) ─────────────────────
+        # Get open positions
+        open_positions = await get_open_positions(session_factory)
 
-    async def _light_poll(self, symbol: str) -> None:
-        """Fetch latest price, merge into cached analysis, check signals."""
-        cached = self._cache.get(symbol, "heavy_analysis")
-        if cached is None:
-            logger.debug("Light poll skipped for %s — no cached analysis yet", symbol)
-            return
+        # Send Telegram briefing
+        briefing_data = {
+            "buy": buy_signals,
+            "sell": sell_signals,
+            "hold": hold_signals,
+            "open_positions": open_positions,
+            "analyses": analyses,
+        }
 
-        if not self._credit_tracker.try_spend(1):
-            logger.warning("Skipping light poll for %s — budget exhausted", symbol)
-            return
+        await self._send_daily_briefing(briefing_data)
 
-        try:
-            # Fetch just the price (1 credit)
-            price = await asyncio.to_thread(self._td_provider.fetch_quote, symbol)
-            if price is None:
-                logger.debug("Light poll: no price returned for %s", symbol)
-                return
-
-            # Merge fresh price into a copy of the cached analysis
-            merged = self._merge_price(cached, symbol, price)
-
-            # Run signal detection on merged data
-            detection = check_entry_conditions(merged)
-            await self._update_check(symbol, price, detection)
-
-            # Broadcast price update
-            await self._broadcast_price(symbol, price, merged)
-
-            # Handle signal if fired
-            await self._handle_detection(symbol, price, merged, detection)
-
-        except Exception as exc:
-            self._handle_error(symbol, "light", exc)
-
-    def _merge_price(self, cached: dict, symbol: str, price: float) -> dict:
-        """Create a copy of cached analysis with the fresh price merged in.
-
-        Updates:
-        - analysis.price.current
-        - setup.entry_price (set to current price)
-        - setup.stop_loss / take_profit (recomputed from cached distances)
-        """
-        merged = copy.deepcopy(cached)
-
-        # Update current price
-        analysis = merged.get("analysis", {})
-        price_data = analysis.get("price", {})
-        price_data["current"] = price
-        analysis["price"] = price_data
-        merged["analysis"] = analysis
-
-        # Update entry/SL/TP using cached distances
-        setup = merged.get("setup", {})
-        setup["entry_price"] = price
-
-        sl_dist = self._cache.get(symbol, "sl_distance")
-        tp_dist = self._cache.get(symbol, "tp_distance")
-        direction = merged.get("regime", "NEUTRAL")
-
-        if sl_dist:
-            if direction == "LONG":
-                setup["stop_loss"] = price - sl_dist
-                if tp_dist:
-                    setup["take_profit"] = price + tp_dist
-            elif direction == "SHORT":
-                setup["stop_loss"] = price + sl_dist
-                if tp_dist:
-                    setup["take_profit"] = price - tp_dist
-
-        merged["setup"] = setup
-        return merged
-
-    # ─── Shared helpers ───────────────────────────────────────────
-
-    async def _handle_detection(
-        self, symbol: str, price: float | None, analysis: dict, detection: Any
-    ) -> None:
-        """If signal fired → check breaker → save → notify."""
-        if not detection.fired:
-            return
-
-        breaker = self._get_drawdown_breaker()
-        if await breaker.is_tripped():
-            logger.warning(
-                "SIGNAL BLOCKED by drawdown breaker: %s %s @ %s",
-                symbol, detection.direction, detection.entry,
-            )
-            detection.fired = False
-            detection.reason = "DRAWDOWN BREAKER: daily/weekly loss limit reached"
-            await self._update_check(symbol, price, detection)
-            return
+        # Save signals to DB for BUY entries
+        for sig in buy_signals:
+            await self._save_buy_signal(sig, analyses)
 
         logger.info(
-            "SIGNAL FIRED: %s %s @ %s",
-            symbol, detection.direction, detection.entry,
+            "=== MORNING BRIEFING DONE === BUY:%d SELL:%d HOLD:%d",
+            len(buy_signals), len(sell_signals), len(hold_signals),
         )
+        return briefing_data
 
-        await self._save_signal(detection, analysis)
+    # ------------------------------------------------------------------
+    # Position check (13:00, 17:00 CET)
+    # ------------------------------------------------------------------
 
-        signal_msg = {
-            "type": "signal",
-            "symbol": symbol,
-            "direction": detection.direction,
-            "entry": detection.entry,
-            "sl": detection.sl,
-            "tp": detection.tp,
-            "quality_score": detection.quality_score,
-            "mtf": detection.mtf_alignment,
-            "regime": detection.regime,
-            "timestamp": detection.timestamp,
-        }
+    async def _position_check(self) -> None:
+        """Check open positions: price vs SL/TP, max hold days."""
+        logger.info("=== POSITION CHECK START ===")
+        session_factory = self.app.state.session_factory
+        positions = await get_open_positions(session_factory)
+
+        if not positions:
+            logger.info("No open positions to check")
+            return
+
+        from modules.strategy import MAX_HOLD_DAYS, should_force_exit
+
+        for pos in positions:
+            symbol = pos["symbol"]
+            try:
+                current_price = await self._fetch_current_price(symbol)
+                if current_price is None:
+                    continue
+
+                entry_price = pos["entry_price"]
+                sl = pos.get("stop_loss")
+                tp = pos.get("take_profit")
+                entry_date = datetime.fromisoformat(pos["entry_date"])
+                now = datetime.now(timezone.utc)
+
+                reason = None
+
+                # Check stop loss
+                if sl and current_price <= sl:
+                    reason = f"Stop-loss hit ({current_price:.2f} <= {sl:.2f})"
+
+                # Check take profit
+                elif tp and current_price >= tp:
+                    reason = f"Take-profit reached ({current_price:.2f} >= {tp:.2f})"
+
+                # Check max hold period
+                elif should_force_exit(entry_date, now):
+                    days = (now - entry_date).days
+                    reason = f"Max hold exceeded ({days}/{MAX_HOLD_DAYS} days)"
+
+                if reason:
+                    await self._send_sell_alert(pos, current_price, reason)
+                    logger.info("SELL ALERT: %s — %s", symbol, reason)
+
+            except Exception as exc:
+                logger.error("Position check failed for %s: %s", symbol, exc)
+
+        logger.info("=== POSITION CHECK DONE ===")
+
+    # ------------------------------------------------------------------
+    # Analysis helpers
+    # ------------------------------------------------------------------
+
+    async def _analyze_all(
+        self, assets: list[dict], config: dict
+    ) -> list[dict[str, Any]]:
+        """Run analyze_single_asset for all ETFs concurrently."""
+        tasks = [
+            analyze_single_asset(
+                symbol=asset["symbol"],
+                config=config,
+                asset=asset,
+            )
+            for asset in assets
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        analyses = []
+        for asset, result in zip(assets, results):
+            if isinstance(result, Exception):
+                logger.error("Analysis failed for %s: %s", asset["symbol"], result)
+                continue
+            analyses.append(result)
+        return analyses
+
+    async def _fetch_current_price(self, symbol: str) -> float | None:
+        """Fetch the latest price for a symbol via yfinance."""
         try:
-            from app.api.websocket import broadcast
-            await broadcast(signal_msg)
-        except Exception as ws_exc:
-            logger.warning("WebSocket broadcast failed: %s", ws_exc)
+            import yfinance as yf
 
-        try:
-            await self._notify_telegram(symbol, analysis, detection)
-        except Exception as tg_exc:
-            logger.warning("Telegram notification failed: %s", tg_exc)
+            ticker = await asyncio.to_thread(yf.Ticker, symbol)
+            info = await asyncio.to_thread(lambda: ticker.fast_info)
+            price = getattr(info, "last_price", None)
+            if price is None:
+                price = getattr(info, "previous_close", None)
+            return float(price) if price else None
+        except Exception as exc:
+            logger.warning("Price fetch failed for %s: %s", symbol, exc)
+            return None
 
-    async def _broadcast_price(self, symbol: str, price: float, analysis: dict) -> None:
-        """Broadcast a price_update message via WebSocket."""
-        from app.api.websocket import broadcast
-        await broadcast({
-            "type": "price_update",
-            "symbol": symbol,
-            "price": price,
-            "change_pct": (
-                analysis.get("analysis", {}).get("price", {}).get("change_pct")
-            ),
-            "regime": analysis.get("regime", "NEUTRAL"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+    # ------------------------------------------------------------------
+    # Signal persistence
+    # ------------------------------------------------------------------
 
-    def _handle_error(self, symbol: str, job_type: str, exc: Exception) -> None:
-        """Log errors from poll/analysis jobs."""
-        from modules.exceptions import TransientError
-        if isinstance(exc, TransientError):
-            logger.warning("Monitor %s transient error for %s: %s", job_type, symbol, exc)
-        else:
-            logger.error(
-                "Monitor %s failed for %s: %s", job_type, symbol, exc, exc_info=True
-            )
-
-    async def _upsert_session(
-        self,
-        symbol: str,
-        interval_seconds: int | None = None,
-        status: str = "ACTIVE",
-    ) -> None:
-        """Insert or update a MonitorSession row."""
+    async def _save_buy_signal(self, sig: dict, analyses: list[dict]) -> None:
+        """Save a BUY signal to the signals table."""
         session_factory = self.app.state.session_factory
+
+        # Find matching analysis for sentiment data
+        analysis = next(
+            (a for a in analyses if a.get("symbol") == sig["symbol"]),
+            {},
+        )
+        sentiment = analysis.get("sentiment") or {}
+        technicals = analysis.get("analysis", {}).get("technicals", {})
+
         async with session_factory() as session:
-            result = await session.execute(
-                select(MonitorSession).where(MonitorSession.symbol == symbol)
-            )
-            row = result.scalars().first()
-
-            if row:
-                values: dict = {"status": status}
-                if interval_seconds is not None:
-                    values["interval_seconds"] = interval_seconds
-                if status == "ACTIVE":
-                    values["started_at"] = datetime.now(timezone.utc)
-                await session.execute(
-                    update(MonitorSession)
-                    .where(MonitorSession.symbol == symbol)
-                    .values(**values)
-                )
-            else:
-                row = MonitorSession(
-                    symbol=symbol,
-                    interval_seconds=interval_seconds or LIGHT_INTERVAL,
-                    status=status,
-                )
-                session.add(row)
-
-            await session.commit()
-
-    async def _update_check(self, symbol: str, price: float | None, detection) -> None:
-        """Update last_check and last_price in the MonitorSession."""
-        session_factory = self.app.state.session_factory
-        async with session_factory() as session:
-            values: dict[str, Any] = {
-                "last_check": datetime.now(timezone.utc),
-            }
-            if price is not None:
-                values["last_price"] = price
-            if detection:
-                values["last_signal"] = json.dumps(detection.to_dict())
-
-            await session.execute(
-                update(MonitorSession)
-                .where(MonitorSession.symbol == symbol)
-                .values(**values)
-            )
-            await session.commit()
-
-    async def _save_signal(self, detection, analysis: dict) -> None:
-        """Persist a fired signal to the signals table."""
-        session_factory = self.app.state.session_factory
-        async with session_factory() as session:
-            sentiment = analysis.get("sentiment") or {}
-            technicals = analysis.get("analysis", {}).get("technicals", {})
-
-            sig = Signal(
+            db_signal = Signal(
                 timestamp=datetime.now(timezone.utc),
-                symbol=detection.symbol,
-                direction=detection.direction or "NEUTRAL",
-                entry_price=detection.entry or 0,
-                stop_loss=detection.sl or 0,
-                take_profit=detection.tp or 0,
-                quality_score=detection.quality_score,
-                mtf_alignment=detection.mtf_alignment,
-                regime=detection.regime,
+                symbol=sig["symbol"],
+                direction="LONG",
+                entry_price=sig.get("entry_price") or 0,
+                stop_loss=sig.get("stop_loss") or 0,
+                take_profit=sig.get("take_profit") or 0,
+                quality_score=sig.get("quality_score", 0),
+                regime="LONG",
                 sentiment_score=sentiment.get("score"),
                 composite_score=technicals.get("composite_score"),
                 confidence_pct=technicals.get("confidence_pct"),
-                session=detection.conditions[-3].detail.split("=")[1]
-                if len(detection.conditions) >= 3
-                else None,
             )
-            session.add(sig)
+            session.add(db_signal)
             await session.commit()
 
-    async def _notify_telegram(self, symbol: str, analysis: dict, detection) -> None:
-        """Send signal to Telegram if configured."""
-        try:
-            from app.services.notifier import get_notifier_from_db
+    # ------------------------------------------------------------------
+    # Telegram notifications
+    # ------------------------------------------------------------------
 
-            session_factory = self.app.state.session_factory
-            notifier = await get_notifier_from_db(session_factory)
+    async def _get_notifier(self):
+        """Get the TelegramNotifier from DB settings."""
+        from app.services.notifier import get_notifier_from_db
+        return await get_notifier_from_db(self.app.state.session_factory)
+
+    async def _send_daily_briefing(self, briefing: dict) -> None:
+        """Format and send the daily ETF briefing via Telegram."""
+        try:
+            notifier = await self._get_notifier()
             if not notifier.enabled:
                 return
-            async with session_factory() as db_session:
-                await notifier.send_signal(
-                    symbol=symbol,
-                    display_name=analysis.get("display_name", symbol),
-                    setup=analysis.get("setup", {}),
-                    regime=analysis.get("regime", "NEUTRAL"),
-                    regime_reason=analysis.get("regime_reason", ""),
-                    sentiment=analysis.get("sentiment"),
-                    calendar=analysis.get("calendar"),
-                    session=db_session,
-                )
+
+            today = datetime.now(ROME_TZ).strftime("%d %b %Y")
+            lines = [f"<b>DAILY ETF BRIEFING — {today}</b>", "━━━━━━━━━━━━━━━━━━━━━━"]
+
+            # BUY signals
+            buy = briefing.get("buy", [])
+            if buy:
+                lines.append("\n<b>BUY:</b>")
+                for i, s in enumerate(buy, 1):
+                    entry = s.get("entry_price")
+                    sl = s.get("stop_loss")
+                    tp = s.get("take_profit")
+                    qs = s.get("quality_score", 0)
+                    rr = s.get("risk_reward", "1:2.0")
+
+                    sl_pct = abs((sl - entry) / entry * 100) if entry and sl else 0
+                    tp_pct = abs((tp - entry) / entry * 100) if entry and tp else 0
+
+                    lines.append(
+                        f"{i}. <b>{s['symbol']}</b> ({s['display_name']}) — QS {qs}/5\n"
+                        f"   Entry ~{entry:.2f} | SL {sl:.2f} (-{sl_pct:.1f}%) | TP {tp:.2f} (+{tp_pct:.1f}%)\n"
+                        f"   R:R {rr} | Regime: LONG"
+                    )
+
+                    # Position size hint
+                    if entry and entry > 0:
+                        shares = math.floor(1500.0 / entry)
+                        lines.append(f"   ~{shares} shares at €{entry:.2f} (€1,500)")
+            else:
+                lines.append("\n<b>BUY:</b> None today")
+
+            # SELL IF HOLDING
+            sell = briefing.get("sell", [])
+            if sell:
+                lines.append("\n<b>SELL IF HOLDING:</b>")
+                for s in sell:
+                    lines.append(f"  {s['symbol']} — {s.get('reason', 'bearish momentum')}")
+
+            # HOLD
+            hold = briefing.get("hold", [])
+            if hold:
+                syms = ", ".join(s["symbol"] for s in hold)
+                lines.append(f"\n<b>HOLD (no action):</b>\n  {syms}")
+
+            # Open positions
+            positions = briefing.get("open_positions", [])
+            max_pos = 2
+            lines.append(f"\n<b>Open positions: {len(positions)}/{max_pos}</b>")
+            if positions:
+                for p in positions:
+                    entry_date = p.get("entry_date", "")
+                    days = 0
+                    if entry_date:
+                        try:
+                            ed = datetime.fromisoformat(entry_date)
+                            days = (datetime.now(timezone.utc) - ed).days
+                        except (ValueError, TypeError):
+                            pass
+                    lines.append(f"  {p['symbol']}: entry {p['entry_price']:.2f} (day {days}/10)")
+
+            text = "\n".join(lines)
+            await notifier._send(text)
+
+            # Log the notification
+            session_factory = self.app.state.session_factory
+            async with session_factory() as session:
+                session.add(NotificationLog(
+                    type="DAILY_BRIEFING",
+                    message=text[:500],
+                    channel="TELEGRAM",
+                ))
+                await session.commit()
+
         except Exception as exc:
-            logger.error("Telegram notification failed for %s: %s", symbol, exc)
+            logger.error("Failed to send daily briefing: %s", exc)
+
+    async def _send_sell_alert(
+        self, position: dict, current_price: float, reason: str
+    ) -> None:
+        """Send a SELL alert for an open position."""
+        try:
+            notifier = await self._get_notifier()
+            if not notifier.enabled:
+                return
+
+            entry = position["entry_price"]
+            shares = position.get("shares", 0)
+            pnl = (current_price - entry) * shares - 5.90  # round-trip commission
+            pnl_pct = ((current_price - entry) / entry * 100) if entry else 0
+
+            entry_date = position.get("entry_date", "")
+            days = 0
+            if entry_date:
+                try:
+                    ed = datetime.fromisoformat(entry_date)
+                    days = (datetime.now(timezone.utc) - ed).days
+                except (ValueError, TypeError):
+                    pass
+
+            text = (
+                f"🔔 <b>SELL ALERT — {position['symbol']}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Reason: {reason}\n"
+                f"Entry: {entry:.2f} | Current: {current_price:.2f}\n"
+                f"P&amp;L: {pnl:+.2f} EUR ({pnl_pct:+.1f}%) — {days} days held\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>Action: Close on Fineco</b>"
+            )
+
+            await notifier._send(text)
+
+            session_factory = self.app.state.session_factory
+            async with session_factory() as session:
+                session.add(NotificationLog(
+                    type="SELL_ALERT",
+                    symbol=position["symbol"],
+                    message=text[:500],
+                    channel="TELEGRAM",
+                ))
+                await session.commit()
+
+        except Exception as exc:
+            logger.error("Failed to send sell alert: %s", exc)
