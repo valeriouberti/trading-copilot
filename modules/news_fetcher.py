@@ -307,15 +307,8 @@ def summarize_news_with_llm(
     if not articles:
         return []
 
-    api_key = os.environ.get("GROQ_API_KEY", "")
-    if not api_key:
-        # Fallback: just return top titles
-        return [a["title"] for a in articles[:max_bullets]]
-
-    from modules.groq_client import get_groq_client
-
-    client = get_groq_client(api_key)
-    if client is None:
+    from modules.llm_client import get_active_provider
+    if get_active_provider() == "none":
         return [a["title"] for a in articles[:max_bullets]]
 
     asset_name = (
@@ -337,17 +330,13 @@ Respond ONLY with {max_bullets} bullet points (one per line, starting with "- ")
 No preamble, no numbering, no markdown."""
 
     try:
-        groq_model = os.environ.get("GROQ_MODEL", "qwen/qwen3-32b")
-        response = client.chat.completions.create(
-            model=groq_model,
-            messages=[
-                {"role": "system", "content": "You are a financial news summarizer. Be concise and focus on market impact."},
-                {"role": "user", "content": prompt},
-            ],
+        from modules.llm_client import llm_call
+        raw = llm_call(
+            system_msg="You are a financial news summarizer. Be concise and focus on market impact.",
+            user_msg=prompt,
             temperature=0.2,
             max_tokens=300,
         )
-        raw = response.choices[0].message.content.strip()
         bullets = [
             line.lstrip("- ").strip()
             for line in raw.split("\n")
