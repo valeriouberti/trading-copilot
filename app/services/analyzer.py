@@ -410,6 +410,7 @@ async def analyze_single_asset(
     config: dict,
     skip_llm: bool = False,
     skip_polymarket: bool = False,
+    skip_calendar: bool = False,
     asset: dict | None = None,
 ) -> dict:
     """Run the full analysis pipeline for a single asset.
@@ -431,11 +432,11 @@ async def analyze_single_asset(
     # Phase 1: Parallel data fetching — check cache first
     cached_tech = _cache.get(symbol, "price")
     cached_news = _cache.get(symbol, "news")
-    cached_calendar = _cache.get(symbol, "calendar")
+    cached_calendar = _cache.get("_global", "calendar") if not skip_calendar else None
 
     tech_task = None if cached_tech else asyncio.to_thread(_run_technicals, asset)
     news_task = None if cached_news else asyncio.to_thread(_run_news, feeds, lookback_hours, asset)
-    calendar_task = None if cached_calendar else asyncio.to_thread(_run_calendar)
+    calendar_task = None if (cached_calendar or skip_calendar) else asyncio.to_thread(_run_calendar)
 
     cached_poly = _cache.get(symbol, "polymarket") if not skip_polymarket else None
     poly_task = None
@@ -469,7 +470,7 @@ async def analyze_single_asset(
     if news_result and cached_news is None:
         _cache.set(symbol, "news", news_result)
     if calendar_data and cached_calendar is None:
-        _cache.set(symbol, "calendar", calendar_data)
+        _cache.set("_global", "calendar", calendar_data)
     if poly_data and cached_poly is None and not skip_polymarket:
         _cache.set(symbol, "polymarket", poly_data)
 
