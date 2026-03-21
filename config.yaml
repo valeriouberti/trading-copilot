@@ -27,7 +27,7 @@ rss_feeds:
 # Same as above — imported into DB on first startup only.
 # Manage assets via the web dashboard after initial setup.
 seed_assets:
-  - symbol: ES=F
+  - symbol: "^GSPC"
     display_name: S&P 500
   - symbol: GC=F
     display_name: Gold

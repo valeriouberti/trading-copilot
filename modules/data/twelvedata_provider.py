@@ -39,6 +39,8 @@ _TD_SYMBOL_MAP: dict[str, str] = {
     "SI": "SI",
     "CL": "CL",
     "NG": "NG",
+    # Indices
+    "GSPC": "SPX",
     # Reference
     "DXY": "DXY",
     "VIX": "VIX",
@@ -139,7 +141,7 @@ class TwelveDataProvider(DataProvider):
             return None
 
         # Normalize yfinance-style symbols to canonical
-        canonical = symbol.replace("=F", "").replace("=X", "")
+        canonical = symbol.replace("=F", "").replace("=X", "").lstrip("^")
         td_symbol = _TD_SYMBOL_MAP.get(canonical, canonical)
         params = {
             "symbol": td_symbol,
