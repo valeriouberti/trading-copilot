@@ -4,6 +4,41 @@ All notable changes to this project are documented here.
 
 ---
 
+## v6.4.0 — 21 March 2026
+
+### Codebase Cleanup & Documentation Update
+
+Senior architect review: dead code removal, test reorganization, dependency management, docs accuracy fixes.
+
+#### Dead Code Removal
+- **Deleted `modules/backtester.py`** (938 lines) — deprecated legacy backtester replaced by `modules/vbt_backtester.py`
+- **Deleted `tests/test_backtester.py`** (718 lines) — tests for deleted backtester
+- **Deleted `app/templates/login.html`** (72 lines) — orphaned template with no route serving it
+- **Deleted `app/static/js/app.js`** (6 lines) — unused, not referenced by any template
+- Removed `/login` from `_PUBLIC_PATHS` in `app/middleware/auth.py`
+
+#### Test Suite Reorganization
+- **Split `tests/test_sprint456.py`** into domain-specific files:
+  - `tests/test_analyzer.py` — ATR-adaptive SL/TP tests (`_compute_setup`)
+  - `tests/test_auth.py` — API key authentication middleware tests
+  - `tests/test_analytics_api.py` — Portfolio heatmap endpoint tests
+- Removed 7 duplicate candle pattern tests (already in `tests/test_price_data.py`)
+- Fixed hardcoded absolute paths in `TestRequirementsFiles` — now uses `Path(__file__).resolve().parent.parent`
+- **405 tests pass, 0 failures** (down from 412 — 7 duplicates removed)
+
+#### Dependency Management
+- **Added `pyproject.toml`** — project metadata, dependencies with optional `[ml]` and `[dev]` groups, pytest config
+- Existing requirements files kept for backward compatibility
+
+#### Documentation Fixes
+- Fixed SL/TP table in `docs/strategy.md` to match actual code values (forex 1.2x/3.0x, commodity 1.5x/3.5x, index 2.0x/4.0x, stock 1.8x/3.0x)
+- Removed deleted `backtester.py` from project structure in README
+- Added `pyproject.toml` to project structure and install instructions
+- Updated `docs/deployment.md` with `pyproject.toml` install alternative
+- Added deletion annotations to CHANGELOG entries that reference removed files
+
+---
+
 ## v6.3.0 — 21 March 2026
 
 ### Strategy Audit & Production Fixes
@@ -140,7 +175,7 @@ Single source of truth for trading strategy shared between live system and backt
 - `modules/price_data.py` uses `strategy.label_*()` for indicator labeling
 - `modules/price_data.py` uses `strategy.compute_composite()` for scoring
 - `app/services/analyzer.py` uses `strategy.compute_sl_tp()` for SL/TP
-- Old backtester (`modules/backtester.py`) marked as deprecated
+- Old backtester (`modules/backtester.py`) marked as deprecated _(deleted in v6.4.0)_
 
 ---
 
@@ -165,13 +200,13 @@ Sprint 6 del piano unificato: funzionalita' di trading avanzate per migliorare l
 - `kelly_position_size()` nel backtester
 - Half-Kelly capped (floor 0.25%, ceiling 2%)
 - Integrato nell'output del backtesting
-- **Files**: `modules/backtester.py`
+- **Files**: `modules/backtester.py` _(deleted in v6.4.0)_
 
 #### Monte Carlo Simulation (T4.3)
 - 1000 permutazioni dell'equity curve
 - Output: median + 5th/95th percentile bands
 - Distribuzione statistica del max drawdown
-- **Files**: `modules/backtester.py`
+- **Files**: `modules/backtester.py` _(deleted in v6.4.0)_
 
 #### Portfolio Heat Map (T6.1)
 - Endpoint `GET /api/analytics/heatmap`
@@ -191,14 +226,14 @@ Sprint 5 del piano unificato: sicurezza e testing.
 - Header `X-API-Key` o query param `api_key`
 - Abilitato solo con env var `TRADING_COPILOT_API_KEY`
 - Endpoint health e static esclusi
-- Login page in `app/templates/login.html`
-- **Files**: `app/middleware/auth.py`, `app/templates/login.html`, `app/server.py`
+- Login page in `app/templates/login.html` _(deleted in v6.4.0)_
+- **Files**: `app/middleware/auth.py`, `app/templates/login.html` _(deleted in v6.4.0)_, `app/server.py`
 
 #### Walk-Forward Optimization (T4.2)
 - Metodo `walk_forward()` nel `BacktestEngine`
 - Rolling window: train su N giorni, test su M
 - Confronto in-sample vs out-of-sample performance
-- **Files**: `modules/backtester.py`
+- **Files**: `modules/backtester.py` _(deleted in v6.4.0)_
 
 #### Separate ML Dependencies (E7.2)
 - `requirements-base.txt` — dipendenze core (senza torch/transformers)
@@ -247,12 +282,12 @@ Sprint 4 del piano unificato: segnali migliori, esecuzione piu' veloce.
 Sprint 3 del piano unificato: validazione regole di trading su dati storici.
 
 #### Backtester Core (T4.1)
-- `BacktestEngine` in `modules/backtester.py`
+- `BacktestEngine` in `modules/backtester.py` _(deleted in v6.4.0)_
 - `compute_indicators()`, `generate_signals()`, `simulate_trades()`, `compute_statistics()`
 - Metriche: win rate, profit factor, max drawdown, Sharpe ratio, avg R-multiple
 - CLI: `python -m modules.backtester --symbol NQ=F --period 6mo`
 - 36 test dedicati in `tests/test_backtester.py`
-- **Files**: `modules/backtester.py`, `tests/test_backtester.py`
+- **Files**: `modules/backtester.py` _(deleted in v6.4.0)_, `tests/test_backtester.py` _(deleted in v6.4.0)_
 
 #### Rate Limiting (E4.2)
 - `slowapi` rate limiter middleware
@@ -631,4 +666,4 @@ Tutti i moduli CLI (`modules/`) restano invariati — il web app e' un layer sop
 
 ---
 
-*Last updated: 21 March 2026 — v6.3.0*
+*Last updated: 21 March 2026 — v6.4.0*

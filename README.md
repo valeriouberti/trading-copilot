@@ -26,7 +26,7 @@ git clone <repo-url>
 cd trading-assistant
 
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt        # or: pip install .
 
 cp .env.example .env
 # Edit .env with your API keys
@@ -241,6 +241,7 @@ Notification types: trade signals, regime changes, calendar alerts, monitor stat
 trading-assistant/
 +-- main.py                     # CLI entry point
 +-- run_webapp.py                # Web dashboard entry point
++-- pyproject.toml               # Project metadata + dependencies
 +-- config.yaml                  # Seed data (optional, first run only)
 +-- .env.example                 # Environment variable template
 +-- Dockerfile                   # Multi-stage (full + lite)
@@ -280,7 +281,6 @@ trading-assistant/
 |   +-- exceptions.py            # Typed exception hierarchy
 |   +-- circuit_breaker.py       # Circuit breaker for external APIs
 |   +-- retry.py                 # Retry decorators (tenacity)
-|   +-- backtester.py            # Legacy backtester
 |   +-- vbt_backtester.py        # VectorBT backtester
 |
 +-- docs/                        # Documentation wiki

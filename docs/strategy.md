@@ -102,11 +102,12 @@ Key levels are drawn on the chart as dashed lines and factor into the Quality Sc
 
 Stop loss and take profit use **per-class ATR multipliers** with adaptive adjustment:
 
-| Asset Class | SL Multiplier | Default R:R |
-|-------------|--------------|-------------|
-| Index | 1.5x ATR | 1:2.0 |
-| Commodity | 2.0x ATR | 1:2.5 |
-| Forex | 1.5x ATR | 1:2.0 |
+| Asset Class | SL Multiplier | TP Multiplier | Default R:R |
+|-------------|--------------|---------------|-------------|
+| Forex | 1.2x ATR | 3.0x ATR | 1:2.5 |
+| Commodity | 1.5x ATR | 3.5x ATR | 1:2.3 |
+| Index | 2.0x ATR | 4.0x ATR | 1:2.0 |
+| Stock | 1.8x ATR | 3.0x ATR | 1:1.7 |
 
 **Adaptive mode**: when ATR history is available, the system uses the ATR percentile to adjust:
 - Low volatility (ATR < 30th pct): tighter stops

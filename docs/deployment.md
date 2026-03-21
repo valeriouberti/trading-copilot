@@ -7,13 +7,21 @@ git clone <repo-url>
 cd trading-assistant
 
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt        # or: pip install .
 
 cp .env.example .env
 # Edit .env with your API keys
 
 python run_webapp.py
 # Open http://localhost:8000
+```
+
+**Alternative install via pyproject.toml:**
+
+```bash
+pip install .                          # base dependencies
+pip install ".[ml]"                    # with FinBERT/torch
+pip install ".[dev]"                   # with test dependencies
 ```
 
 The app uses SQLite by default — no database setup required.
