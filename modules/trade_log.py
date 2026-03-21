@@ -19,7 +19,7 @@ TRADE_LOG_FILE = "trade_log.csv"
 COLUMNS = [
     "date", "asset", "llm_score", "tech_signal", "poly_signal",
     "direction", "quality_score", "entry_price", "exit_price",
-    "outcome_pips", "llm_correct", "notes",
+    "outcome_eur", "llm_correct", "notes",
 ]
 
 
@@ -41,7 +41,7 @@ def log_trade(
     quality_score: int = 0,
     entry_price: float = 0.0,
     exit_price: float = 0.0,
-    outcome_pips: float = 0.0,
+    outcome_eur: float = 0.0,
     llm_correct: str = "N/A",
     notes: str = "",
     log_path: str = TRADE_LOG_FILE,
@@ -57,7 +57,7 @@ def log_trade(
     row = [
         today, asset, f"{llm_score:+.1f}", tech_signal, poly_signal,
         direction, str(quality_score), f"{entry_price:.2f}",
-        f"{exit_price:.2f}", f"{outcome_pips:.1f}", llm_correct, notes,
+        f"{exit_price:.2f}", f"{outcome_eur:.1f}", llm_correct, notes,
     ]
 
     with open(log_path, "a", newline="", encoding="utf-8") as f:
@@ -121,8 +121,8 @@ def compute_accuracy(log_path: str = TRADE_LOG_FILE) -> dict[str, Any] | None:
     correct = sum(1 for t in directional if t.get("llm_correct") == "TRUE")
     accuracy = (correct / len(directional)) * 100
 
-    total_pips = sum(float(t.get("outcome_pips", 0) or 0) for t in directional)
-    wins = sum(1 for t in directional if float(t.get("outcome_pips", 0) or 0) > 0)
+    total_eur = sum(float(t.get("outcome_eur", 0) or 0) for t in directional)
+    wins = sum(1 for t in directional if float(t.get("outcome_eur", 0) or 0) > 0)
     win_rate = (wins / len(directional)) * 100
 
     if accuracy < 50:
@@ -141,7 +141,7 @@ def compute_accuracy(log_path: str = TRADE_LOG_FILE) -> dict[str, Any] | None:
         "sufficient_data": True,
         "llm_accuracy": round(accuracy, 1),
         "win_rate": round(win_rate, 1),
-        "total_pips": round(total_pips, 1),
+        "total_eur": round(total_eur, 1),
         "rating": rating,
     }
 
@@ -166,7 +166,7 @@ def print_accuracy_report(log_path: str = TRADE_LOG_FILE) -> None:
     else:
         print(f"\n  LLM Accuracy:       {stats['llm_accuracy']:.1f}%")
         print(f"  Win Rate:           {stats['win_rate']:.1f}%")
-        print(f"  Total P&L (pips):   {stats['total_pips']:+.1f}")
+        print(f"  Total P&L (EUR):    {stats['total_eur']:+.1f}")
         print(f"\n  Rating: {stats['rating']}")
 
     print("=" * 60)

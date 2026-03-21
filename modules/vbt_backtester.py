@@ -1,16 +1,17 @@
-"""vectorbt-based backtesting engine.
+"""vectorbt-based backtesting engine — ETF LONG-only.
 
-Replaces the custom backtester with vectorbt for:
-- Vectorized simulation (1000x faster parameter sweeps)
-- Realistic spread/commission modeling (Fineco CFD costs)
+Backtests the UCITS ETF swing trading strategy with:
+- LONG-only signals (BEARISH → no trade, not short)
+- Realistic Fineco costs (€2.95 commission per trade, no spread)
+- Max 10-day hold period forced exit
+- Position sizing in EUR with shares calculation
 - Portfolio-level metrics (Sharpe, Sortino, Calmar, etc.)
-- Built-in walk-forward and Monte Carlo analysis
 
 Usage::
 
-    python -m modules.vbt_backtester --symbols NQ ES GC EURUSD AAPL --period 1y
-    python -m modules.vbt_backtester --class forex --period 2y --interval 1h
-    python -m modules.vbt_backtester --all --period 1y
+    python -m modules.vbt_backtester --symbols SWDA.MI CSSPX.MI EQQQ.MI
+    python -m modules.vbt_backtester --all --bars 500
+    python -m modules.vbt_backtester --symbols EQQQ.MI --bars 250
 """
 
 from __future__ import annotations
@@ -115,7 +116,8 @@ def generate_signals(
     Uses regime-aware indicator labeling from modules.strategy for the same
     logic as the live system. Optionally filters by Quality Score.
 
-    Adds columns: signal (1=LONG, -1=SHORT, 0=none), composite_score, regime.
+    Adds columns: signal (1=LONG, 0=none), composite_score, regime.
+    LONG-only: BEARISH signals are set to 0 (no trade) instead of -1.
 
     Args:
         df: DataFrame with indicator columns from compute_indicators().
@@ -151,9 +153,7 @@ def generate_signals(
         if composite_dir == "BULLISH":
             signals[i] = 1
             scores[i] = confidence / 100.0
-        elif composite_dir == "BEARISH":
-            signals[i] = -1
-            scores[i] = confidence / 100.0
+        # LONG-only: BEARISH signals are skipped (no short selling for ETFs)
 
     df["signal"] = signals
     df["composite_score"] = scores
@@ -173,19 +173,22 @@ def generate_signals(
 
 @dataclass
 class CostModel:
-    """Realistic trading costs for backtesting."""
+    """Realistic trading costs for ETF backtesting."""
 
-    spread: float = 0.0       # Spread in price units (applied at entry + exit)
-    commission: float = 0.0   # Fixed commission per trade (USD)
-    slippage_pct: float = 0.0001  # Slippage as fraction of price (1 bps default)
+    spread: float = 0.0            # ETFs have no spread (exchange-traded)
+    commission: float = 2.95       # Fineco per-trade commission in EUR
+    slippage_pct: float = 0.0005   # Slippage as fraction of price (5 bps for ETFs)
+
+
+MAX_HOLD_BARS = 10  # Force exit after 10 bars (days)
 
 
 def get_cost_model(spec: AssetSpec) -> CostModel:
-    """Build a cost model from asset specification."""
+    """Build a cost model from ETF asset specification."""
     return CostModel(
-        spread=spec.spread_points,
-        commission=spec.commission,
-        slippage_pct=0.0001,
+        spread=0.0,
+        commission=spec.commission_eur,
+        slippage_pct=0.0005,
     )
 
 
@@ -195,8 +198,8 @@ _CLASS_PARAMS: dict[AssetClass, dict[str, float]] = {
     if k in [e.value for e in AssetClass]
 }
 
-# Default starting equity for metrics (USD)
-DEFAULT_EQUITY = 10_000.0
+# Default starting equity for metrics (EUR, small account)
+DEFAULT_EQUITY = 3_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -216,32 +219,28 @@ class VBTBacktestResult:
     # Trade metrics
     total_trades: int = 0
     long_trades: int = 0
-    short_trades: int = 0
     win_rate: float = 0.0
     profit_factor: float = 0.0
-    total_pnl: float = 0.0        # Raw price-unit PnL
-    total_pnl_usd: float = 0.0    # PnL in USD (price_pnl × point_value)
+    total_pnl_eur: float = 0.0    # PnL in EUR (shares × price_diff - commissions)
     avg_trade_pnl: float = 0.0
-    expectancy: float = 0.0
-    expectancy_usd: float = 0.0
+    expectancy_eur: float = 0.0
 
-    # Risk metrics (based on USD equity curve)
+    # Risk metrics (based on EUR equity curve)
     max_drawdown_pct: float = 0.0
-    max_drawdown_usd: float = 0.0
+    max_drawdown_eur: float = 0.0
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
     calmar_ratio: float = 0.0
     return_pct: float = 0.0       # Total return on starting equity
 
     # Cost impact
-    total_costs: float = 0.0
-    total_costs_usd: float = 0.0
+    total_costs_eur: float = 0.0
 
     # Kelly
     kelly_fraction: float = 0.0
 
-    # Point value used
-    point_value: float = 1.0
+    # Position sizing
+    position_size_eur: float = 1500.0
 
     # Data quality
     data_warnings: list[str] = field(default_factory=list)
@@ -275,14 +274,14 @@ class VBTBacktester:
         qs_filter: bool = True,
         qs_min: int = 4,
     ) -> VBTBacktestResult | None:
-        """Run a full backtest for a single symbol.
+        """Run a full backtest for a single ETF symbol.
 
-        Uses bar-by-bar simulation for accurate SL/TP handling with
-        realistic spread/commission/slippage costs. If sl_atr_mult or
+        LONG-only bar-by-bar simulation with SL/TP handling, max hold
+        forced exit, and Fineco commission costs. If sl_atr_mult or
         tp_atr_mult are None, per-class defaults are used.
 
         Args:
-            symbol: Canonical symbol (e.g. "EURUSD", "NQ", "AAPL").
+            symbol: ETF symbol (e.g. "SWDA.MI", "EQQQ.MI").
             interval: Bar interval.
             bars: Number of bars to fetch.
             sl_atr_mult: SL multiplier (x ATR). None = use per-class default.
@@ -353,10 +352,7 @@ class VBTBacktester:
                 if a.asset_class == asset_class
             ]
         else:
-            target = [
-                s for s, a in ASSET_UNIVERSE.items()
-                if a.asset_class != AssetClass.REFERENCE
-            ]
+            target = list(ASSET_UNIVERSE.keys())
 
         results: list[VBTBacktestResult] = []
         for sym in target:
@@ -410,8 +406,10 @@ class VBTBacktester:
         data_warnings: list[str],
         starting_equity: float = DEFAULT_EQUITY,
     ) -> VBTBacktestResult:
-        """Bar-by-bar simulation with proper LONG and SHORT SL/TP handling."""
-        pv = spec.point_value  # USD per 1.0 price movement per contract
+        """LONG-only bar-by-bar simulation with max hold forced exit."""
+        import math
+
+        position_size_eur = 1500.0
 
         result = VBTBacktestResult(
             symbol=symbol,
@@ -420,7 +418,7 @@ class VBTBacktester:
             bars=len(df),
             data_source=data.source,
             data_warnings=data_warnings,
-            point_value=pv,
+            position_size_eur=position_size_eur,
         )
 
         trades: list[dict[str, Any]] = []
@@ -429,11 +427,11 @@ class VBTBacktester:
         low = df["Low"]
         signals = df["signal"]
 
-        in_trade = False  # Prevent overlapping trades
+        in_trade = False
 
         for i in range(len(df)):
             sig = signals.iloc[i]
-            if sig == 0 or in_trade:
+            if sig != 1 or in_trade:  # LONG-only
                 continue
 
             entry_price = close.iloc[i]
@@ -441,21 +439,19 @@ class VBTBacktester:
             if pd.isna(atr_val):
                 atr_val = entry_price * 0.01
 
-            # Get SL/TP distances (always positive)
             sl_d = sl_dist.iloc[i] if not pd.isna(sl_dist.iloc[i]) else atr_val * 1.5
             tp_d = tp_dist.iloc[i] if not pd.isna(tp_dist.iloc[i]) else atr_val * 3.0
 
-            # Apply spread + slippage at entry
-            entry_cost = costs.spread + entry_price * costs.slippage_pct
+            # Apply slippage at entry (no spread for ETFs)
+            entry_price += entry_price * costs.slippage_pct
 
-            if sig == 1:  # LONG
-                entry_price += entry_cost  # Worse fill for longs
-                sl = entry_price - sl_d
-                tp = entry_price + tp_d
-            else:  # SHORT
-                entry_price -= entry_cost  # Worse fill for shorts
-                sl = entry_price + sl_d
-                tp = entry_price - tp_d
+            sl = entry_price - sl_d
+            tp = entry_price + tp_d
+
+            # Compute shares
+            shares = math.floor(position_size_eur / entry_price)
+            if shares < 1:
+                continue
 
             # Walk forward to find exit
             in_trade = True
@@ -465,106 +461,101 @@ class VBTBacktester:
             bars_held = len(df) - i
 
             for j in range(i + 1, len(df)):
-                if sig == 1:  # LONG: SL below, TP above
-                    if low.iloc[j] <= sl:
-                        exit_price = sl - costs.spread
-                        exit_date = str(df.index[j])
-                        outcome = "SL_HIT"
-                        bars_held = j - i
-                        break
-                    if high.iloc[j] >= tp:
-                        exit_price = tp - costs.spread
-                        exit_date = str(df.index[j])
-                        outcome = "TP_HIT"
-                        bars_held = j - i
-                        break
-                else:  # SHORT: SL above, TP below
-                    if high.iloc[j] >= sl:
-                        exit_price = sl + costs.spread
-                        exit_date = str(df.index[j])
-                        outcome = "SL_HIT"
-                        bars_held = j - i
-                        break
-                    if low.iloc[j] <= tp:
-                        exit_price = tp + costs.spread
-                        exit_date = str(df.index[j])
-                        outcome = "TP_HIT"
-                        bars_held = j - i
-                        break
+                # Max hold forced exit
+                if j - i >= MAX_HOLD_BARS:
+                    exit_price = close.iloc[j]
+                    exit_date = str(df.index[j])
+                    outcome = "MAX_HOLD"
+                    bars_held = j - i
+                    break
 
-            in_trade = False  # Trade closed, allow next
+                # SL hit
+                if low.iloc[j] <= sl:
+                    exit_price = sl
+                    exit_date = str(df.index[j])
+                    outcome = "SL_HIT"
+                    bars_held = j - i
+                    break
 
-            pnl_raw = (exit_price - entry_price) * sig  # Price-unit PnL
-            pnl_usd = pnl_raw * pv - costs.commission   # USD PnL after commission
+                # TP hit
+                if high.iloc[j] >= tp:
+                    exit_price = tp
+                    exit_date = str(df.index[j])
+                    outcome = "TP_HIT"
+                    bars_held = j - i
+                    break
+
+            in_trade = False
+
+            # P&L in EUR: (exit - entry) × shares - round-trip commission
+            round_trip_commission = costs.commission * 2
+            pnl_eur = (exit_price - entry_price) * shares - round_trip_commission
 
             trades.append({
-                "direction": "LONG" if sig == 1 else "SHORT",
+                "direction": "LONG",
                 "entry_date": str(df.index[i]),
                 "exit_date": exit_date,
-                "entry_price": round(entry_price, 5),
-                "exit_price": round(exit_price, 5),
-                "sl": round(sl, 5),
-                "tp": round(tp, 5),
-                "pnl_raw": round(pnl_raw, 5),
-                "pnl_usd": round(pnl_usd, 2),
+                "entry_price": round(entry_price, 2),
+                "exit_price": round(exit_price, 2),
+                "sl": round(sl, 2),
+                "tp": round(tp, 2),
+                "shares": shares,
+                "pnl_eur": round(pnl_eur, 2),
+                "commission": round(round_trip_commission, 2),
                 "status": outcome,
                 "bars_held": bars_held,
             })
 
         result.trades = trades
         result.total_trades = len(trades)
-        result.long_trades = sum(1 for t in trades if t["direction"] == "LONG")
-        result.short_trades = sum(1 for t in trades if t["direction"] == "SHORT")
+        result.long_trades = len(trades)
 
         if trades:
-            pnls_usd = [t["pnl_usd"] for t in trades]
-            winners = [p for p in pnls_usd if p > 0]
-            losers = [p for p in pnls_usd if p <= 0]
+            pnls = [t["pnl_eur"] for t in trades]
+            winners = [p for p in pnls if p > 0]
+            losers = [p for p in pnls if p <= 0]
 
-            result.total_pnl = sum(t["pnl_raw"] for t in trades)
-            result.total_pnl_usd = sum(pnls_usd)
-            result.avg_trade_pnl = np.mean(pnls_usd)
-            result.win_rate = len(winners) / len(pnls_usd) if pnls_usd else 0
+            result.total_pnl_eur = sum(pnls)
+            result.avg_trade_pnl = np.mean(pnls)
+            result.win_rate = len(winners) / len(pnls) if pnls else 0
 
             gross_profit = sum(winners) if winners else 0
             gross_loss = abs(sum(losers)) if losers else 0
             result.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
-            # Equity curve in USD — proper drawdown on notional account
-            equity_curve = starting_equity + np.cumsum(pnls_usd)
+            # Equity curve in EUR
+            equity_curve = starting_equity + np.cumsum(pnls)
             peak = np.maximum.accumulate(equity_curve)
-            dd_usd = peak - equity_curve
-            dd_pct = dd_usd / peak
-            result.max_drawdown_usd = float(np.max(dd_usd))
+            dd_eur = peak - equity_curve
+            dd_pct = dd_eur / peak
+            result.max_drawdown_eur = float(np.max(dd_eur))
             result.max_drawdown_pct = float(np.max(dd_pct)) * 100
             result.return_pct = (equity_curve[-1] - starting_equity) / starting_equity * 100
 
-            # Sharpe (annualized, based on USD PnL per trade)
-            if len(pnls_usd) > 1 and np.std(pnls_usd) > 0:
-                result.sharpe_ratio = (np.mean(pnls_usd) / np.std(pnls_usd)) * np.sqrt(252)
+            # Sharpe (annualized)
+            if len(pnls) > 1 and np.std(pnls) > 0:
+                result.sharpe_ratio = (np.mean(pnls) / np.std(pnls)) * np.sqrt(252)
 
-            # Sortino (downside deviation only)
-            downside = [p for p in pnls_usd if p < 0]
+            # Sortino
+            downside = [p for p in pnls if p < 0]
             if downside and np.std(downside) > 0:
-                result.sortino_ratio = (np.mean(pnls_usd) / np.std(downside)) * np.sqrt(252)
+                result.sortino_ratio = (np.mean(pnls) / np.std(downside)) * np.sqrt(252)
 
-            # Calmar (return / max drawdown)
-            if result.max_drawdown_usd > 0:
-                result.calmar_ratio = result.total_pnl_usd / result.max_drawdown_usd
+            # Calmar
+            if result.max_drawdown_eur > 0:
+                result.calmar_ratio = result.total_pnl_eur / result.max_drawdown_eur
 
-            # Expectancy and Kelly (in USD)
+            # Expectancy and Kelly (in EUR)
             avg_win = np.mean(winners) if winners else 0
             avg_loss = np.mean([abs(x) for x in losers]) if losers else 0
-            result.expectancy_usd = (result.win_rate * avg_win) - ((1 - result.win_rate) * avg_loss)
+            result.expectancy_eur = (result.win_rate * avg_win) - ((1 - result.win_rate) * avg_loss)
 
             if avg_loss > 0 and avg_win > 0:
                 b = avg_win / avg_loss
                 kelly = (result.win_rate * b - (1 - result.win_rate)) / b
                 result.kelly_fraction = max(0, min(kelly / 2, 0.5))
 
-            result.total_costs_usd = sum(
-                (costs.spread * 2 * pv + costs.commission) for _ in trades
-            )
+            result.total_costs_eur = sum(t["commission"] for t in trades)
 
         return result
 
@@ -574,18 +565,18 @@ class VBTBacktester:
 # ---------------------------------------------------------------------------
 
 def print_results(results: list[VBTBacktestResult]) -> None:
-    """Pretty-print backtest results for all symbols (all PnL in USD)."""
+    """Pretty-print backtest results for all ETFs (all PnL in EUR)."""
     if not results:
         print("No results to display.")
         return
 
-    W = 135
+    W = 120
     print()
     print("=" * W)
     print(
-        f"{'SYMBOL':<8} {'CLASS':<10} {'SRC':<6} {'BARS':>4} "
-        f"{'L/S':>5} {'#':>3} {'WIN%':>6} {'PF':>5} "
-        f"{'PnL $':>10} {'Costs $':>8} {'DD%':>6} {'DD $':>9} "
+        f"{'SYMBOL':<10} {'SRC':<6} {'BARS':>4} "
+        f"{'#':>3} {'WIN%':>6} {'PF':>5} "
+        f"{'PnL EUR':>10} {'Costs':>7} {'DD%':>6} {'DD EUR':>8} "
         f"{'Sharpe':>6} {'Sortino':>7} {'Kelly':>5} {'Ret%':>7}"
     )
     print("-" * W)
@@ -594,63 +585,37 @@ def print_results(results: list[VBTBacktestResult]) -> None:
     total_pnl = 0.0
     total_costs = 0.0
 
-    for r in sorted(results, key=lambda x: (x.asset_class, x.symbol)):
-        ls = f"{r.long_trades}/{r.short_trades}"
+    for r in sorted(results, key=lambda x: x.symbol):
         print(
-            f"{r.symbol:<8} {r.asset_class:<10} {r.data_source[:6]:<6} {r.bars:>4} "
-            f"{ls:>5} {r.total_trades:>3} {r.win_rate*100:>5.1f}% {r.profit_factor:>5.2f} "
-            f"{r.total_pnl_usd:>+10.0f} {r.total_costs_usd:>8.0f} "
-            f"{r.max_drawdown_pct:>5.1f}% {r.max_drawdown_usd:>9.0f} "
+            f"{r.symbol:<10} {r.data_source[:6]:<6} {r.bars:>4} "
+            f"{r.total_trades:>3} {r.win_rate*100:>5.1f}% {r.profit_factor:>5.2f} "
+            f"{r.total_pnl_eur:>+10.0f} {r.total_costs_eur:>7.0f} "
+            f"{r.max_drawdown_pct:>5.1f}% {r.max_drawdown_eur:>8.0f} "
             f"{r.sharpe_ratio:>6.2f} {r.sortino_ratio:>7.2f} "
             f"{r.kelly_fraction*100:>4.1f}% {r.return_pct:>+6.1f}%"
         )
         total_trades += r.total_trades
-        total_pnl += r.total_pnl_usd
-        total_costs += r.total_costs_usd
+        total_pnl += r.total_pnl_eur
+        total_costs += r.total_costs_eur
 
     print("-" * W)
     print(
-        f"{'TOTAL':<8} {'':10} {'':6} {'':>4} "
-        f"{'':>5} {total_trades:>3} {'':>6} {'':>5} "
-        f"{total_pnl:>+10.0f} {total_costs:>8.0f}"
+        f"{'TOTAL':<10} {'':6} {'':>4} "
+        f"{total_trades:>3} {'':>6} {'':>5} "
+        f"{total_pnl:>+10.0f} {total_costs:>7.0f}"
     )
     print("=" * W)
 
-    # Per-class summary
-    print("\nPer Asset Class (USD):")
-    for cls in AssetClass:
-        if cls == AssetClass.REFERENCE:
-            continue
-        cls_results = [r for r in results if r.asset_class == cls.value]
-        if not cls_results:
-            continue
-        cls_trades = sum(r.total_trades for r in cls_results)
-        cls_pnl = sum(r.total_pnl_usd for r in cls_results)
-        cls_costs = sum(r.total_costs_usd for r in cls_results)
-        cls_wr = (
-            sum(r.win_rate * r.total_trades for r in cls_results) / cls_trades
-            if cls_trades > 0 else 0
-        )
-        profitable = [r for r in cls_results if r.total_pnl_usd > 0]
-        losing = [r for r in cls_results if r.total_pnl_usd <= 0]
-        edge = "HAS EDGE" if cls_pnl > 0 else "NO EDGE"
-        print(
-            f"  {cls.value:<12}: {len(cls_results)} assets, "
-            f"{cls_trades} trades, {cls_wr*100:.1f}% WR, "
-            f"PnL ${cls_pnl:+,.0f}, Costs ${cls_costs:,.0f} "
-            f"({len(profitable)} profitable, {len(losing)} losing) [{edge}]"
-        )
-
-    # Profitable assets summary
-    profitable_all = [r for r in results if r.total_pnl_usd > 0]
-    losing_all = [r for r in results if r.total_pnl_usd <= 0]
-    print(f"\nProfitable ({len(profitable_all)}):", ", ".join(
-        f"{r.symbol} (${r.total_pnl_usd:+,.0f})" for r in
-        sorted(profitable_all, key=lambda x: x.total_pnl_usd, reverse=True)
+    # Profitable/losing summary
+    profitable = [r for r in results if r.total_pnl_eur > 0]
+    losing = [r for r in results if r.total_pnl_eur <= 0]
+    print(f"\nProfitable ({len(profitable)}):", ", ".join(
+        f"{r.symbol} (EUR{r.total_pnl_eur:+,.0f})" for r in
+        sorted(profitable, key=lambda x: x.total_pnl_eur, reverse=True)
     ) or "none")
-    print(f"Losing ({len(losing_all)}):", ", ".join(
-        f"{r.symbol} (${r.total_pnl_usd:+,.0f})" for r in
-        sorted(losing_all, key=lambda x: x.total_pnl_usd)
+    print(f"Losing ({len(losing)}):", ", ".join(
+        f"{r.symbol} (EUR{r.total_pnl_eur:+,.0f})" for r in
+        sorted(losing, key=lambda x: x.total_pnl_eur)
     ) or "none")
 
     # Trade list
@@ -658,14 +623,15 @@ def print_results(results: list[VBTBacktestResult]) -> None:
     for r in results:
         if not r.trades:
             continue
-        print(f"\n  {r.symbol} ({r.asset_class}, pv={r.point_value:,.0f}):")
-        print(f"  {'#':>3}  {'Dir':<6} {'Entry':>12} {'Exit':>12} {'PnL $':>10} {'Status':<12} {'Bars':>4} {'Date'}")
-        print(f"  {'---':>3}  {'------':<6} {'--------':>12} {'--------':>12} {'------':>10} {'------':<12} {'----':>4} {'----------'}")
+        print(f"\n  {r.symbol} (position size: EUR{r.position_size_eur:,.0f}):")
+        print(f"  {'#':>3}  {'Entry':>10} {'Exit':>10} {'Shares':>6} {'PnL EUR':>10} {'Status':<10} {'Days':>4} {'Date'}")
+        print(f"  {'---':>3}  {'--------':>10} {'--------':>10} {'------':>6} {'-------':>10} {'------':<10} {'----':>4} {'----------'}")
         for i, t in enumerate(r.trades, 1):
             print(
-                f"  {i:>3}  {t['direction']:<6} {t['entry_price']:>12.2f} "
-                f"{t['exit_price']:>12.2f} {t['pnl_usd']:>+10.0f} "
-                f"{t['status']:<12} {t['bars_held']:>4} {t['entry_date'][:10]}"
+                f"  {i:>3}  {t['entry_price']:>10.2f} "
+                f"{t['exit_price']:>10.2f} {t.get('shares', '-'):>6} "
+                f"{t['pnl_eur']:>+10.2f} "
+                f"{t['status']:<10} {t['bars_held']:>4} {t['entry_date'][:10]}"
             )
 
     # Data quality
@@ -687,30 +653,29 @@ def main() -> None:
     from dotenv import load_dotenv
     load_dotenv()
 
+    # Default ETF symbols for backtesting
+    DEFAULT_SYMBOLS = ["SWDA.MI", "CSSPX.MI", "EQQQ.MI"]
+
     parser = argparse.ArgumentParser(
-        description="Trading Copilot — vectorbt Backtester",
+        description="ETF Swing Trader — vectorbt Backtester (LONG-only)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m modules.vbt_backtester --symbols NQ ES GC EURUSD AAPL
-  python -m modules.vbt_backtester --class forex --period 2y
-  python -m modules.vbt_backtester --all --interval 1h --bars 500
-  python -m modules.vbt_backtester --symbols AAPL MSFT NVDA --bars 500
+  python -m modules.vbt_backtester --symbols SWDA.MI CSSPX.MI EQQQ.MI
+  python -m modules.vbt_backtester --all --bars 500
+  python -m modules.vbt_backtester --symbols EQQQ.MI --bars 250
+  python -m modules.vbt_backtester --all --equity 5000
         """,
     )
-    parser.add_argument("--symbols", nargs="+", help="Symbols to backtest")
-    parser.add_argument("--class", dest="asset_class", help="Asset class: forex, commodity, index, stock")
-    parser.add_argument("--all", action="store_true", help="Backtest entire universe")
-    parser.add_argument("--edge-only", action="store_true",
-                        help="Only backtest assets with demonstrated edge (forex, commodities, ES)")
-    parser.add_argument("--interval", default="1d", help="Bar interval (default: 1d)")
-    parser.add_argument("--bars", type=int, default=500, help="Number of bars (default: 500)")
+    parser.add_argument("--symbols", nargs="+", help="ETF symbols to backtest (e.g. SWDA.MI EQQQ.MI)")
+    parser.add_argument("--all", action="store_true", help="Backtest all 8 UCITS ETFs")
+    parser.add_argument("--bars", type=int, default=500, help="Number of daily bars (default: 500)")
     parser.add_argument("--sl-mult", type=float, default=None,
-                        help="Override SL ATR multiplier (default: per-class)")
+                        help="Override SL ATR multiplier (default: 1.5)")
     parser.add_argument("--tp-mult", type=float, default=None,
-                        help="Override TP ATR multiplier (default: per-class)")
+                        help="Override TP ATR multiplier (default: 3.0)")
     parser.add_argument("--equity", type=float, default=DEFAULT_EQUITY,
-                        help=f"Starting equity in USD (default: {DEFAULT_EQUITY:.0f})")
+                        help=f"Starting equity in EUR (default: {DEFAULT_EQUITY:.0f})")
     parser.add_argument("--no-adaptive", action="store_true", help="Disable adaptive SL/TP")
     parser.add_argument("--no-qs-filter", action="store_true",
                         help="Disable Quality Score filter (allow all signals)")
@@ -725,24 +690,12 @@ Examples:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
 
-    # Assets that showed positive edge in backtest analysis (500 daily bars)
-    # Tier 1: strong edge (PF > 1.5, positive Sharpe)
-    # Tier 2: marginal edge (PF > 1.0, needs monitoring)
-    EDGE_SYMBOLS = [
-        "ES", "RTY", "NQ",   # Indices — strong edge with wider SL
-        "CL",                 # Crude Oil — 50% WR, PF 2.5
-        "USDJPY",             # Best forex pair — PF 3.4
-        "USDCHF",             # Marginal forex — break-even, monitor
-        "NG",                 # Natural Gas — volatile but trending
-        "GC",                 # Gold — large moves, needs tuning
-    ]
-
     bt = VBTBacktester()
 
     common_kwargs: dict[str, Any] = {
-        "interval": args.interval,
+        "interval": "1d",  # Daily only for swing trading
         "bars": args.bars,
-        "sl_atr_mult": args.sl_mult,     # None = use per-class defaults
+        "sl_atr_mult": args.sl_mult,
         "tp_atr_mult": args.tp_mult,
         "adaptive_sl": not args.no_adaptive,
         "starting_equity": args.equity,
@@ -750,18 +703,12 @@ Examples:
         "qs_min": args.qs_min,
     }
 
-    if args.edge_only:
-        results = bt.run_universe(symbols=EDGE_SYMBOLS, **common_kwargs)
-    elif args.all:
+    if args.all:
         results = bt.run_universe(**common_kwargs)
-    elif args.asset_class:
-        cls = AssetClass(args.asset_class)
-        results = bt.run_universe(asset_class=cls, **common_kwargs)
     elif args.symbols:
         results = bt.run_universe(symbols=args.symbols, **common_kwargs)
     else:
-        # Default: edge symbols
-        results = bt.run_universe(symbols=EDGE_SYMBOLS, **common_kwargs)
+        results = bt.run_universe(symbols=DEFAULT_SYMBOLS, **common_kwargs)
 
     print_results(results)
 

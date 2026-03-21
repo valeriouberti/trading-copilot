@@ -1,7 +1,7 @@
-"""Trading Assistant — Entry point.
+"""ETF Swing Trader — Entry point.
 
 Orchestrates the full pipeline: fetch news, get price data,
-analyze sentiment, and generate an HTML report.
+analyze sentiment, and generate an HTML report for UCITS ETFs.
 """
 
 from __future__ import annotations
@@ -72,12 +72,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Trading Assistant — pre-market analysis for retail CFD traders"
+        description="ETF Swing Trader — pre-market analysis for UCITS ETF swing trading"
     )
     parser.add_argument(
         "--assets",
         nargs="+",
-        help="Override asset symbols (e.g., --assets ES=F GC=F)",
+        help="Override ETF symbols (e.g., --assets SWDA.MI EQQQ.MI)",
     )
     parser.add_argument(
         "--hours",
@@ -173,7 +173,7 @@ def load_config(path: str) -> dict:
 def main() -> None:
     args = parse_args()
     setup_logging()
-    logger.info("Trading Assistant started")
+    logger.info("ETF Swing Trader started")
 
     # Handle --review-trades (print and exit)
     if args.review_trades:
@@ -284,7 +284,7 @@ def main() -> None:
         print("[2/5] Sentiment analysis with LLM...")
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
-            print("      WARNING: GROQ_API_KEY not set. Using FinBERT fallback.")
+            print("      WARNING: GROQ_API_KEY not set. Using neutral fallback.")
         try:
             sentiment = analyze_sentiment(news, assets, groq_model, poly_data=poly_data)
             print(
@@ -423,7 +423,7 @@ def main() -> None:
         except Exception:
             pass  # Non-critical
 
-    logger.info("Trading Assistant completed")
+    logger.info("ETF Swing Trader completed")
 
 
 if __name__ == "__main__":
