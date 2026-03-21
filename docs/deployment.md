@@ -10,7 +10,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt        # or: pip install .
 
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env with your GROQ_API_KEY
 
 python run_webapp.py
 # Open http://localhost:8000
@@ -20,11 +20,10 @@ python run_webapp.py
 
 ```bash
 pip install .                          # base dependencies
-pip install ".[ml]"                    # with FinBERT/torch
 pip install ".[dev]"                   # with test dependencies
 ```
 
-The app uses SQLite by default — no database setup required.
+The app uses SQLite by default -- no database setup required.
 
 ---
 
@@ -34,7 +33,7 @@ The app uses SQLite by default — no database setup required.
 
 ```bash
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env with your GROQ_API_KEY
 
 docker compose up -d
 # Open http://localhost:8000
@@ -45,22 +44,9 @@ This starts two containers:
 | Container | Image | Purpose |
 |-----------|-------|---------|
 | `postgres` | `postgres:16-alpine` | PostgreSQL database |
-| `trading-app` | Built from Dockerfile | Trading Copilot |
+| `trading-app` | Built from Dockerfile | ETF Swing Trader |
 
 The app waits for PostgreSQL to be healthy before starting. Data is persisted in a Docker volume (`pgdata`).
-
-### Docker Image Variants
-
-The Dockerfile provides two targets:
-
-| Target | Build Command | Size | Includes |
-|--------|--------------|------|----------|
-| **full** (default) | `docker compose up -d` | ~3 GB | All dependencies including transformers, torch (FinBERT fallback) |
-| **lite** | `docker build --target lite -t trading-lite .` | ~500 MB | Core dependencies only, no ML models |
-
-The **lite** image skips FinBERT (the local sentiment fallback). It still works — sentiment analysis uses the Groq LLM exclusively. Use lite when:
-- You always have a Groq API key set
-- You want smaller images for CI/CD or constrained environments
 
 ### Environment Variables in Docker
 
@@ -70,7 +56,7 @@ Docker Compose passes variables from your `.env` file to the container. The `DAT
 postgresql+asyncpg://trading:${POSTGRES_PASSWORD}@postgres:5432/trading
 ```
 
-You only need to set API keys and Telegram config in `.env`.
+You only need to set `GROQ_API_KEY` and optionally Telegram config in `.env`.
 
 ### Custom PostgreSQL Password
 
@@ -114,8 +100,6 @@ alembic revision --autogenerate -m "description"
 alembic current
 ```
 
-The initial schema migration is at `alembic/versions/e1b5a34759a7_initial_schema.py`.
-
 ### Backup & Restore
 
 **SQLite:**
@@ -138,32 +122,9 @@ docker compose exec postgres pg_dump -U trading trading > backup.sql
 docker compose exec -T postgres psql -U trading trading < backup.sql
 ```
 
-**PostgreSQL (external):**
-
-```bash
-pg_dump -h host -U user trading > backup.sql
-psql -h host -U user trading < backup.sql
-```
-
 ---
 
 ## Production Considerations
-
-### Authentication
-
-Set `TRADING_COPILOT_API_KEY` to enable API key authentication:
-
-```env
-TRADING_COPILOT_API_KEY=your_secret_key
-```
-
-When set, all API endpoints require either:
-- `X-API-Key` header
-- `api_key` query parameter
-
-Public paths (dashboard pages, `/api/health`, static files) are exempt.
-
-When unset, authentication is disabled (development mode).
 
 ### Rate Limiting
 
@@ -205,7 +166,7 @@ The `Connection "upgrade"` headers are required for WebSocket (`/ws/signals`) to
 GET /api/health
 ```
 
-Returns status of database, monitor, cache, and circuit breakers. Use this for load balancer health checks and monitoring.
+Returns status of database, scheduler, cache, and circuit breakers. Use this for load balancer health checks and monitoring.
 
 ### Logging
 
@@ -213,17 +174,18 @@ The app uses structured JSON logging with correlation IDs. Log level defaults to
 
 ### Resource Usage
 
-- **Memory**: ~200 MB (lite), ~1.5 GB (full, with ML models loaded)
+- **Memory**: ~200 MB
 - **CPU**: Mostly idle. Spikes during analysis (indicator computation) and sentiment (LLM calls)
 - **Disk**: SQLite DB grows slowly. PostgreSQL recommended for long-term use
-- **Network**: External API calls to yfinance, Twelve Data, Groq, Polymarket, Forex Factory
+- **Network**: External API calls to yfinance, Groq, Polymarket, Forex Factory
 
-### Twelve Data Credit Budget
+### Groq API Budget
 
-The free tier provides 800 credits/day. The monitor's light poll uses 1 credit per check (every 2 min per asset). With 3 assets monitored continuously:
+Dev Tier provides 500,000 requests/day and 300,000 tokens/minute. Each ETF analysis uses ~4 LLM calls:
 
 ```
-3 assets x 1 credit x 30 checks/hour x 8 hours = 720 credits
+8 ETFs x 4 calls = 32 calls per full screening
+3 screenings/day (08:00 + manual) = ~96 calls/day
 ```
 
-Monitor the budget at `/api/monitor/budget` or in the Settings page.
+Well within Dev Tier limits. Monitor usage at [console.groq.com/usage](https://console.groq.com/usage).

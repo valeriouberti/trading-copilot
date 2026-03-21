@@ -6,15 +6,22 @@ The system identifies high-probability setups by requiring **convergence** acros
 
 No single indicator drives a trade. The strategy demands that most evidence points in the same direction before generating a signal.
 
-## Assets
+**LONG-only**: the system only generates BUY signals. Bearish regimes produce SELL_IF_HOLDING advisories (no short entries).
 
-| Asset | Symbol | Type | Asset Class |
-|-------|--------|------|-------------|
-| S&P 500 | `^GSPC` | Cash index | index |
-| Gold | `GC=F` | COMEX futures | commodity |
-| EUR/USD | `EURUSD=X` | Spot forex | forex |
+## ETF Universe
 
-`^GSPC` is the cash S&P 500 index (not ES=F futures), since CFDs track the cash price, not the futures contract.
+| Symbol | Name | Category | Role |
+|--------|------|----------|------|
+| `SWDA.MI` | iShares Core MSCI World | Equity - Global | Core allocation |
+| `CSSPX.MI` | iShares Core S&P 500 | Equity - US | US exposure |
+| `EQQQ.MI` | Invesco NASDAQ-100 | Equity - US Tech | High-beta growth |
+| `MEUD.MI` | Amundi STOXX Europe 600 | Equity - Europe | European exposure |
+| `IEEM.MI` | iShares MSCI EM | Equity - EM | Emerging markets |
+| `SGLD.MI` | Invesco Physical Gold | Commodity | Safe haven |
+| `SEGA.MI` | iShares Core EU Govt Bond | Bond - EUR | Defensive |
+| `AGGH.MI` | iShares Global Agg Bond | Bond - Global | Defensive |
+
+All available on Fineco at EUR 2.95/trade. Yahoo Finance tickers use `.MI` suffix natively.
 
 ## Technical Indicators
 
@@ -36,7 +43,6 @@ Indicator labels are **regime-aware**: thresholds adapt based on whether ADX ind
 |-----------|------|
 | **ADX(14)** | Trend strength. >25 = trending, <20 = ranging |
 | **ATR(14)** | Volatility for SL/TP distance calculation |
-| **VWAP** | Intraday bias (price above = bullish, below = bearish). Live-only |
 
 ## Composite Score
 
@@ -63,29 +69,32 @@ The 5 directional indicators are combined into a weighted composite:
 
 ## Multi-Timeframe Alignment (MTF)
 
-Three timeframes are analyzed independently:
+Two timeframes are analyzed independently:
 
 | Timeframe | Data | EMA Cross |
 |-----------|------|-----------|
 | Weekly | 2 years, 1wk | EMA20 vs EMA50 |
 | Daily | 10 months, 1d | EMA20 vs EMA50 |
-| Hourly | 30 days, 1h | EMA20 vs EMA50 |
 
-- **ALIGNED**: all 3 agree on direction (highest conviction)
-- **PARTIAL**: 2 of 3 agree
-- **CONFLICTING**: no agreement
+- **ALIGNED**: both agree on direction (highest conviction)
+- **PARTIAL**: disagree
+- **CONFLICTING**: contradictory signals
 
 A trade requires **ALIGNED** MTF to be marked tradeable.
 
 ## Regime Determination
 
-The market regime (LONG / SHORT / NEUTRAL) is determined by combining:
+The market regime (LONG / NEUTRAL / BEARISH) is determined by combining:
 
 1. **Technical composite** direction
 2. **LLM sentiment** bias
 3. **Polymarket** signal (when available)
 
 If these sources conflict, regime defaults to NEUTRAL (no trade).
+
+- `LONG` regime -> BUY signal (compute entry/SL/TP)
+- `BEARISH` regime -> SELL_IF_HOLDING advisory (no new entry)
+- `NEUTRAL` regime -> HOLD (no action)
 
 ## Key Levels
 
@@ -100,32 +109,41 @@ Key levels are drawn on the chart as dashed lines and factor into the Quality Sc
 
 ## SL/TP Computation
 
-Stop loss and take profit use **per-class ATR multipliers** with adaptive adjustment:
+Stop loss and take profit use **ATR multipliers** with adaptive adjustment:
 
 | Asset Class | SL Multiplier | TP Multiplier | Default R:R |
 |-------------|--------------|---------------|-------------|
-| Forex | 1.2x ATR | 3.0x ATR | 1:2.5 |
-| Commodity | 1.5x ATR | 3.5x ATR | 1:2.3 |
-| Index | 2.0x ATR | 4.0x ATR | 1:2.0 |
-| Stock | 1.8x ATR | 3.0x ATR | 1:1.7 |
+| ETF | 1.5x ATR | 3.0x ATR | 1:2.0 |
 
 **Adaptive mode**: when ATR history is available, the system uses the ATR percentile to adjust:
 - Low volatility (ATR < 30th pct): tighter stops
 - High volatility (ATR > 70th pct): wider stops
 
-## 9 Entry Conditions
+### Commission Viability
+
+Before marking a setup as tradeable, the system checks that the expected TP gain exceeds 2x the round-trip commission cost:
+
+```
+Expected gain = (TP distance / entry price) * position_size_eur
+Round-trip cost = 2 * 2.95 = EUR 5.90
+Viable if: expected gain > 2 * 5.90 = EUR 11.80
+```
+
+### Max Hold
+
+Positions are held for a maximum of 10 days. If neither SL nor TP is hit within 10 days, a SELL alert is triggered.
+
+## 7 Entry Conditions
 
 All must be true for a signal to fire:
 
-1. Regime is LONG or SHORT (not NEUTRAL)
-2. EMA trend aligned with regime direction
-3. Price above/below VWAP (intraday confirmation)
-4. RSI not in extreme zone for the regime
-5. Quality Score >= 4
-6. MTF Aligned
-7. Quality session (London or NYSE open)
-8. No high-impact calendar event within 2 hours
-9. Setup marked tradeable by the pipeline
+1. Regime is LONG (not just directional -- must be LONG specifically)
+2. EMA trend bullish (EMA20 > EMA50)
+3. RSI not overbought (< 75)
+4. Quality Score >= 4
+5. MTF Aligned (weekly + daily agree)
+6. Commission viable (expected gain > 2x round-trip cost)
+7. No high-impact calendar event today (informational warning)
 
 ## What Cannot Be Backtested
 
@@ -133,9 +151,7 @@ These layers exist only in live mode and are documented gaps in backtesting:
 
 | Layer | Why Live-Only |
 |-------|---------------|
-| VWAP | Requires 5m intraday volume data |
 | LLM Sentiment | Requires real-time news + LLM |
-| Session quality | Time-of-day filter |
 | Economic calendar | Real-time event data |
 | Polymarket | Real-time prediction market data |
 | MTF alignment | Could be added but requires multi-TF data fetch |
@@ -147,9 +163,9 @@ All non-backtestable layers are **gatekeeping filters** that reduce trade count.
 The Action Plan translates the analysis into plain English:
 
 **Tradeable setup generates:**
-1. Entry instruction (buy/sell, price, supporting evidence)
-2. Stop loss placement (exact price, ATR basis, invalidation logic)
-3. Take profit target (price, R:R ratio)
+1. Entry instruction (buy at price, supporting evidence)
+2. Stop loss placement (exact price, ATR basis, distance in EUR)
+3. Take profit target (price, R:R ratio, expected gain in EUR)
 4. Multi-timeframe context
 5. Sentiment and Polymarket confirmation/conflict
 6. Execution rules (don't move SL, when to exit early)

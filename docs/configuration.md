@@ -9,7 +9,7 @@ Environment variables  >  .env file  >  config.yaml  >  Pydantic defaults
 ```
 
 - **Environment variables**: Always win. Use for secrets and deployment overrides.
-- **`.env` file**: Loaded automatically by Pydantic Settings. Main configuration file.
+- **`.env` file**: Loaded automatically at startup. Main configuration file.
 - **`config.yaml`**: Optional. Only used for seed data (assets, RSS feeds) on first startup.
 - **Pydantic defaults**: Sensible fallbacks so the app works out of the box.
 
@@ -22,12 +22,6 @@ Environment variables  >  .env file  >  config.yaml  >  Pydantic defaults
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GROQ_API_KEY` | Groq LLM API key for sentiment analysis | `gsk_abc123...` |
-
-### Recommended
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `TWELVE_DATA_API_KEY` | Twelve Data API key for price polling fallback | `abc123def456` |
 
 ### Database
 
@@ -52,21 +46,25 @@ DATABASE_URL=postgresql+asyncpg://trading:password@localhost:5432/trading
 
 These seed the database on first startup. After that, manage Telegram config via the Settings page in the web dashboard.
 
+### LLM Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROQ_MODEL` | `qwen/qwen3-32b` | Groq model for sentiment and classification |
+| `OLLAMA_API_URL` | `http://localhost:11434` | Ollama API URL (fallback LLM) |
+| `OLLAMA_MODEL` | `qwen2.5:14b` | Ollama model name |
+
+The LLM client tries Groq first (cloud, fast). If Groq is rate-limited or unavailable, it falls back to a local Ollama instance. Ollama is optional -- the app works without it.
+
 ### App Settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model for sentiment and classification |
 | `LOOKBACK_HOURS` | `16` | Hours of news to fetch for sentiment (1-168) |
 | `REPORT_LANGUAGE` | `italian` | Language for CLI reports |
-
-### Security
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRADING_COPILOT_API_KEY` | _(empty)_ | API key for authentication. Empty = auth disabled |
-
-When set, all API calls must include `X-API-Key` header or `api_key` query param. Dashboard pages and health check are exempt.
+| `TIMEZONE` | `Europe/Rome` | Timezone for cron scheduling |
+| `MAX_POSITIONS` | `2` | Maximum concurrent open positions |
+| `POSITION_SIZE_EUR` | `1500` | Default position size in EUR |
 
 ---
 
@@ -91,21 +89,20 @@ Full `.env` for production:
 DATABASE_URL=postgresql+asyncpg://trading:secure_pass@localhost:5432/trading
 POSTGRES_PASSWORD=secure_pass
 
-# API Keys
+# LLM
 GROQ_API_KEY=gsk_your_key_here
-TWELVE_DATA_API_KEY=your_key_here
+GROQ_MODEL=qwen/qwen3-32b
 
 # Telegram
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 TELEGRAM_CHAT_ID=123456789
 TELEGRAM_ENABLED=true
 
-# Security
-TRADING_COPILOT_API_KEY=your_secret_api_key
-
 # App
-GROQ_MODEL=llama-3.3-70b-versatile
 LOOKBACK_HOURS=16
+TIMEZONE=Europe/Rome
+MAX_POSITIONS=2
+POSITION_SIZE_EUR=1500
 ```
 
 ---
@@ -121,19 +118,27 @@ rss_feeds:
     name: Yahoo Finance NASDAQ
   - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
     name: CNBC Top News
-  - url: https://www.investing.com/rss/news_14.rss
-    name: Investing.com
   - url: https://feeds.marketwatch.com/marketwatch/topstories/
     name: MarketWatch Top Stories
 
 # Seed assets (imported once, then managed via dashboard)
 seed_assets:
-  - symbol: "^GSPC"
-    display_name: S&P 500
-  - symbol: GC=F
-    display_name: Gold
-  - symbol: EURUSD=X
-    display_name: EUR/USD
+  - symbol: SWDA.MI
+    display_name: iShares Core MSCI World
+  - symbol: CSSPX.MI
+    display_name: iShares Core S&P 500
+  - symbol: EQQQ.MI
+    display_name: Invesco NASDAQ-100
+  - symbol: MEUD.MI
+    display_name: Amundi STOXX Europe 600
+  - symbol: IEEM.MI
+    display_name: iShares MSCI EM
+  - symbol: SGLD.MI
+    display_name: Invesco Physical Gold
+  - symbol: SEGA.MI
+    display_name: iShares Core EU Govt Bond
+  - symbol: AGGH.MI
+    display_name: iShares Global Agg Bond
 ```
 
 Changes to `config.yaml` after the first startup have **no effect**. To modify assets or feeds, use the web dashboard.
@@ -144,22 +149,25 @@ Changes to `config.yaml` after the first startup have **no effect**. To modify a
 
 ### Groq (required)
 
-Free tier available. Used for:
-- News sentiment analysis
+Dev Tier recommended for higher rate limits. Used for:
+- News sentiment analysis (two-pass chain-of-thought)
 - Polymarket event classification
-- Trade thesis generation
+- News summarization
 
-Get a key at [console.groq.com](https://console.groq.com).
+Model: **Qwen 3 32B** (`qwen/qwen3-32b`) -- best available for financial analysis on Groq.
 
-### Twelve Data (recommended)
+Get a key at [console.groq.com](https://console.groq.com). Upgrade to Dev Tier at [console.groq.com/settings/billing](https://console.groq.com/settings/billing).
 
-Free tier: 800 credits/day. Used for:
-- Price polling in the monitor's light job (1 credit per quote)
-- Fallback data source when yfinance is unavailable
+### Ollama (optional, fallback)
 
-Get a key at [twelvedata.com](https://twelvedata.com).
+Local LLM runtime used when Groq is rate-limited or unavailable. Setup:
 
-The app works without it — yfinance is the primary data source. But the monitor's light poll requires Twelve Data for efficient single-price queries.
+```bash
+brew install --cask ollama
+ollama pull qwen2.5:14b
+```
+
+The app auto-detects Ollama availability. No configuration needed if running on default port.
 
 ### Telegram (optional)
 
@@ -181,3 +189,12 @@ Built-in per-IP rate limits:
 | All other `/api/*` | 120/minute |
 
 Returns `429 Too Many Requests` when exceeded.
+
+### Groq Rate Limits
+
+| Tier | Requests/day | Tokens/min |
+|------|-------------|------------|
+| Free | 14,400 | 12,000 |
+| Dev | 500,000 | 300,000 |
+
+Each ETF analysis uses ~4 LLM calls (2 sentiment + 1 news summary + 1 Polymarket classification). With 8 ETFs, a full screening uses ~32 calls.

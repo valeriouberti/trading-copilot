@@ -1,6 +1,92 @@
-# Trading Copilot — Changelog
+# ETF Swing Trader — Changelog
 
 All notable changes to this project are documented here.
+
+---
+
+## v7.0.0 — 21 March 2026
+
+### UCITS ETF Conversion
+
+Complete conversion from CFD/futures trading system to UCITS ETF-only swing trading for Italian retail investors on Fineco.
+
+#### Asset Universe
+- **Replaced 3 CFD assets** (^GSPC, GC=F, EURUSD=X) with **8 UCITS ETFs** on Borsa Italiana (.MI suffix)
+- ETFs: SWDA.MI, CSSPX.MI, EQQQ.MI, MEUD.MI, IEEM.MI, SGLD.MI, SEGA.MI, AGGH.MI
+- All available on Fineco at EUR 2.95/trade
+- Replaced IEGA.MI (delisted) with SEGA.MI (iShares Core EU Govt Bond)
+- **Files**: `modules/data/universe.py`, `config.yaml`
+
+#### LONG-Only Strategy
+- Removed SHORT entry signals — system is LONG-only
+- BEARISH regime now produces SELL_IF_HOLDING advisory (no new entries)
+- Reduced entry conditions from 9 to 7 (removed VWAP and session quality checks)
+- Added commission viability check: expected gain must exceed 2x round-trip cost (EUR 5.90)
+- Added max hold period: 10-day automatic SELL alert
+- **Files**: `modules/strategy.py`, `app/services/signal_detector.py`, `app/services/analyzer.py`
+
+#### Unified LLM Client
+- **Created `modules/llm_client.py`** — all LLM calls now route through a single `llm_call()` function
+- Primary: Groq cloud API with Qwen 3 32B (fast, Dev Tier recommended)
+- Fallback: Local Ollama with Qwen 2.5 14B (emergency only)
+- Automatic `<think>` block stripping for Qwen 3 reasoning models
+- Handles truncated think blocks (when max_tokens cuts off before `</think>`)
+- Increased max_tokens for sentiment calls (600→1200 for JSON, 1000→2000 for reasoning)
+- Added "Do not use `<think>` tags" instruction for JSON extraction prompts
+- **Files**: `modules/llm_client.py`, `modules/sentiment.py`, `modules/news_fetcher.py`, `modules/polymarket.py`
+
+#### Cron Scheduler (replaces polling)
+- **Replaced 2-minute Twelve Data polling** with APScheduler cron jobs
+- Morning briefing at 08:00 CET: full analysis of all 8 ETFs, Telegram daily briefing
+- Midday check at 13:00 CET: open position SL/TP monitoring
+- Closing check at 17:00 CET: end-of-day summary
+- Startup catch-up: if morning briefing missed, run quick technicals-only analysis (skip LLM/Polymarket/calendar)
+- **Files**: `app/services/monitor.py`, `app/server.py`
+
+#### Global Calendar Cache
+- Economic calendar data is now cached with a global key (`_global`) instead of per-symbol
+- Prevents redundant Forex Factory API calls when analyzing multiple ETFs
+- **Files**: `app/services/analyzer.py`
+
+#### Polymarket Tag Remapping
+- Remapped tag_slugs from CFD-specific to ETF-category mappings
+- Equity ETFs: fed, inflation, gdp, tariffs, stocks, economy
+- EM ETF: tariffs, geopolitics, emerging-markets
+- Gold ETC: fed, inflation, geopolitics, gold
+- Bond ETFs: fed, inflation, interest-rates, economy
+- **Files**: `modules/polymarket.py`
+
+#### Portfolio Management
+- **New Position model** in database (entry/exit, SL/TP, shares, P&L in EUR)
+- **New `/portfolio` page** with open positions, unrealized P&L, max 2 positions
+- **New API endpoints**: GET/POST /portfolio, PUT /portfolio/{id}/close, DELETE /portfolio/{id}
+- **New `/api/screening` endpoint**: ranks all 8 ETFs by BUY/HOLD/SELL classification
+- **Files**: `app/api/portfolio.py`, `app/models/database.py`, `app/templates/portfolio.html`
+
+#### Dashboard Redesign
+- Title: "ETF Swing Trader" (was "Trading Copilot")
+- 4-column grid (2 rows of 4) for 8 ETFs
+- Removed credit budget section (no Twelve Data)
+- Added "Open Positions" summary card
+- Single "Start/Stop Scheduler" toggle (was per-asset monitors)
+- Added "Analyze Now" button for on-demand full briefing
+- Timeframe selector reduced to 1D and 1W only (no intraday)
+- **Files**: `app/templates/dashboard.html`, `app/templates/base.html`, `app/templates/asset_detail.html`
+
+#### Removed CFD-Specific Features
+- **Deleted** Twelve Data provider and credit tracking
+- **Deleted** FinBERT fallback (heavy dependency)
+- **Deleted** VWAP indicator (intraday-only)
+- **Deleted** 5m/15m/1h timeframes
+- **Deleted** 2-minute light polling loop
+- **Deleted** Custom signal handlers (uvicorn handles SIGTERM/SIGINT)
+- **Removed** TWELVE_DATA_API_KEY from .env.example and config
+- **Files**: `modules/data/registry.py`, `app/config.py`, `.env.example`
+
+#### Documentation
+- Complete rewrite of all documentation for ETF context
+- Updated README.md, architecture.md, strategy.md, api.md, configuration.md, deployment.md
+- Updated .env.example with Groq Qwen 3 32B configuration
 
 ---
 

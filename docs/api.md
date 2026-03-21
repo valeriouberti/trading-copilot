@@ -14,11 +14,13 @@ Extended health check covering database, monitor, cache, and circuit breakers.
 
 ```json
 {
-  "status": "healthy",
-  "database": "ok",
-  "monitor": {"active": 2},
-  "cache": {"entries": 5, "hit_rate": 0.73},
-  "circuit_breakers": {"groq": "closed", "polymarket": "closed"}
+  "status": "ok",
+  "checks": {
+    "database": "ok",
+    "monitor": "running",
+    "cache": {"entries": 19, "active": 11, "expired": 8, "hits": 2, "misses": 19, "hit_rate": 9.5},
+    "circuit_breakers": {"yfinance": "CLOSED", "groq": "CLOSED", "polymarket": "CLOSED"}
+  }
 }
 ```
 
@@ -31,11 +33,16 @@ Extended health check covering database, monitor, cache, and circuit breakers.
 ```json
 {
   "assets": [
-    {"symbol": "^GSPC", "display_name": "S&P 500"},
-    {"symbol": "GC=F", "display_name": "Gold Futures"},
-    {"symbol": "EURUSD=X", "display_name": "EUR/USD"}
+    {"symbol": "SWDA.MI", "display_name": "iShares Core MSCI World"},
+    {"symbol": "CSSPX.MI", "display_name": "iShares Core S&P 500"},
+    {"symbol": "EQQQ.MI", "display_name": "Invesco NASDAQ-100"},
+    {"symbol": "MEUD.MI", "display_name": "Amundi STOXX Europe 600"},
+    {"symbol": "IEEM.MI", "display_name": "iShares MSCI EM"},
+    {"symbol": "SGLD.MI", "display_name": "Invesco Physical Gold"},
+    {"symbol": "SEGA.MI", "display_name": "iShares Core EU Govt Bond"},
+    {"symbol": "AGGH.MI", "display_name": "iShares Global Agg Bond"}
   ],
-  "count": 3
+  "count": 8
 }
 ```
 
@@ -45,19 +52,15 @@ Add a new asset. Validates the symbol via yfinance before saving.
 
 ```json
 // Request
-{"symbol": "AAPL", "display_name": "Apple"}
+{"symbol": "IUSN.MI", "display_name": "iShares MSCI World Small Cap"}
 
 // Response (201)
-{"asset": {"symbol": "AAPL", "display_name": "Apple Inc."}, "message": "AAPL added"}
+{"asset": {"symbol": "IUSN.MI", "display_name": "iShares MSCI World Small Cap"}, "message": "IUSN.MI added"}
 ```
 
 ### DELETE /assets/{symbol}
 
 Remove an asset. Cannot remove the last asset.
-
-```json
-{"message": "AAPL removed"}
-```
 
 ---
 
@@ -65,29 +68,27 @@ Remove an asset. Cannot remove the last asset.
 
 ### GET /quote/{symbol}
 
-Lightweight current price (no analysis, no credits).
+Lightweight current price (no analysis, free via yfinance).
 
 ```json
-{"symbol": "^GSPC", "price": 6506.48, "source": "yfinance"}
+{"symbol": "SWDA.MI", "price": 108.74, "source": "yfinance"}
 ```
 
 ### GET /ohlc/{symbol}?tf=1d
 
-OHLC + EMA data for a specific timeframe. Timeframes: `5m`, `15m`, `1h`, `4h`, `1d`, `1wk`.
+OHLC + EMA data for a specific timeframe. Timeframes: `1d`, `1wk`.
 
 ```json
 {
-  "ohlc": [{"time": "2025-05-20", "open": 5800.0, "high": 5850.0, "low": 5780.0, "close": 5830.0}, ...],
-  "ema20": [{"time": "2025-06-15", "value": 5900.50}, ...],
-  "ema50": [{"time": "2025-07-25", "value": 5850.30}, ...],
-  "price": 6506.48,
-  "change_pct": -0.15,
+  "ohlc": [{"time": "2025-05-20", "open": 100.0, "high": 101.5, "low": 99.5, "close": 101.0}, ...],
+  "ema20": [{"time": "2025-06-15", "value": 105.50}, ...],
+  "ema50": [{"time": "2025-07-25", "value": 103.30}, ...],
+  "price": 108.74,
+  "change_pct": -1.01,
   "tf": "1d",
   "bars": 211
 }
 ```
-
-Intraday timeframes use unix timestamps for `time`. Daily/weekly use `"YYYY-MM-DD"` strings.
 
 ### GET /chart/{symbol}
 
@@ -96,7 +97,7 @@ Chart data from the analysis pipeline (OHLC + EMA from daily data).
 ```json
 {
   "chart": {"ohlc": [...], "ema20": [...], "ema50": [...]},
-  "price": {"current": 6506.48, "change_pct": -0.15, "data_source": "yfinance"}
+  "price": {"current": 108.74, "change_pct": -1.01, "data_source": "yfinance"}
 }
 ```
 
@@ -106,9 +107,47 @@ Full analysis pipeline. Query params: `skip_llm` (bool), `skip_polymarket` (bool
 
 Response includes: `analysis` (technicals, chart, price), `sentiment`, `polymarket`, `calendar`, `regime`, `setup` (entry/SL/TP/tradeable), `trade_thesis`, `news_summary`, `validation_flags`.
 
+```json
+{
+  "symbol": "EQQQ.MI",
+  "display_name": "Invesco NASDAQ-100",
+  "timestamp": "2026-03-21T16:00:00Z",
+  "analysis": {"technicals": {...}, "price": {"current": 509.16, "change_pct": -0.5}},
+  "sentiment": {"score": 1.5, "label": "Bullish", "bias": "BULLISH", "source": "groq-2pass"},
+  "polymarket": {"signal": "BULLISH", "confidence": 65, "market_count": 12},
+  "calendar": {"events_today": [...]},
+  "regime": "LONG",
+  "setup": {
+    "direction": "LONG",
+    "entry_price": 509.16,
+    "stop_loss": 500.32,
+    "take_profit": 526.84,
+    "risk_reward": 2.0,
+    "quality_score": 4,
+    "commission_viable": true,
+    "tradeable": true
+  },
+  "news_summary": ["Fed holds rates steady...", "Tech sector shows resilience..."]
+}
+```
+
 ### POST /analyze/{symbol}/telegram
 
 Run analysis and send the signal to Telegram. Returns 422 if no tradeable signal.
+
+### GET /screening
+
+Run analysis on all 8 ETFs and return ranked BUY/HOLD/SELL classification.
+
+```json
+{
+  "screening": [
+    {"symbol": "EQQQ.MI", "classification": "BUY", "regime": "LONG", "quality_score": 4, ...},
+    {"symbol": "SWDA.MI", "classification": "HOLD", "regime": "NEUTRAL", ...},
+    {"symbol": "IEEM.MI", "classification": "SELL_IF_HOLDING", "regime": "BEARISH", ...}
+  ]
+}
+```
 
 ---
 
@@ -116,50 +155,77 @@ Run analysis and send the signal to Telegram. Returns 422 if no tradeable signal
 
 ### POST /monitor/start
 
-```json
-// Request
-{"symbol": "^GSPC"}
+Start the cron scheduler.
 
-// Response
-{"message": "Monitor started for ^GSPC", "interval_seconds": 120}
+```json
+{"message": "Scheduler started", "jobs": ["morning_briefing", "midday_check", "closing_check"]}
 ```
 
 ### POST /monitor/stop
 
-```json
-{"symbol": "^GSPC"}
-```
+Stop the scheduler.
 
 ### GET /monitor/status
 
 ```json
 {
-  "monitors": [
-    {
-      "symbol": "^GSPC",
-      "status": "ACTIVE",
-      "interval_seconds": 120,
-      "started_at": "2026-03-21T08:00:00Z",
-      "last_check": "2026-03-21T10:30:00Z",
-      "last_price": 6506.48
-    }
-  ],
-  "ws_connections": 2
+  "status": "running",
+  "jobs": [
+    {"name": "morning_briefing", "next_run": "2026-03-22T07:00:00+01:00"},
+    {"name": "midday_check", "next_run": "2026-03-21T12:00:00+01:00"},
+    {"name": "closing_check", "next_run": "2026-03-21T16:00:00+01:00"}
+  ]
 }
 ```
 
-### GET /monitor/budget
+---
 
-Twelve Data credit usage for the current day.
+## Portfolio
+
+### GET /portfolio
+
+List open positions with current prices.
 
 ```json
 {
-  "used": 145,
-  "remaining": 605,
-  "limit": 750,
-  "pct_used": 19.3
+  "positions": [
+    {
+      "id": 1,
+      "symbol": "EQQQ.MI",
+      "entry_date": "2026-03-18",
+      "entry_price": 505.00,
+      "shares": 3,
+      "stop_loss": 496.00,
+      "take_profit": 523.00,
+      "status": "OPEN",
+      "unrealized_pnl_eur": 12.48,
+      "days_held": 3
+    }
+  ],
+  "open_count": 1,
+  "max_positions": 2
 }
 ```
+
+### POST /portfolio
+
+Record a new position.
+
+```json
+{"symbol": "EQQQ.MI", "entry_price": 505.00, "shares": 3, "stop_loss": 496.00, "take_profit": 523.00}
+```
+
+### PUT /portfolio/{id}/close
+
+Close a position with exit price.
+
+```json
+{"exit_price": 520.30}
+```
+
+### DELETE /portfolio/{id}
+
+Remove a position.
 
 ---
 
@@ -168,31 +234,6 @@ Twelve Data credit usage for the current day.
 ### GET /trades
 
 List trades with optional filters: `symbol`, `direction`, `quality_score`, `limit`, `offset`.
-
-```json
-{
-  "trades": [
-    {
-      "id": 1,
-      "timestamp": "2026-03-21T09:30:00",
-      "symbol": "^GSPC",
-      "direction": "LONG",
-      "entry_price": 6500.00,
-      "exit_price": 6550.00,
-      "stop_loss": 6470.00,
-      "take_profit": 6560.00,
-      "quality_score": 4,
-      "regime": "LONG",
-      "outcome_pips": 50.0,
-      "r_multiple": 1.67,
-      "notes": "Strong trend day"
-    }
-  ],
-  "total": 1,
-  "limit": 100,
-  "offset": 0
-}
-```
 
 ### POST /trades
 
@@ -204,11 +245,7 @@ Update a trade (typically to close it with `exit_price`).
 
 ### DELETE /trades/{id}
 
-Delete a trade permanently. Returns 404 if not found.
-
-```json
-{"message": "Trade deleted", "id": 1}
-```
+Delete a trade permanently.
 
 ### GET /trades/analytics
 
@@ -242,21 +279,9 @@ Signal accuracy metrics: total, resolved, pending, TP hits, SL hits, theoretical
 
 Returns current config with masked token.
 
-```json
-{
-  "bot_token_masked": "...W61QedYg",
-  "chat_id": "123456789",
-  "enabled": true
-}
-```
-
 ### PUT /settings/telegram
 
 Update config. Empty `bot_token` preserves the existing token.
-
-```json
-{"bot_token": "", "chat_id": "123456789", "enabled": true}
-```
 
 ### POST /telegram/test
 
@@ -280,7 +305,7 @@ Real-time push connection. Message types:
 
 | Type | Fields | When |
 |------|--------|------|
-| `price_update` | symbol, price, change_pct, regime, timestamp | Every light poll (2 min) |
+| `price_update` | symbol, price, change_pct, regime, timestamp | Scheduled position checks |
 | `signal` | symbol, direction, entry, sl, tp, quality_score, mtf | Entry conditions met |
 | `regime_change` | old_regime, new_regime, reason | Regime transitions |
 
