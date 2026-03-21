@@ -11,6 +11,10 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -80,7 +84,8 @@ async def lifespan(app: FastAPI):
 
     scheduler = ETFScheduler(app)
     app.state.monitor = scheduler
-    scheduler.install_signal_handlers()
+    # No custom signal handlers — uvicorn handles SIGTERM/SIGINT,
+    # and the lifespan shutdown block calls scheduler.shutdown().
     scheduler.start()
     await scheduler.startup_catchup()
 

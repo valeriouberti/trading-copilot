@@ -294,23 +294,25 @@ class ETFScheduler:
     async def _analyze_all(
         self, assets: list[dict], config: dict
     ) -> list[dict[str, Any]]:
-        """Run analyze_single_asset for all ETFs concurrently."""
-        tasks = [
-            analyze_single_asset(
-                symbol=asset["symbol"],
-                config=config,
-                asset=asset,
-            )
-            for asset in assets
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        """Run analyze_single_asset for all ETFs sequentially.
 
-        analyses = []
-        for asset, result in zip(assets, results):
-            if isinstance(result, Exception):
-                logger.error("Analysis failed for %s: %s", asset["symbol"], result)
-                continue
-            analyses.append(result)
+        Sequential execution avoids Groq free-tier rate limits (12k TPM).
+        A 3-second delay between assets keeps us well under the limit.
+        """
+        analyses: list[dict[str, Any]] = []
+        for i, asset in enumerate(assets):
+            try:
+                result = await analyze_single_asset(
+                    symbol=asset["symbol"],
+                    config=config,
+                    asset=asset,
+                )
+                analyses.append(result)
+            except Exception as exc:
+                logger.error("Analysis failed for %s: %s", asset["symbol"], exc)
+            # Small delay between assets to respect Groq rate limits
+            if i < len(assets) - 1:
+                await asyncio.sleep(3)
         return analyses
 
     async def _fetch_current_price(self, symbol: str) -> float | None:
