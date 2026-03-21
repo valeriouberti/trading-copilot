@@ -108,8 +108,8 @@ class ETFScheduler:
             existing = result.scalars().first()
 
         if existing is None:
-            logger.info("Morning briefing missed today — running catch-up now")
-            await self._morning_briefing()
+            logger.info("Morning briefing missed today — running catch-up (technicals only, no LLM)")
+            await self._morning_briefing(skip_llm=True)
 
     def stop(self) -> None:
         """Stop the scheduler."""
@@ -159,9 +159,9 @@ class ETFScheduler:
     # Morning briefing (08:00 CET)
     # ------------------------------------------------------------------
 
-    async def _morning_briefing(self) -> dict[str, Any]:
+    async def _morning_briefing(self, skip_llm: bool = False) -> dict[str, Any]:
         """Analyze all ETFs, rank, send Telegram daily briefing."""
-        logger.info("=== MORNING BRIEFING START ===")
+        logger.info("=== MORNING BRIEFING START (skip_llm=%s) ===", skip_llm)
         config = self.app.state.config
         session_factory = self.app.state.session_factory
 
@@ -170,8 +170,7 @@ class ETFScheduler:
             logger.warning("No assets configured — skipping briefing")
             return {"status": "no_assets"}
 
-        # Analyze all ETFs in parallel
-        analyses = await self._analyze_all(assets, config)
+        analyses = await self._analyze_all(assets, config, skip_llm=skip_llm)
 
         # Classify each: BUY / SELL_IF_HOLDING / HOLD
         buy_signals: list[dict] = []
@@ -292,27 +291,27 @@ class ETFScheduler:
     # ------------------------------------------------------------------
 
     async def _analyze_all(
-        self, assets: list[dict], config: dict
+        self, assets: list[dict], config: dict,
+        skip_llm: bool = False,
     ) -> list[dict[str, Any]]:
         """Run analyze_single_asset for all ETFs sequentially.
 
-        Sequential execution avoids Groq free-tier rate limits (12k TPM).
-        A 3-second delay between assets keeps us well under the limit.
+        Args:
+            skip_llm: If True, skip Groq LLM calls (technicals + Polymarket only).
+                      Used for startup catch-up to avoid rate limits.
         """
         analyses: list[dict[str, Any]] = []
-        for i, asset in enumerate(assets):
+        for asset in assets:
             try:
                 result = await analyze_single_asset(
                     symbol=asset["symbol"],
                     config=config,
                     asset=asset,
+                    skip_llm=skip_llm,
                 )
                 analyses.append(result)
             except Exception as exc:
                 logger.error("Analysis failed for %s: %s", asset["symbol"], exc)
-            # Small delay between assets to respect Groq rate limits
-            if i < len(assets) - 1:
-                await asyncio.sleep(3)
         return analyses
 
     async def _fetch_current_price(self, symbol: str) -> float | None:
