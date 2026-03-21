@@ -7,6 +7,16 @@ from typing import Any
 
 import pytest
 
+from modules.groq_client import reset_client
+
+
+@pytest.fixture(autouse=True)
+def _reset_groq_singleton():
+    """Reset singleton Groq client before each test to prevent leaking state."""
+    reset_client()
+    yield
+    reset_client()
+
 
 # ---------------------------------------------------------------------------
 # Mock news items

@@ -26,12 +26,16 @@ except ImportError:
     Groq = None  # type: ignore[assignment,misc]
 
 from modules.exceptions import LLMRateLimited, LLMResponseInvalid, LLMUnavailable
+from modules.groq_client import get_groq_client
 from modules.retry import retry_llm
 
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 BACKOFF_BASE = 2.0
+
+# Prompt version — logged alongside every result for A/B tracking
+PROMPT_VERSION = "v2.1"
 
 
 @dataclass
@@ -52,6 +56,9 @@ class SentimentResult:
     # v2: FinBERT ensemble
     finbert_score: float | None = None
     finbert_agreement: str = ""  # "AGREE", "PARTIAL", "DISAGREE"
+    # v2.1: merged news summary (eliminates separate LLM call)
+    news_summary: list[str] = field(default_factory=list)
+    prompt_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +74,8 @@ class SentimentResult:
             "asset_biases": self.asset_biases,
             "finbert_score": self.finbert_score,
             "finbert_agreement": self.finbert_agreement,
+            "news_summary": self.news_summary,
+            "prompt_version": self.prompt_version,
         }
 
 
@@ -193,7 +202,8 @@ FORMAT — respond ONLY with this JSON (NO markdown, NO ```):
   "confidence": <0-100>,
   "asset_scores": {{
     {asset_score_lines}
-  }}
+  }},
+  "news_summary": ["<bullet 1>", "<bullet 2>", "<bullet 3>", "<bullet 4>", "<bullet 5>"]
 }}
 
 Rules:
@@ -202,6 +212,7 @@ Rules:
 - key_drivers: exactly 3 elements
 - risk_events: can be empty [] if there are no risks
 - confidence: analysis certainty (0-100)
+- news_summary: exactly 5 concise bullet points summarizing the most market-moving news, 1 sentence each, focus on market impact
 - Respond ONLY with JSON"""
 
 
@@ -309,6 +320,10 @@ def _parse_sentiment_json(
         else:
             asset_biases[sym] = "NEUTRAL"
 
+    # Extract news summary (merged from separate LLM call)
+    raw_summary = data.get("news_summary", [])
+    news_summary = [str(s) for s in raw_summary][:5] if isinstance(raw_summary, list) else []
+
     return SentimentResult(
         sentiment_score=float(data.get("sentiment_score", 0)),
         sentiment_label=str(data.get("sentiment_label", "Neutral")),
@@ -319,6 +334,8 @@ def _parse_sentiment_json(
         source=source,
         asset_scores=asset_scores,
         asset_biases=asset_biases,
+        news_summary=news_summary,
+        prompt_version=PROMPT_VERSION,
     )
 
 
@@ -373,10 +390,9 @@ def _analyze_with_groq_two_pass(
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
     """Two-pass chain-of-thought analysis for higher quality."""
-    if Groq is None:
-        raise RuntimeError("groq library not installed")
-
-    client = Groq(api_key=api_key)
+    client = get_groq_client(api_key)
+    if client is None:
+        raise RuntimeError("groq library not installed or no API key")
 
     # Pass 1: Chain-of-thought reasoning
     reasoning_prompt = _build_reasoning_prompt(news, assets, poly_data)
@@ -431,10 +447,9 @@ def _analyze_with_groq_single_pass(
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
     """Single-pass fallback (used if two-pass fails)."""
-    if Groq is None:
-        raise RuntimeError("groq library not installed")
-
-    client = Groq(api_key=api_key)
+    client = get_groq_client(api_key)
+    if client is None:
+        raise RuntimeError("groq library not installed or no API key")
     prompt = _build_prompt(news, assets, poly_data=poly_data)
 
     raw = _groq_call(

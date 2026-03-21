@@ -38,7 +38,7 @@ class TestValidGroqResponse:
             json.dumps(mock_llm_response)
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.sentiment_score == 1.0
@@ -52,7 +52,7 @@ class TestValidGroqResponse:
             json.dumps(mock_llm_response)
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         result_dict = result.to_dict()
@@ -68,7 +68,7 @@ class TestSentimentScoreRange:
             json.dumps({"sentiment_score": 2.5, "sentiment_label": "bullish", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert -3 <= result.sentiment_score <= 3
@@ -80,7 +80,7 @@ class TestSentimentScoreRange:
             json.dumps({"sentiment_score": 5, "sentiment_label": "test", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert isinstance(result.sentiment_score, float)
@@ -94,7 +94,7 @@ class TestKeyDriversCount:
             json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert len(result.key_drivers) == 3
@@ -106,7 +106,7 @@ class TestKeyDriversCount:
             json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c", "d", "e"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert len(result.key_drivers) <= 3
@@ -122,7 +122,7 @@ class TestMalformedResponse:
 
         from modules.exceptions import LLMResponseInvalid
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             with pytest.raises(LLMResponseInvalid):
                 _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
@@ -132,7 +132,7 @@ class TestMalformedResponse:
         mock_client.chat.completions.create.return_value = _make_groq_response("not json")
 
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.Groq", return_value=mock_client):
+            with patch("modules.sentiment.get_groq_client", return_value=mock_client):
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
@@ -164,7 +164,7 @@ class TestGroqRateLimit:
 
         mock_client.chat.completions.create.side_effect = side_effect
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             # Tenacity handles sleep internally — patch it to avoid actual waits
             with patch("tenacity.nap.time.sleep"):
                 result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
@@ -176,9 +176,10 @@ class TestGroqRateLimit:
 class TestGroqTotalFailure:
     def test_fallback_on_total_groq_failure(self, mock_news_items: list) -> None:
         """Verify that fallback to FinBERT works if Groq fails completely."""
+        mock_failing_client = MagicMock()
+        mock_failing_client.chat.completions.create.side_effect = Exception("Service down")
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.Groq") as mock_groq_class:
-                mock_groq_class.return_value.chat.completions.create.side_effect = Exception("Service down")
+            with patch("modules.sentiment.get_groq_client", return_value=mock_failing_client):
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
@@ -343,7 +344,7 @@ class TestGroqMarkdownCleanup:
         fenced_json = f"```json\n{json.dumps(mock_llm_response)}\n```"
         mock_client.chat.completions.create.return_value = _make_groq_response(fenced_json)
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.sentiment_score == 1.0
@@ -373,7 +374,7 @@ class TestPerAssetScoring:
             {"symbol": "GC=F", "display_name": "Gold"},
         ]
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, assets, "llama-3.3-70b-versatile", "fake-key")
 
         assert result.asset_scores["NQ=F"] == 1.5
@@ -397,7 +398,7 @@ class TestPerAssetScoring:
             json.dumps(response_data)
         )
 
-        with patch("modules.sentiment.Groq", return_value=mock_client):
+        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
             result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
         # Falls back to global sentiment_score of 1.0

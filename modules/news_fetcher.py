@@ -217,12 +217,27 @@ def _title_hash(title: str) -> str:
     return hashlib.md5(normalized.encode()).hexdigest()
 
 
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Word-level Jaccard similarity — catches word reordering."""
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union)
+
+
+JACCARD_THRESHOLD = 0.70
+
+
 def _deduplicate(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove articles with similar titles.
 
-    Uses a two-phase approach:
+    Uses a three-phase approach:
     1. Hash pre-filter for exact/near-exact duplicates (O(1) lookup)
-    2. SequenceMatcher for fuzzy duplicates (only against non-hash-matched)
+    2. SequenceMatcher for character-level fuzzy duplicates
+    3. Jaccard similarity for word-level duplicates (catches reordering)
     """
     unique: list[dict[str, Any]] = []
     seen_hashes: set[str] = set()
@@ -237,11 +252,13 @@ def _deduplicate(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         seen_hashes.add(h)
 
-        # Phase 2: fuzzy match against already-seen titles
+        # Phase 2+3: fuzzy match against already-seen titles
         is_duplicate = False
         for seen in seen_titles:
-            ratio = SequenceMatcher(None, title, seen).ratio()
-            if ratio >= SIMILARITY_THRESHOLD:
+            if SequenceMatcher(None, title, seen).ratio() >= SIMILARITY_THRESHOLD:
+                is_duplicate = True
+                break
+            if _jaccard_similarity(title, seen) >= JACCARD_THRESHOLD:
                 is_duplicate = True
                 break
 
@@ -295,9 +312,10 @@ def summarize_news_with_llm(
         # Fallback: just return top titles
         return [a["title"] for a in articles[:max_bullets]]
 
-    try:
-        from groq import Groq
-    except ImportError:
+    from modules.groq_client import get_groq_client
+
+    client = get_groq_client(api_key)
+    if client is None:
         return [a["title"] for a in articles[:max_bullets]]
 
     asset_name = (
@@ -320,7 +338,6 @@ No preamble, no numbering, no markdown."""
 
     try:
         groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-        client = Groq(api_key=api_key)
         response = client.chat.completions.create(
             model=groq_model,
             messages=[

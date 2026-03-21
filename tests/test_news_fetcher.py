@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 import feedparser
 import pytest
 
-from modules.news_fetcher import _deduplicate, _fetch_single_feed, _parse_entry_date, fetch_news
+from modules.news_fetcher import (
+    _deduplicate,
+    _fetch_single_feed,
+    _jaccard_similarity,
+    _parse_entry_date,
+    fetch_news,
+)
 
 
 class TestParseValidRSS:
@@ -108,6 +114,31 @@ class TestDeduplication:
         ]
         result = _deduplicate(articles)
         assert len(result) == 2
+
+    def test_reordered_words_deduplicated(self) -> None:
+        """Jaccard dedup catches titles with same words in different order."""
+        now = datetime.now(timezone.utc)
+        articles = [
+            {"title": "Strong earnings drive tech stocks higher this quarter", "summary": "", "source": "A", "published_at": now},
+            {"title": "Tech stocks higher this quarter drive strong earnings", "summary": "", "source": "B", "published_at": now},
+        ]
+        result = _deduplicate(articles)
+        assert len(result) == 1
+
+
+class TestJaccardSimilarity:
+    def test_identical_strings(self) -> None:
+        assert _jaccard_similarity("hello world", "hello world") == 1.0
+
+    def test_completely_different(self) -> None:
+        assert _jaccard_similarity("hello world", "foo bar") == 0.0
+
+    def test_partial_overlap(self) -> None:
+        sim = _jaccard_similarity("tech stocks rally today", "tech stocks crash today")
+        assert 0.5 < sim < 0.9
+
+    def test_empty_string(self) -> None:
+        assert _jaccard_similarity("", "hello") == 0.0
 
 
 class TestNetworkRetry:

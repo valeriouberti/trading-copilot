@@ -290,13 +290,24 @@ class TestCategoryClassification:
 
 class TestKeywordClassification:
     def test_bearish_keyword(self) -> None:
-        assert _keyword_classify_single("Will recession hit US?") == "BEARISH_IF_YES"
+        impact, ambiguous = _keyword_classify_single("Will recession hit US?")
+        assert impact == "BEARISH_IF_YES"
+        assert ambiguous is False
 
     def test_bullish_keyword(self) -> None:
-        assert _keyword_classify_single("Will rate cut happen?") == "BULLISH_IF_YES"
+        impact, ambiguous = _keyword_classify_single("Will rate cut happen?")
+        assert impact == "BULLISH_IF_YES"
+        assert ambiguous is False
 
-    def test_unknown_defaults_to_bearish(self) -> None:
-        assert _keyword_classify_single("Will aliens arrive?") == "BEARISH_IF_YES"
+    def test_unknown_defaults_to_bearish_and_ambiguous(self) -> None:
+        impact, ambiguous = _keyword_classify_single("Will aliens arrive?")
+        assert impact == "BEARISH_IF_YES"
+        assert ambiguous is True
+
+    def test_both_keywords_is_ambiguous(self) -> None:
+        """Both bullish and bearish keywords → ambiguous."""
+        impact, ambiguous = _keyword_classify_single("Will growth slow into recession?")
+        assert ambiguous is True
 
     def test_classify_markets_with_keywords_adds_impact(self) -> None:
         markets = [
@@ -306,6 +317,13 @@ class TestKeywordClassification:
         result = _classify_markets_with_keywords(markets)
         assert result[0]["impact"] == "BEARISH_IF_YES"
         assert result[1]["impact"] == "BULLISH_IF_YES"
+
+    def test_classify_markets_flags_ambiguous(self) -> None:
+        markets = [
+            _make_signal_market("Will the Fed meeting affect markets?", 50, 100_000),
+        ]
+        result = _classify_markets_with_keywords(markets)
+        assert result[0]["_ambiguous"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -325,51 +343,56 @@ class TestLLMClassification:
     def test_empty_markets_returns_empty(self) -> None:
         assert classify_markets_with_llm([]) == []
 
-    def test_llm_success(self) -> None:
-        """LLM classification applies impact correctly."""
+    def test_skips_llm_when_no_ambiguous_markets(self) -> None:
+        """Clear keyword matches skip LLM entirely."""
         markets = [
-            _make_signal_market("Will US avoid recession?", 70, 100_000),
-            _make_signal_market("Will tariffs increase?", 80, 200_000),
+            _make_signal_market("Will recession hit?", 70, 100_000),
+            _make_signal_market("Will rate cut happen?", 60, 100_000),
+        ]
+        with patch("modules.polymarket.get_groq_client") as mock_client:
+            result = classify_markets_with_llm(markets, api_key="test-key")
+            mock_client.assert_not_called()  # No LLM call needed
+        assert result[0]["impact"] == "BEARISH_IF_YES"
+        assert result[1]["impact"] == "BULLISH_IF_YES"
+
+    def test_llm_called_only_for_ambiguous(self) -> None:
+        """LLM is only called for ambiguous markets."""
+        markets = [
+            _make_signal_market("Will the Fed meeting affect markets?", 70, 100_000),
+            _make_signal_market("Will recession hit?", 80, 200_000),
         ]
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = '[{"index": 1, "impact": "BULLISH_IF_YES"}, {"index": 2, "impact": "BEARISH_IF_YES"}]'
+        mock_response.choices[0].message.content = (
+            '[{"index": 1, "impact": "BULLISH_IF_YES", "magnitude": 4}]'
+        )
 
-        mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.return_value = mock_response
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
 
-        mock_groq_cls = MagicMock(return_value=mock_client_instance)
+        with patch("modules.polymarket.get_groq_client", return_value=mock_client):
+            result = classify_markets_with_llm(markets, api_key="test-key")
 
-        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}, clear=False):
-            with patch.dict("sys.modules", {"groq": MagicMock(Groq=mock_groq_cls)}):
-                # Re-import to pick up patched module
-                import importlib
-                import modules.polymarket as pm
-                importlib.reload(pm)
-                result = pm.classify_markets_with_llm(markets, api_key="test-key")
-
+        # Ambiguous market gets LLM classification
         assert result[0]["impact"] == "BULLISH_IF_YES"
+        assert result[0]["impact_magnitude"] == 4
+        # Non-ambiguous market keeps keyword classification
         assert result[1]["impact"] == "BEARISH_IF_YES"
 
     def test_llm_failure_falls_back(self) -> None:
-        """If LLM fails, uses keyword fallback."""
+        """If LLM fails, uses keyword fallback for ambiguous markets."""
         markets = [
-            _make_signal_market("Will recession hit?", 70, 100_000),
+            _make_signal_market("Will the Fed meeting affect markets?", 70, 100_000),
         ]
 
-        mock_client_instance = MagicMock()
-        mock_client_instance.chat.completions.create.side_effect = RuntimeError("LLM down")
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("LLM down")
 
-        mock_groq_cls = MagicMock(return_value=mock_client_instance)
+        with patch("modules.polymarket.get_groq_client", return_value=mock_client):
+            result = classify_markets_with_llm(markets, api_key="test-key")
 
-        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}, clear=False):
-            with patch.dict("sys.modules", {"groq": MagicMock(Groq=mock_groq_cls)}):
-                import importlib
-                import modules.polymarket as pm
-                importlib.reload(pm)
-                result = pm.classify_markets_with_llm(markets, api_key="test-key")
-
+        # Falls back to keyword default (BEARISH_IF_YES for ambiguous)
         assert result[0]["impact"] == "BEARISH_IF_YES"
 
 
@@ -622,3 +645,44 @@ class TestComputeSignalV2OutputKeys:
         result = compute_signal(markets)
         assert "net_score" in result
         assert isinstance(result["net_score"], float)
+
+
+# ---------------------------------------------------------------------------
+# Tests: v3 — sigmoid confidence calibration
+# ---------------------------------------------------------------------------
+
+class TestSigmoidConfidence:
+    def test_confidence_has_diminishing_returns(self) -> None:
+        """Sigmoid confidence flattens at extreme scores (tanh saturation)."""
+        # Very bearish market
+        markets_extreme = [
+            {**_make_signal_market("Will total crash happen?", prob_yes=95,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 5},
+        ]
+        # Moderately bearish
+        markets_moderate = [
+            {**_make_signal_market("Will mild downturn happen?", prob_yes=70,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 3},
+        ]
+        extreme = compute_signal(markets_extreme)
+        moderate = compute_signal(markets_moderate)
+
+        # Both should be BEARISH with high confidence
+        if extreme["signal"] == "BEARISH" and moderate["signal"] == "BEARISH":
+            # Extreme should have higher confidence
+            assert extreme["confidence"] > moderate["confidence"]
+            # But not linearly proportional (diminishing returns)
+            assert extreme["confidence"] < 100.0
+
+    def test_neutral_confidence_is_50(self) -> None:
+        """NEUTRAL signal always has confidence 50."""
+        markets = [
+            {**_make_signal_market("Balanced event", prob_yes=50,
+                                   volume_usd=500_000, impact="BEARISH_IF_YES"),
+             "impact_magnitude": 3},
+        ]
+        result = compute_signal(markets)
+        assert result["signal"] == "NEUTRAL"
+        assert result["confidence"] == 50.0

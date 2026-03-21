@@ -106,7 +106,7 @@ class TestFullPipelineSuccess:
 
         # Step 3: Sentiment
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.Groq", return_value=mock_groq_client):
+            with patch("modules.sentiment.get_groq_client", return_value=mock_groq_client):
                 sentiment = analyze_sentiment(news, assets_config)
 
         assert sentiment.source in ("groq", "groq-2pass")
@@ -164,9 +164,10 @@ class TestPipelineWithLLMFailure:
             asset_analyses = analyze_assets(assets_config)
 
         # Groq fails, FinBERT also mocked
+        mock_failing_client = MagicMock()
+        mock_failing_client.chat.completions.create.side_effect = Exception("API down")
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.Groq") as mock_groq:
-                mock_groq.return_value.chat.completions.create.side_effect = Exception("API down")
+            with patch("modules.sentiment.get_groq_client", return_value=mock_failing_client):
                 with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
                     mock_finbert.return_value = SentimentResult(
                         sentiment_score=0.0,
@@ -213,7 +214,7 @@ class TestPipelineNoLLMFlag:
         )
 
         # Verify Groq was never called
-        with patch("modules.sentiment.Groq") as mock_groq:
+        with patch("modules.sentiment.get_groq_client") as mock_groq:
             with tempfile.TemporaryDirectory() as tmpdir:
                 report_path = generate_report(sentiment, asset_analyses, mock_news_items, tmpdir)
                 assert os.path.exists(report_path)

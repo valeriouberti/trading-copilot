@@ -530,9 +530,12 @@ async def analyze_single_asset(
 
     setup = _compute_setup(tech_result, sentiment, regime, qs, mtf_align)
 
-    # Phase 7: News summary (LLM bullet points)
+    # Phase 7: News summary — extracted from sentiment result (no extra LLM call)
     news_summary = None
-    if news_result and not skip_llm:
+    if sentiment and getattr(sentiment, "news_summary", None):
+        news_summary = sentiment.news_summary
+    elif news_result and not skip_llm:
+        # Fallback: separate LLM call if sentiment didn't include summary
         try:
             news_summary = await asyncio.to_thread(
                 _run_news_summary, news_result, asset,

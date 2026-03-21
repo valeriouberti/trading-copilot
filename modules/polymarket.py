@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -30,6 +31,7 @@ from typing import Any
 import requests
 
 from modules.exceptions import ExternalAPITransient, LLMResponseInvalid
+from modules.groq_client import get_groq_client
 from modules.keywords import BEARISH_EVENT_KEYWORDS, BULLISH_EVENT_KEYWORDS
 from modules.retry import retry_external_api
 
@@ -544,23 +546,30 @@ def _compute_time_weight(end_date_str: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _keyword_classify_single(question: str) -> str:
-    """Classify a single market question using keywords (fallback)."""
+def _keyword_classify_single(question: str) -> tuple[str, bool]:
+    """Classify a single market question using keywords.
+
+    Returns (impact, is_ambiguous) where is_ambiguous=True when both
+    bullish and bearish keywords match, or neither matches.
+    """
     q_lower = question.lower()
     is_bearish = any(kw in q_lower for kw in BEARISH_EVENT_KEYWORDS)
     is_bullish = any(kw in q_lower for kw in BULLISH_EVENT_KEYWORDS)
 
+    ambiguous = (is_bullish == is_bearish)  # Both True or both False
     if is_bullish and not is_bearish:
-        return "BULLISH_IF_YES"
-    return "BEARISH_IF_YES"
+        return "BULLISH_IF_YES", False
+    return "BEARISH_IF_YES", ambiguous
 
 
 def _classify_markets_with_keywords(
     markets: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Fallback: classify all markets using keyword heuristic."""
+    """Classify all markets using keyword heuristic. Flags ambiguous ones."""
     for market in markets:
-        market["impact"] = _keyword_classify_single(market["question"])
+        impact, ambiguous = _keyword_classify_single(market["question"])
+        market["impact"] = impact
+        market["_ambiguous"] = ambiguous
         market.setdefault("impact_magnitude", 3)  # Default magnitude
     return markets
 
@@ -572,8 +581,8 @@ def classify_markets_with_llm(
 ) -> list[dict[str, Any]]:
     """Use Groq LLM to classify markets with direction AND impact magnitude.
 
-    Now returns both impact direction (BULLISH_IF_YES/BEARISH_IF_YES) and
-    impact_magnitude (1-5) for more accurate signal weighting.
+    Only sends ambiguous markets (where keyword heuristic is uncertain) to
+    the LLM — clear bullish/bearish keyword matches are kept as-is.
 
     Falls back to keyword-based classification if Groq is unavailable.
     """
@@ -583,6 +592,12 @@ def classify_markets_with_llm(
     # Pre-populate ALL markets with keyword fallback
     _classify_markets_with_keywords(markets)
 
+    # Only send ambiguous markets to LLM
+    ambiguous = [m for m in markets if m.get("_ambiguous", False)]
+    if not ambiguous:
+        logger.info("No ambiguous markets — keyword classification sufficient")
+        return markets
+
     if not api_key:
         api_key = os.environ.get("GROQ_API_KEY", "")
 
@@ -590,13 +605,12 @@ def classify_markets_with_llm(
         logger.info("No Groq API key — keyword classification for Polymarket")
         return markets
 
-    try:
-        from groq import Groq
-    except ImportError:
-        logger.warning("groq library not installed — keyword classification")
+    client = get_groq_client(api_key)
+    if client is None:
+        logger.warning("Groq client unavailable — keyword classification")
         return markets
 
-    batch = markets[:15]
+    batch = ambiguous[:15]
     questions_block = "\n".join(
         f"{i + 1}. {m['question']} (prob YES: {m['prob_yes']:.0f}%)"
         for i, m in enumerate(batch)
@@ -633,7 +647,6 @@ Rules:
 - Respond ONLY with the JSON"""
 
     try:
-        client = Groq(api_key=api_key)
         response = client.chat.completions.create(
             model=groq_model,
             messages=[
@@ -666,8 +679,12 @@ Rules:
                 batch[idx]["impact_magnitude"] = max(
                     1, min(5, int(c.get("magnitude", 3)))
                 )
+                batch[idx]["_ambiguous"] = False  # Resolved by LLM
 
-        logger.info("LLM classified %d Polymarket markets with magnitude", len(batch))
+        logger.info(
+            "LLM classified %d/%d ambiguous Polymarket markets",
+            len(batch), len(markets),
+        )
         return markets
 
     except (LLMResponseInvalid, json.JSONDecodeError) as exc:
@@ -727,7 +744,7 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
         magnitude = market.get("impact_magnitude", 3)
 
         if not impact:
-            impact = _keyword_classify_single(market["question"])
+            impact, _ = _keyword_classify_single(market["question"])
 
         # Temporal decay based on resolution date
         time_weight = _compute_time_weight(market.get("end_date", ""))
@@ -756,13 +773,13 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
 
     net_score = bullish_pct - bearish_pct
 
-    # Directional threshold (+/-15 for signal, scaling confidence)
+    # Directional threshold (+/-15 for signal, sigmoid confidence)
     if net_score > 15:
         signal = "BULLISH"
-        confidence = min(100.0, 50 + net_score)
+        confidence = 50 + 50 * math.tanh(net_score / 30)
     elif net_score < -15:
         signal = "BEARISH"
-        confidence = min(100.0, 50 + abs(net_score))
+        confidence = 50 + 50 * math.tanh(abs(net_score) / 30)
     else:
         signal = "NEUTRAL"
         confidence = 50.0
