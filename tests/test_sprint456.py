@@ -1,18 +1,23 @@
 """Tests for Sprint 4, 5, and 6 features.
 
-Tests active production code only. Deprecated backtester tests (WalkForward,
-KellyPositionSize, MonteCarlo) were removed when modules/backtester.py was
-deleted in favour of modules/vbt_backtester.py.
+Domain-specific tests have been extracted to dedicated files:
+- test_analyzer.py — ATR-adaptive SL/TP
+- test_auth.py — API key authentication middleware
+- test_analytics_api.py — Portfolio heatmap endpoint
+
+Candle pattern tests were removed (duplicates of test_price_data.py).
 """
 
 from __future__ import annotations
 
-import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
-import numpy as np
-import pandas as pd
 import pytest
+
+# Project root: tests/ -> parent is repo root
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 # ---------------------------------------------------------------------------
 # Sprint 4: T1.1 — Adaptive indicator weights
@@ -107,76 +112,6 @@ class TestAdaptiveWeights:
 
 
 # ---------------------------------------------------------------------------
-# Sprint 4: T2.1 — ATR-adaptive SL/TP
-# ---------------------------------------------------------------------------
-
-
-class TestATRAdaptiveSLTP:
-    """Test ATR-adaptive stop-loss and take-profit computation."""
-
-    def test_low_volatility_tight_sl(self) -> None:
-        """Low ATR percentile (< 0.8) should use SL multiplier of 1.0."""
-        from app.services.analyzer import _compute_setup
-        from modules.price_data import AssetAnalysis, TechnicalSignal
-
-        analysis = AssetAnalysis(
-            symbol="TEST",
-            display_name="Test",
-            price=100.0,
-            change_pct=1.0,
-            signals=[
-                TechnicalSignal("ATR", 1.0, "NEUTRAL", "ATR 1.0"),
-            ],
-        )
-        setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
-        assert setup["tradeable"] is True
-        assert "sl_multiplier" in setup
-        assert "atr_percentile" in setup
-
-    def test_setup_includes_new_fields(self) -> None:
-        """Setup dict should include atr_percentile and sl_multiplier."""
-        from app.services.analyzer import _compute_setup
-        from modules.price_data import AssetAnalysis, TechnicalSignal
-
-        analysis = AssetAnalysis(
-            symbol="TEST",
-            display_name="Test",
-            price=100.0,
-            change_pct=1.0,
-            signals=[
-                TechnicalSignal("ATR", 2.0, "NEUTRAL", "ATR 2.0"),
-            ],
-        )
-        setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
-        assert "atr_percentile" in setup
-        assert "sl_multiplier" in setup
-        assert setup["atr_percentile"] > 0
-        assert setup["sl_multiplier"] > 0
-
-    def test_maintains_risk_reward_ratio(self) -> None:
-        """TP/SL ratio should match the per-class defaults from strategy module.
-
-        Symbol "ES" resolves to "index" (SL=2.0x, TP=4.0x -> 1:2 R:R).
-        """
-        from app.services.analyzer import _compute_setup
-        from modules.price_data import AssetAnalysis, TechnicalSignal
-
-        analysis = AssetAnalysis(
-            symbol="ES",
-            display_name="S&P 500",
-            price=100.0,
-            change_pct=1.0,
-            signals=[
-                TechnicalSignal("ATR", 2.0, "NEUTRAL", "ATR 2.0"),
-            ],
-        )
-        setup = _compute_setup(analysis, None, "LONG", 4, "ALIGNED")
-        assert setup["tradeable"] is True
-        ratio = setup["tp_distance"] / setup["sl_distance"]
-        assert abs(ratio - 2.0) < 0.1
-
-
-# ---------------------------------------------------------------------------
 # Sprint 4: E2.2 — httpx dependency
 # ---------------------------------------------------------------------------
 
@@ -238,121 +173,6 @@ class TestGetAssetBySymbol:
 
 
 # ---------------------------------------------------------------------------
-# Sprint 5: E4.1 — Authentication middleware
-# ---------------------------------------------------------------------------
-
-
-class TestAuthMiddleware:
-    def test_public_paths_are_public(self) -> None:
-        """Public paths should not require authentication."""
-        from app.middleware.auth import _is_public
-
-        assert _is_public("/api/health") is True
-        assert _is_public("/") is True
-        assert _is_public("/trades") is True
-        assert _is_public("/analytics") is True
-        assert _is_public("/signals") is True
-        assert _is_public("/settings") is True
-        assert _is_public("/static/css/style.css") is True
-        assert _is_public("/asset/NQ=F") is True
-
-    def test_api_paths_not_public(self) -> None:
-        """API paths should require authentication."""
-        from app.middleware.auth import _is_public
-
-        assert _is_public("/api/analyze/NQ=F") is False
-        assert _is_public("/api/assets") is False
-        assert _is_public("/api/settings") is False
-
-    @pytest.mark.asyncio
-    async def test_middleware_skips_when_no_key(self) -> None:
-        """If no API key configured, middleware should pass all requests."""
-        from app.middleware.auth import APIKeyMiddleware
-
-        mock_app = MagicMock()
-        middleware = APIKeyMiddleware(mock_app, api_key="")
-        assert middleware.api_key == ""
-
-    @pytest.mark.asyncio
-    async def test_middleware_blocks_invalid_key(self) -> None:
-        """Invalid API key should result in 401."""
-        from app.middleware.auth import APIKeyMiddleware
-
-        mock_app = MagicMock()
-        middleware = APIKeyMiddleware(mock_app, api_key="secret-key-123")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/api/assets"
-        mock_request.headers = {"X-API-Key": "wrong-key"}
-        mock_request.query_params = {}
-        mock_request.client.host = "127.0.0.1"
-
-        mock_call_next = AsyncMock()
-        response = await middleware.dispatch(mock_request, mock_call_next)
-
-        assert response.status_code == 401
-        mock_call_next.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_middleware_passes_valid_key(self) -> None:
-        """Valid API key should pass through."""
-        from app.middleware.auth import APIKeyMiddleware
-
-        mock_app = MagicMock()
-        middleware = APIKeyMiddleware(mock_app, api_key="secret-key-123")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/api/assets"
-        mock_request.headers = {"X-API-Key": "secret-key-123"}
-        mock_request.query_params = {}
-
-        mock_response = MagicMock()
-        mock_call_next = AsyncMock(return_value=mock_response)
-        response = await middleware.dispatch(mock_request, mock_call_next)
-
-        mock_call_next.assert_called_once()
-        assert response == mock_response
-
-    @pytest.mark.asyncio
-    async def test_middleware_accepts_query_param(self) -> None:
-        """API key via query param should also work."""
-        from app.middleware.auth import APIKeyMiddleware
-
-        mock_app = MagicMock()
-        middleware = APIKeyMiddleware(mock_app, api_key="secret-key-123")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/api/assets"
-        mock_request.headers = {}
-        mock_request.query_params = {"api_key": "secret-key-123"}
-
-        mock_response = MagicMock()
-        mock_call_next = AsyncMock(return_value=mock_response)
-        response = await middleware.dispatch(mock_request, mock_call_next)
-
-        mock_call_next.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_middleware_skips_public_paths(self) -> None:
-        """Public paths should be allowed even without key."""
-        from app.middleware.auth import APIKeyMiddleware
-
-        mock_app = MagicMock()
-        middleware = APIKeyMiddleware(mock_app, api_key="secret-key-123")
-
-        mock_request = MagicMock()
-        mock_request.url.path = "/api/health"
-        mock_request.headers = {}
-        mock_request.query_params = {}
-
-        mock_response = MagicMock()
-        mock_call_next = AsyncMock(return_value=mock_response)
-        response = await middleware.dispatch(mock_request, mock_call_next)
-
-        mock_call_next.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
 # Sprint 5: E7.2 — Separate ML deps
 # ---------------------------------------------------------------------------
 
@@ -360,31 +180,21 @@ class TestAuthMiddleware:
 class TestRequirementsFiles:
     def test_requirements_base_exists(self) -> None:
         """requirements-base.txt should exist."""
-        assert os.path.isfile(
-            "/Users/valeriouberti/personal/side-projects/trading-assistant/requirements-base.txt"
-        )
+        assert (_PROJECT_ROOT / "requirements-base.txt").is_file()
 
     def test_requirements_ml_exists(self) -> None:
         """requirements-ml.txt should exist."""
-        assert os.path.isfile(
-            "/Users/valeriouberti/personal/side-projects/trading-assistant/requirements-ml.txt"
-        )
+        assert (_PROJECT_ROOT / "requirements-ml.txt").is_file()
 
     def test_base_does_not_include_ml(self) -> None:
         """requirements-base.txt should NOT contain transformers or torch."""
-        with open(
-            "/Users/valeriouberti/personal/side-projects/trading-assistant/requirements-base.txt"
-        ) as f:
-            content = f.read()
+        content = (_PROJECT_ROOT / "requirements-base.txt").read_text()
         assert "transformers" not in content
         assert "torch" not in content
 
     def test_ml_references_base(self) -> None:
         """requirements-ml.txt should reference requirements-base.txt."""
-        with open(
-            "/Users/valeriouberti/personal/side-projects/trading-assistant/requirements-ml.txt"
-        ) as f:
-            content = f.read()
+        content = (_PROJECT_ROOT / "requirements-ml.txt").read_text()
         assert "-r requirements-base.txt" in content
         assert "transformers" in content
         assert "torch" in content
@@ -487,155 +297,3 @@ class TestIntermarketSignals:
         ]
         warnings = compute_intermarket_signals(analyses)
         assert warnings == []
-
-
-# ---------------------------------------------------------------------------
-# Sprint 6: T1.3 — Advanced candle patterns
-# ---------------------------------------------------------------------------
-
-
-class TestAdvancedCandlePatterns:
-    def test_inside_bar_detected(self) -> None:
-        """Inside bar should be detected when high < prev high AND low > prev low."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [100.0, 101.0],
-            "High": [105.0, 103.0],
-            "Low": [95.0, 97.0],
-            "Close": [102.0, 100.0],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result == "INSIDE_BAR"
-
-    def test_engulfing_bullish(self) -> None:
-        """Bullish engulfing should return 'ENGULFING'."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [102.0, 97.0],
-            "High": [103.0, 105.0],
-            "Low": [98.0, 96.0],
-            "Close": [99.0, 104.0],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result == "ENGULFING"
-
-    def test_engulfing_bearish(self) -> None:
-        """Bearish engulfing should return 'ENGULFING'."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [98.0, 103.0],
-            "High": [102.0, 104.0],
-            "Low": [97.0, 95.0],
-            "Close": [101.0, 96.0],
-        })
-        result = _detect_candle_pattern(df, "BEARISH")
-        assert result == "ENGULFING"
-
-    def test_pin_bar_bullish(self) -> None:
-        """Bullish pin bar (long lower wick) should return 'PIN_BAR'."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [100.0, 101.0],
-            "High": [105.0, 101.5],
-            "Low": [95.0, 95.0],
-            "Close": [102.0, 101.2],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result == "PIN_BAR"
-
-    def test_no_pattern_returns_none(self) -> None:
-        """When no pattern matches, should return None."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [100.0, 100.0],
-            "High": [102.0, 103.0],
-            "Low": [98.0, 97.0],
-            "Close": [101.0, 101.0],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result in (None, "PIN_BAR", "ENGULFING", "INSIDE_BAR")
-
-    def test_return_type_truthy_compatible(self) -> None:
-        """Return value should be truthy when a pattern is detected."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [100.0, 101.0],
-            "High": [105.0, 103.0],
-            "Low": [95.0, 97.0],
-            "Close": [102.0, 100.0],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result
-        assert isinstance(result, str)
-
-    def test_insufficient_data_returns_none(self) -> None:
-        """With fewer than 2 bars, should return None."""
-        from modules.price_data import _detect_candle_pattern
-
-        df = pd.DataFrame({
-            "Open": [100.0],
-            "High": [105.0],
-            "Low": [95.0],
-            "Close": [102.0],
-        })
-        result = _detect_candle_pattern(df, "BULLISH")
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Sprint 6: T6.1 — Portfolio heatmap endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestHeatmapEndpoint:
-    def test_analytics_api_module_importable(self) -> None:
-        """analytics_api module should be importable."""
-        from app.api import analytics_api
-        assert hasattr(analytics_api, "router")
-
-    def test_compute_heatmap_returns_dict(self) -> None:
-        """_compute_heatmap should return a dict with symbols and matrix."""
-        from app.api.analytics_api import _compute_heatmap
-
-        mock_analysis_1 = MagicMock()
-        mock_analysis_1.symbol = "A"
-        mock_analysis_1.daily_closes = pd.Series(
-            np.random.normal(0, 1, 40).cumsum() + 100,
-            index=pd.date_range("2025-01-01", periods=40, freq="D"),
-        )
-
-        mock_analysis_2 = MagicMock()
-        mock_analysis_2.symbol = "B"
-        mock_analysis_2.daily_closes = pd.Series(
-            np.random.normal(0, 1, 40).cumsum() + 200,
-            index=pd.date_range("2025-01-01", periods=40, freq="D"),
-        )
-
-        with patch("modules.price_data.analyze_assets", return_value=[mock_analysis_1, mock_analysis_2]):
-            result = _compute_heatmap([
-                {"symbol": "A", "display_name": "Asset A"},
-                {"symbol": "B", "display_name": "Asset B"},
-            ])
-
-        assert "symbols" in result
-        assert "matrix" in result
-        if result["symbols"]:
-            assert len(result["symbols"]) == 2
-            assert len(result["matrix"]) == 2
-            assert len(result["matrix"][0]) == 2
-
-    def test_compute_heatmap_empty_assets(self) -> None:
-        """Empty assets should return empty result."""
-        from app.api.analytics_api import _compute_heatmap
-
-        with patch("modules.price_data.analyze_assets", return_value=[]):
-            result = _compute_heatmap([])
-
-        assert result["symbols"] == []
-        assert result["matrix"] == []
