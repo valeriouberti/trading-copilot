@@ -4,11 +4,14 @@
 <style>
 .overview-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 16px;
     margin-bottom: 24px;
 }
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
+    .overview-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
     .overview-grid { grid-template-columns: 1fr; }
 }
 .overview-card {
@@ -33,14 +36,14 @@
     margin-bottom: 12px;
 }
 .ov-symbol {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
     font-family: "SF Mono", "Fira Code", monospace;
     color: var(--accent-blue);
 }
 .ov-name {
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 12px;
     margin-top: 2px;
 }
 .ov-price-row {
@@ -50,20 +53,20 @@
     margin-bottom: 14px;
 }
 .ov-price {
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 700;
     font-family: "SF Mono", "Fira Code", monospace;
 }
 .ov-change {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     font-family: "SF Mono", "Fira Code", monospace;
 }
 .ov-indicators {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px 16px;
-    font-size: 13px;
+    gap: 4px 12px;
+    font-size: 12px;
 }
 .ov-ind-row {
     display: flex;
@@ -72,10 +75,10 @@
 .ov-ind-label { color: var(--text-muted); }
 .ov-ind-value { font-weight: 600; font-family: "SF Mono", "Fira Code", monospace; }
 .ov-verdict {
-    margin-top: 14px;
-    padding: 10px 14px;
+    margin-top: 12px;
+    padding: 8px 12px;
     border-radius: var(--radius);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     text-align: center;
 }
@@ -84,12 +87,12 @@
     color: var(--text-secondary);
     border: 1px solid var(--border);
 }
-.ov-verdict-go {
+.ov-verdict-buy {
     background: rgba(63, 185, 80, 0.1);
     color: var(--accent-green);
     border: 1px solid rgba(63, 185, 80, 0.3);
 }
-.ov-verdict-short {
+.ov-verdict-sell {
     background: rgba(248, 81, 73, 0.1);
     color: var(--accent-red);
     border: 1px solid rgba(248, 81, 73, 0.3);
@@ -100,28 +103,7 @@
     text-align: center;
     padding: 40px 0;
 }
-/* Monitor bar */
-.monitor-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
-    padding: 16px 20px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
-.monitor-bar-info {
-    flex: 1;
-    display: flex;
-    gap: 24px;
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-.monitor-bar-info span { font-family: "SF Mono", "Fira Code", monospace; }
-.monitor-bar-info .val { color: var(--text-primary); font-weight: 600; }
-/* Budget widget */
-.budget-bar {
+.scheduler-bar {
     display: flex;
     align-items: center;
     gap: 16px;
@@ -132,59 +114,50 @@
     border-radius: var(--radius);
     font-size: 13px;
 }
-.budget-track {
-    flex: 1;
-    height: 8px;
-    background: var(--bg-primary);
-    border-radius: 4px;
-    overflow: hidden;
-}
-.budget-fill {
-    height: 100%;
-    border-radius: 4px;
-    background: var(--accent-blue);
-    transition: width 0.5s;
-}
-.budget-text { color: var(--text-secondary); font-family: "SF Mono", "Fira Code", monospace; white-space: nowrap; }
+.scheduler-bar .label { color: var(--text-muted); }
+.scheduler-bar .val { color: var(--text-primary); font-weight: 600; font-family: "SF Mono", "Fira Code", monospace; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="page-header" style="display:flex; align-items:center; justify-content:space-between;">
     <div>
-        <h1>Trading Dashboard</h1>
-        <p class="subtitle" id="dash-subtitle">Loading analysis for 3 assets...</p>
+        <h1>ETF Overview</h1>
+        <p class="subtitle" id="dash-subtitle">Loading analysis for {{ assets | length }} ETFs...</p>
     </div>
     <div style="display:flex; gap:8px;">
         <button class="btn btn-primary" id="btn-analyze-all" onclick="analyzeAll()">
-            Analyze All
+            Analyze Now
         </button>
-        <button class="btn btn-success" id="btn-monitor-all" onclick="toggleMonitorAll()">
-            Start Monitor
+        <button class="btn btn-success" id="btn-scheduler" onclick="toggleScheduler()">
+            Start Scheduler
         </button>
     </div>
 </div>
 
-<!-- Credit Budget -->
-<div class="budget-bar" id="budget-bar" style="display:none;">
-    <span style="color:var(--text-muted);">Twelve Data Credits</span>
-    <div class="budget-track"><div class="budget-fill" id="budget-fill"></div></div>
-    <span class="budget-text" id="budget-text"></span>
+<!-- Scheduler Status -->
+<div class="scheduler-bar" id="scheduler-bar">
+    <span class="label">Scheduler:</span>
+    <span class="val" id="sched-status">checking...</span>
+    <span class="label">Next analysis:</span>
+    <span class="val" id="sched-next">-</span>
+    <span class="label">Open positions:</span>
+    <span class="val" id="sched-positions">-</span>
 </div>
 
-<!-- Asset Overview Cards -->
+<!-- ETF Overview Cards (4x2 grid) -->
 <div class="overview-grid" id="overview-grid">
     {% for asset in assets %}
-    <div class="overview-card loading" id="card-{{ asset.symbol | replace('=', '_') }}" onclick="window.location='/asset/{{ asset.symbol }}'">
+    <div class="overview-card loading" id="card-{{ asset.symbol | replace('.', '_') }}" onclick="window.location='/asset/{{ asset.symbol }}'">
         <div class="ov-header">
             <div>
                 <div class="ov-symbol">{{ asset.symbol }}</div>
                 <div class="ov-name">{{ asset.display_name }}</div>
             </div>
-            <span class="badge badge-neutral" id="regime-{{ asset.symbol | replace('=', '_') }}">...</span>
+            <span class="badge badge-neutral" id="regime-{{ asset.symbol | replace('.', '_') }}">...</span>
         </div>
-        <div class="ov-loading-text" id="loader-{{ asset.symbol | replace('=', '_') }}">Analyzing...</div>
-        <div id="data-{{ asset.symbol | replace('=', '_') }}" style="display:none;"></div>
+        <div class="ov-loading-text" id="loader-{{ asset.symbol | replace('.', '_') }}">Analyzing...</div>
+        <div id="data-{{ asset.symbol | replace('.', '_') }}" style="display:none;"></div>
     </div>
     {% endfor %}
 </div>
@@ -194,11 +167,11 @@
     <div class="info-card">
         <h3>System Status</h3>
         <div class="info-row">
-            <span class="info-label">Assets</span>
+            <span class="info-label">ETFs</span>
             <span class="info-value">{{ assets | length }}</span>
         </div>
         <div class="info-row">
-            <span class="info-label">Monitor</span>
+            <span class="info-label">Scheduler</span>
             <span class="info-value" id="monitor-status">checking...</span>
         </div>
         <div class="info-row">
@@ -206,8 +179,8 @@
             <span class="info-value" id="ws-status">connecting...</span>
         </div>
         <div class="info-row">
-            <span class="info-label">Credits Today</span>
-            <span class="info-value" id="credits-status">...</span>
+            <span class="info-label">Max Positions</span>
+            <span class="info-value">2</span>
         </div>
     </div>
 </section>
@@ -216,14 +189,12 @@
 {% block scripts %}
 <script>
 const ASSETS = {{ assets | tojson }};
-let monitorRunning = false;
+let schedulerRunning = false;
 let analysisResults = {};
 
-// ─── Auto-analyze all on load ─────────────────────────────────
 document.addEventListener("DOMContentLoaded", function() {
     analyzeAll();
-    fetchMonitorStatus();
-    fetchBudget();
+    fetchSchedulerStatus();
 });
 
 async function analyzeAll() {
@@ -235,46 +206,43 @@ async function analyzeAll() {
     await Promise.allSettled(promises);
 
     btn.disabled = false;
-    btn.textContent = "Analyze All";
+    btn.textContent = "Analyze Now";
 
-    // Update subtitle
     const tradeable = Object.values(analysisResults).filter(r => r && r.setup && r.setup.tradeable).length;
     const sub = document.getElementById("dash-subtitle");
     if (tradeable > 0) {
-        sub.textContent = `${tradeable} tradeable signal${tradeable > 1 ? "s" : ""} found`;
+        sub.textContent = `${tradeable} BUY signal${tradeable > 1 ? "s" : ""} found`;
         sub.style.color = "var(--accent-green)";
     } else {
-        sub.textContent = "No tradeable signals — flat day";
+        sub.textContent = "No BUY signals — hold or stay flat";
         sub.style.color = "var(--text-secondary)";
     }
 }
 
 async function analyzeOne(symbol, displayName) {
-    const safe = symbol.replace(/=/g, "_");
+    const safe = symbol.replace(/\./g, "_");
     const card = document.getElementById("card-" + safe);
     const loader = document.getElementById("loader-" + safe);
     const dataDiv = document.getElementById("data-" + safe);
     const regimeBadge = document.getElementById("regime-" + safe);
 
     try {
-        const resp = await fetch(`/api/analyze/${encodeURIComponent(symbol)}?skip_polymarket=true`, { method: "POST" });
+        const resp = await fetch(`/api/analyze/${encodeURIComponent(symbol)}`, { method: "POST" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
         analysisResults[symbol] = data;
 
-        // Regime badge
         const regime = data.regime || "NEUTRAL";
-        regimeBadge.textContent = regime;
-        regimeBadge.className = "badge " + (regime === "LONG" ? "badge-bullish" : regime === "SHORT" ? "badge-bearish" : "badge-neutral");
+        regimeBadge.textContent = regime === "LONG" ? "BUY" : regime === "BEARISH" ? "SELL" : "HOLD";
+        regimeBadge.className = "badge " + (regime === "LONG" ? "badge-bullish" : regime === "BEARISH" ? "badge-bearish" : "badge-neutral");
 
-        // Price
         const price = data.analysis && data.analysis.price;
         const tech = data.analysis && data.analysis.technicals;
         const setup = data.setup || {};
         const qs = tech && tech.quality_score ? tech.quality_score.total : 0;
 
         let html = `<div class="ov-price-row">
-            <span class="ov-price">${fmt(price && price.current)}</span>
+            <span class="ov-price">${fmtEur(price && price.current)}</span>
             <span class="ov-change ${price && price.change_pct >= 0 ? 'price-up' : 'price-down'}">
                 ${price ? (price.change_pct >= 0 ? "+" : "") + price.change_pct.toFixed(2) + "%" : ""}
             </span>
@@ -284,17 +252,17 @@ async function analyzeOne(symbol, displayName) {
             <div class="ov-ind-row"><span class="ov-ind-label">Composite</span><span class="ov-ind-value">${tech ? tech.composite_score : "-"}</span></div>
             <div class="ov-ind-row"><span class="ov-ind-label">QS</span><span class="ov-ind-value">${qs}/5</span></div>
             <div class="ov-ind-row"><span class="ov-ind-label">RSI</span><span class="ov-ind-value">${tech && tech.signals && tech.signals.rsi ? tech.signals.rsi.value.toFixed(1) : "-"}</span></div>
-            <div class="ov-ind-row"><span class="ov-ind-label">ADX</span><span class="ov-ind-value">${tech && tech.signals && tech.signals.adx ? tech.signals.adx.value.toFixed(1) : "-"}</span></div>
             <div class="ov-ind-row"><span class="ov-ind-label">MTF</span><span class="ov-ind-value">${tech && tech.mtf ? tech.mtf.alignment : "-"}</span></div>
-            <div class="ov-ind-row"><span class="ov-ind-label">ATR</span><span class="ov-ind-value">${setup.atr || "-"}</span></div>
         </div>`;
 
-        // Verdict
         if (setup.tradeable) {
-            const cls = setup.direction === "SHORT" ? "ov-verdict-short" : "ov-verdict-go";
-            html += `<div class="ov-verdict ${cls}">${setup.direction} — Entry ${fmt(setup.entry_price)} | SL ${fmt(setup.stop_loss)} | TP ${fmt(setup.take_profit)} | R:R ${setup.risk_reward}</div>`;
+            const slPct = setup.entry_price && setup.stop_loss ? (Math.abs((setup.stop_loss - setup.entry_price) / setup.entry_price * 100)).toFixed(1) : '?';
+            const tpPct = setup.entry_price && setup.take_profit ? (Math.abs((setup.take_profit - setup.entry_price) / setup.entry_price * 100)).toFixed(1) : '?';
+            html += `<div class="ov-verdict ov-verdict-buy">BUY ${fmtEur(setup.entry_price)} | SL -${slPct}% | TP +${tpPct}% | R:R ${setup.risk_reward}</div>`;
+        } else if (regime === "BEARISH") {
+            html += `<div class="ov-verdict ov-verdict-sell">SELL IF HOLDING</div>`;
         } else {
-            html += `<div class="ov-verdict ov-verdict-skip">SKIP — ${setup.reason || regime}</div>`;
+            html += `<div class="ov-verdict ov-verdict-skip">HOLD — ${setup.reason || regime}</div>`;
         }
 
         loader.style.display = "none";
@@ -307,87 +275,67 @@ async function analyzeOne(symbol, displayName) {
     }
 }
 
-// ─── Monitor All ──────────────────────────────────────────────
-async function toggleMonitorAll() {
-    const btn = document.getElementById("btn-monitor-all");
-    const action = monitorRunning ? "stop" : "start";
+async function toggleScheduler() {
+    const btn = document.getElementById("btn-scheduler");
+    const action = schedulerRunning ? "stop" : "start";
     btn.disabled = true;
 
     try {
-        for (const asset of ASSETS) {
-            await fetch(`/api/monitor/${action}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ symbol: asset.symbol }),
-            });
-        }
-        monitorRunning = !monitorRunning;
-        btn.textContent = monitorRunning ? "Stop Monitor" : "Start Monitor";
-        btn.className = monitorRunning ? "btn btn-danger" : "btn btn-success";
-        fetchMonitorStatus();
-        if (monitorRunning) fetchBudget();
+        await fetch(`/api/monitor/${action}`, { method: "POST" });
+        schedulerRunning = !schedulerRunning;
+        btn.textContent = schedulerRunning ? "Stop Scheduler" : "Start Scheduler";
+        btn.className = schedulerRunning ? "btn btn-danger" : "btn btn-success";
+        fetchSchedulerStatus();
     } catch (e) {
-        alert("Monitor error: " + e.message);
+        alert("Scheduler error: " + e.message);
     }
     btn.disabled = false;
 }
 
-// ─── Status helpers ───────────────────────────────────────────
-async function fetchMonitorStatus() {
+async function fetchSchedulerStatus() {
     try {
         const res = await fetch("/api/monitor/status");
         const data = await res.json();
-        const active = (data.monitors || []).filter(m => m.status === "ACTIVE");
         const el = document.getElementById("monitor-status");
-        if (active.length > 0) {
-            el.textContent = active.length + "/" + ASSETS.length + " active";
+        const schedStatus = document.getElementById("sched-status");
+        const schedNext = document.getElementById("sched-next");
+
+        if (data.status === "RUNNING") {
+            el.textContent = "Running";
             el.style.color = "var(--accent-green)";
-            monitorRunning = active.length === ASSETS.length;
-            const btn = document.getElementById("btn-monitor-all");
-            if (monitorRunning) {
-                btn.textContent = "Stop Monitor";
-                btn.className = "btn btn-danger";
+            schedStatus.textContent = "RUNNING";
+            schedStatus.style.color = "var(--accent-green)";
+            schedulerRunning = true;
+
+            const btn = document.getElementById("btn-scheduler");
+            btn.textContent = "Stop Scheduler";
+            btn.className = "btn btn-danger";
+
+            if (data.schedule && data.schedule.length > 0) {
+                const next = data.schedule.map(j => j.next_run).filter(t => t !== "paused").sort()[0];
+                if (next) {
+                    const d = new Date(next);
+                    schedNext.textContent = d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) + " CET";
+                }
             }
         } else {
-            el.textContent = "Inactive";
+            el.textContent = "Stopped";
             el.style.color = "var(--text-muted)";
+            schedStatus.textContent = "STOPPED";
+            schedStatus.style.color = "var(--text-muted)";
         }
+
+        // Fetch portfolio count
+        const posRes = await fetch("/api/portfolio");
+        const posData = await posRes.json();
+        document.getElementById("sched-positions").textContent = `${posData.count}/${posData.max_positions}`;
     } catch (e) {}
 }
 
-async function fetchBudget() {
-    try {
-        const res = await fetch("/api/monitor/budget");
-        const data = await res.json();
-        const bar = document.getElementById("budget-bar");
-        const fill = document.getElementById("budget-fill");
-        const text = document.getElementById("budget-text");
-        const credits = document.getElementById("credits-status");
-
-        bar.style.display = "flex";
-        const pct = data.pct_used || 0;
-        fill.style.width = pct + "%";
-        fill.style.background = pct > 80 ? "var(--accent-red)" : pct > 50 ? "var(--accent-yellow)" : "var(--accent-blue)";
-        text.textContent = `${data.used || 0} / ${data.limit || 750} used`;
-        credits.textContent = `${data.remaining || 0} remaining`;
-    } catch (e) {}
-}
-
-function fmt(n) {
+function fmtEur(n) {
     if (n === null || n === undefined) return "-";
-    return typeof n === "number" ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n;
+    return typeof n === "number" ? "€" + n.toFixed(2) : n;
 }
-
-// ─── WebSocket live price updates ─────────────────────────────
-document.addEventListener("ws:price_update", function(e) {
-    const d = e.detail;
-    // Find card and update price
-    const safe = d.symbol.replace(/=/g, "_");
-    const card = document.getElementById("card-" + safe);
-    if (!card) return;
-    const priceEl = card.querySelector(".ov-price");
-    if (priceEl && d.price) priceEl.textContent = fmt(d.price);
-});
 
 document.addEventListener("ws:connected", function() {
     const el = document.getElementById("ws-status");

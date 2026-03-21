@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div x-data="portfolio()" x-init="load()">
+    <div class="page-header">
+        <h1>Portfolio</h1>
+        <div class="header-actions">
+            <span class="badge" x-text="`${positions.length}/${maxPositions} positions`"></span>
+            <button class="btn btn-sm" @click="load()">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="card">
+        <h2>Open Positions</h2>
+        <template x-if="positions.length === 0">
+            <p class="text-muted">No open positions. Check the Overview for BUY signals.</p>
+        </template>
+        <template x-if="positions.length > 0">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Entry Date</th>
+                        <th>Entry Price</th>
+                        <th>Shares</th>
+                        <th>SL</th>
+                        <th>TP</th>
+                        <th>Days Held</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="pos in positions" :key="pos.id">
+                        <tr>
+                            <td x-text="pos.symbol" class="font-bold"></td>
+                            <td x-text="pos.entry_date ? pos.entry_date.split('T')[0] : '-'"></td>
+                            <td x-text="'€' + (pos.entry_price || 0).toFixed(2)"></td>
+                            <td x-text="pos.shares"></td>
+                            <td x-text="pos.stop_loss ? '€' + pos.stop_loss.toFixed(2) : '-'"></td>
+                            <td x-text="pos.take_profit ? '€' + pos.take_profit.toFixed(2) : '-'"></td>
+                            <td x-text="daysHeld(pos)"></td>
+                            <td>
+                                <button class="btn btn-sm btn-danger"
+                                        @click="showClose(pos)">Close</button>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </template>
+    </div>
+
+    <!-- Record New Position -->
+    <div class="card">
+        <h2>Record New Position</h2>
+        <form @submit.prevent="openPosition()" class="form-grid">
+            <div class="form-group">
+                <label>Symbol</label>
+                <select x-model="newPos.symbol" required>
+                    <option value="">Select ETF...</option>
+                    {% for a in nav_assets %}
+                    <option value="{{ a.symbol }}">{{ a.symbol }} — {{ a.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Entry Price (EUR)</label>
+                <input type="number" step="0.01" x-model.number="newPos.entry_price" required>
+            </div>
+            <div class="form-group">
+                <label>Shares</label>
+                <input type="number" step="1" x-model.number="newPos.shares" required>
+            </div>
+            <div class="form-group">
+                <label>Stop Loss</label>
+                <input type="number" step="0.01" x-model.number="newPos.stop_loss">
+            </div>
+            <div class="form-group">
+                <label>Take Profit</label>
+                <input type="number" step="0.01" x-model.number="newPos.take_profit">
+            </div>
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" x-model="newPos.notes">
+            </div>
+            <div class="form-group">
+                <button type="submit" class="btn btn-primary"
+                        :disabled="positions.length >= maxPositions">
+                    Record Position
+                </button>
+            </div>
+        </form>
+        <p x-show="msg" x-text="msg" class="text-success"></p>
+        <p x-show="err" x-text="err" class="text-danger"></p>
+    </div>
+
+    <!-- Close Position Modal -->
+    <div x-show="closingPos" class="modal-overlay" @click.self="closingPos = null">
+        <div class="modal">
+            <h3 x-text="'Close ' + (closingPos?.symbol || '')"></h3>
+            <div class="form-group">
+                <label>Exit Price (EUR)</label>
+                <input type="number" step="0.01" x-model.number="exitPrice">
+            </div>
+            <div class="form-group">
+                <button class="btn btn-primary" @click="confirmClose()">Confirm Close</button>
+                <button class="btn" @click="closingPos = null">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function portfolio() {
+    return {
+        positions: [],
+        maxPositions: 2,
+        newPos: { symbol: '', entry_price: null, shares: null, stop_loss: null, take_profit: null, notes: '' },
+        closingPos: null,
+        exitPrice: null,
+        msg: '',
+        err: '',
+
+        async load() {
+            try {
+                const resp = await fetch('/api/portfolio');
+                const data = await resp.json();
+                this.positions = data.positions || [];
+                this.maxPositions = data.max_positions || 2;
+            } catch (e) {
+                console.error('Failed to load portfolio:', e);
+            }
+        },
+
+        daysHeld(pos) {
+            if (!pos.entry_date) return '-';
+            const entry = new Date(pos.entry_date);
+            const now = new Date();
+            return Math.floor((now - entry) / (1000 * 60 * 60 * 24)) + '/10';
+        },
+
+        async openPosition() {
+            this.msg = '';
+            this.err = '';
+            try {
+                const resp = await fetch('/api/portfolio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.newPos),
+                });
+                if (!resp.ok) {
+                    const data = await resp.json();
+                    this.err = data.detail || 'Failed to create position';
+                    return;
+                }
+                this.msg = 'Position recorded!';
+                this.newPos = { symbol: '', entry_price: null, shares: null, stop_loss: null, take_profit: null, notes: '' };
+                await this.load();
+            } catch (e) {
+                this.err = 'Error: ' + e.message;
+            }
+        },
+
+        showClose(pos) {
+            this.closingPos = pos;
+            this.exitPrice = null;
+        },
+
+        async confirmClose() {
+            if (!this.exitPrice || !this.closingPos) return;
+            try {
+                const resp = await fetch(`/api/portfolio/${this.closingPos.id}/close`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ exit_price: this.exitPrice }),
+                });
+                if (resp.ok) {
+                    this.closingPos = null;
+                    await this.load();
+                }
+            } catch (e) {
+                console.error('Close failed:', e);
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

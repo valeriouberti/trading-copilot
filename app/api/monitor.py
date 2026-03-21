@@ -59,7 +59,7 @@ async def monitor_schedule(request: Request):
     return {"schedule": scheduler.get_schedule()}
 
 
-@router.post("/api/analyze-all")
+@router.post("/analyze-all")
 @limiter.limit(MONITOR_RATE)
 async def analyze_all_now(request: Request):
     """Trigger the morning briefing on demand (Analyze Now button)."""
