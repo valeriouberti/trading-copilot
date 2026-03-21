@@ -483,16 +483,9 @@ def classify_markets_with_llm(
         logger.info("No ambiguous markets — keyword classification sufficient")
         return markets
 
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY", "")
-
-    if not api_key:
-        logger.info("No Groq API key — keyword classification for Polymarket")
-        return markets
-
-    client = get_groq_client(api_key)
-    if client is None:
-        logger.warning("Groq client unavailable — keyword classification")
+    from modules.llm_client import get_active_provider
+    if get_active_provider() == "none":
+        logger.info("No LLM provider available — keyword classification for Polymarket")
         return markets
 
     batch = ambiguous[:15]
@@ -532,20 +525,14 @@ Rules:
 - Respond ONLY with the JSON"""
 
     try:
-        response = client.chat.completions.create(
-            model=groq_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Classify events as bullish/bearish for markets "
-                    "and assign an impact score 1-5. Respond only in JSON.",
-                },
-                {"role": "user", "content": prompt},
-            ],
+        from modules.llm_client import llm_call
+        raw = llm_call(
+            system_msg="Classify events as bullish/bearish for markets "
+            "and assign an impact score 1-5. Respond only in JSON.",
+            user_msg=prompt,
             temperature=0.1,
             max_tokens=600,
         )
-        raw = response.choices[0].message.content.strip()
 
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]

@@ -344,36 +344,20 @@ def _parse_sentiment_json(
 
 
 @retry_llm(max_attempts=MAX_RETRIES)
-def _groq_call(
-    client: Any,
-    model: str,
+def _llm_call(
     system_msg: str,
     user_msg: str,
     max_tokens: int = 500,
     temperature: float = 0.3,
 ) -> str:
-    """Make a single Groq API call with retry logic. Returns raw text."""
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as exc:
-        if "rate_limit" in str(exc).lower() or "429" in str(exc):
-            raise LLMRateLimited(
-                provider="groq",
-                detail=str(exc),
-            ) from exc
-        raise LLMUnavailable(
-            provider="groq",
-            detail=str(exc),
-        ) from exc
+    """Make an LLM call with Groq → Ollama fallback. Returns raw text."""
+    from modules.llm_client import llm_call
+    return llm_call(
+        system_msg=system_msg,
+        user_msg=user_msg,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -389,30 +373,22 @@ def _analyze_with_groq_two_pass(
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
     """Two-pass chain-of-thought analysis for higher quality."""
-    client = get_groq_client(api_key)
-    if client is None:
-        raise RuntimeError("groq library not installed or no API key")
-
     # Pass 1: Chain-of-thought reasoning
     reasoning_prompt = _build_reasoning_prompt(news, assets, poly_data)
-    logger.info("Groq Pass 1: chain-of-thought reasoning...")
-    reasoning = _groq_call(
-        client,
-        model,
+    logger.info("LLM Pass 1: chain-of-thought reasoning...")
+    reasoning = _llm_call(
         system_msg="You are a senior quant analyst. Reason step-by-step about the impact "
         "of news on financial markets.",
         user_msg=reasoning_prompt,
         max_tokens=1000,
         temperature=0.4,
     )
-    logger.debug("Groq Pass 1 reasoning: %s", reasoning[:200])
+    logger.debug("LLM Pass 1 reasoning: %s", reasoning[:200])
 
     # Pass 2: Structured JSON extraction
     extraction_prompt = _build_extraction_prompt(reasoning, assets)
-    logger.info("Groq Pass 2: structured extraction...")
-    raw_json = _groq_call(
-        client,
-        model,
+    logger.info("LLM Pass 2: structured extraction...")
+    raw_json = _llm_call(
         system_msg="You are a data extraction engine. Convert the analysis to valid JSON. "
         "Respond ONLY with JSON.",
         user_msg=extraction_prompt,
@@ -446,14 +422,9 @@ def _analyze_with_groq_single_pass(
     poly_data: dict[str, Any] | None = None,
 ) -> SentimentResult:
     """Single-pass fallback (used if two-pass fails)."""
-    client = get_groq_client(api_key)
-    if client is None:
-        raise RuntimeError("groq library not installed or no API key")
     prompt = _build_prompt(news, assets, poly_data=poly_data)
 
-    raw = _groq_call(
-        client,
-        model,
+    raw = _llm_call(
         system_msg="You are a financial analyst. Respond only in valid JSON.",
         user_msg=prompt,
         max_tokens=600,
@@ -544,11 +515,15 @@ def analyze_sentiment(
     # Step 1: Tag news with temporal recency
     tagged_news = _tag_news_with_recency(news)
 
-    # Step 2: Try Groq LLM
+    # Step 2: Try LLM (Groq → Ollama fallback handled by llm_client)
     api_key = os.environ.get("GROQ_API_KEY", "")
     result: SentimentResult | None = None
 
-    if api_key:
+    # Run LLM analysis if any provider is available
+    from modules.llm_client import get_active_provider
+    provider = get_active_provider()
+
+    if provider != "none":
         try:
             result = _analyze_with_groq(
                 tagged_news,
@@ -557,26 +532,29 @@ def analyze_sentiment(
                 api_key,
                 poly_data=poly_data,
             )
+            # Tag the source with the actual provider used
+            if result and result.source in ("groq", "groq-2pass"):
+                result = result._replace(source=f"{provider}-2pass") if hasattr(result, '_replace') else result
         except (LLMRateLimited, LLMUnavailable) as exc:
-            logger.warning("Groq transient failure, returning neutral: %s", exc)
+            logger.warning("LLM transient failure, returning neutral: %s", exc)
         except LLMResponseInvalid as exc:
-            logger.warning("Groq response invalid, returning neutral: %s", exc)
+            logger.warning("LLM response invalid, returning neutral: %s", exc)
         except Exception as exc:
-            logger.warning("Groq analysis failed, returning neutral: %s", exc)
+            logger.warning("LLM analysis failed, returning neutral: %s", exc)
 
-    # Step 3: Return result if Groq succeeded, otherwise neutral fallback
+    # Step 3: Return result if LLM succeeded, otherwise neutral fallback
     if result is not None:
         return result
 
-    logger.info("Groq unavailable — returning neutral sentiment")
+    logger.info("No LLM available — returning neutral sentiment")
     return SentimentResult(
         sentiment_score=0.0,
         sentiment_label="Neutral",
         key_drivers=["LLM analysis unavailable"],
         directional_bias="NEUTRAL",
         confidence=0.0,
-        source="groq",
-        error="Groq analysis failed; neutral fallback",
+        source="none",
+        error="No LLM provider available; neutral fallback",
         prompt_version=PROMPT_VERSION,
     )
 
