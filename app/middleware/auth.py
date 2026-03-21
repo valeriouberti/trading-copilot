@@ -29,7 +29,6 @@ _PUBLIC_PATHS: set[str] = {
     "/analytics",
     "/signals",
     "/settings",
-    "/login",
 }
 
 # Prefixes that are always public (dashboard pages, static files)
