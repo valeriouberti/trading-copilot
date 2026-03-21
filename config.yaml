@@ -36,7 +36,7 @@ seed_assets:
     display_name: iShares MSCI EM
   - symbol: SGLD.MI
     display_name: Invesco Physical Gold
-  - symbol: IEGA.MI
-    display_name: iShares EUR Gov Bond
+  - symbol: SEGA.MI
+    display_name: iShares Core EU Govt Bond
   - symbol: AGGH.MI
     display_name: iShares Global Agg Bond

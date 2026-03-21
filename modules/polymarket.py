@@ -59,7 +59,7 @@ _ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
     # Gold ETC
     ("SGLD.MI", ["fed", "inflation", "geopolitics", "gold"]),
     # Bond ETFs — Euro govt & global aggregate
-    ("IEGA.MI", ["fed", "inflation", "economy"]),
+    ("SEGA.MI", ["fed", "inflation", "economy"]),
     ("AGGH.MI", ["fed", "inflation", "economy"]),
 ]
 
@@ -218,7 +218,7 @@ def _get_keywords_for_assets(assets: list[dict[str, str]]) -> list[str]:
             keywords.extend(["nasdaq", "s&p 500", "sp500", "stocks"])
         elif "MEUD" in symbol:
             keywords.extend(["euro", "european", "stoxx"])
-        elif any(s in symbol for s in ("IEGA", "AGGH")):
+        elif any(s in symbol for s in ("SEGA", "AGGH")):
             keywords.extend(["bond", "treasury", "yield"])
 
     return list(dict.fromkeys(keywords))

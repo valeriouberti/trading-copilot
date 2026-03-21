@@ -1,4 +1,4 @@
-"""FastAPI application — Trading Copilot web dashboard.
+"""FastAPI application — ETF Swing Trader web dashboard.
 
 Startup: creates the database engine, auto-creates tables if needed.
 Shutdown: disposes the engine gracefully.
@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await scheduler.shutdown()
     await engine.dispose()
-    logger.info("Trading Copilot stopped")
+    logger.info("ETF Swing Trader stopped")
 
 
 app = FastAPI(
@@ -155,7 +155,7 @@ async def _page_ctx(request: Request, title: str, **extra) -> dict:
 async def dashboard(request: Request):
     """Render the main dashboard page."""
     assets = await get_all_assets(request.app.state.session_factory)
-    ctx = await _page_ctx(request, "Trading Copilot", assets=assets)
+    ctx = await _page_ctx(request, "ETF Swing Trader", assets=assets)
     return templates.TemplateResponse("dashboard.html", ctx)
 
 
@@ -168,7 +168,7 @@ async def asset_detail(request: Request, symbol: str):
         {"symbol": symbol, "display_name": symbol},
     )
     ctx = await _page_ctx(
-        request, f"{asset['display_name']} — Trading Copilot", asset=asset
+        request, f"{asset['display_name']} — ETF Swing Trader", asset=asset
     )
     return templates.TemplateResponse("asset_detail.html", ctx)
 
@@ -184,26 +184,26 @@ async def portfolio_page(request: Request):
 async def trades_page(request: Request):
     """Render the trade journal page."""
     assets = await get_all_assets(request.app.state.session_factory)
-    ctx = await _page_ctx(request, "Trade Journal — Trading Copilot", assets=assets)
+    ctx = await _page_ctx(request, "Trade Journal — ETF Swing Trader", assets=assets)
     return templates.TemplateResponse("trades.html", ctx)
 
 
 @app.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(request: Request):
     """Render the performance analytics page."""
-    ctx = await _page_ctx(request, "Analytics — Trading Copilot")
+    ctx = await _page_ctx(request, "Analytics — ETF Swing Trader")
     return templates.TemplateResponse("analytics.html", ctx)
 
 
 @app.get("/signals", response_class=HTMLResponse)
 async def signals_page(request: Request):
     """Render the signal history page."""
-    ctx = await _page_ctx(request, "Signal History — Trading Copilot")
+    ctx = await _page_ctx(request, "Signal History — ETF Swing Trader")
     return templates.TemplateResponse("signals.html", ctx)
 
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     """Render the settings page."""
-    ctx = await _page_ctx(request, "Settings — Trading Copilot")
+    ctx = await _page_ctx(request, "Settings — ETF Swing Trader")
     return templates.TemplateResponse("settings.html", ctx)

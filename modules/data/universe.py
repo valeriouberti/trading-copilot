@@ -77,7 +77,7 @@ _ETF_UNIVERSE = [
     ),
     # Bonds — EUR Government
     AssetSpec(
-        "IEGA.MI", "iShares EUR Gov Bond",
+        "SEGA.MI", "iShares Core EU Govt Bond",
         AssetClass.ETF, ETFCategory.BOND,
     ),
     # Bonds — Global Aggregate
