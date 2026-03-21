@@ -209,3 +209,61 @@ async def send_analysis_telegram(request: Request, symbol: str):
         raise HTTPException(status_code=502, detail="Failed to send Telegram message")
 
     return {"message": f"Signal sent to Telegram for {symbol}"}
+
+
+@router.get("/screening")
+@limiter.limit(ANALYSIS_RATE)
+async def screening(request: Request):
+    """Run analysis on all 8 ETFs and return ranked BUY/HOLD/SELL classification."""
+    config = request.app.state.config
+    assets = await get_all_assets(request.app.state.session_factory)
+
+    from app.services.signal_detector import check_entry_conditions
+
+    tasks = [
+        analyze_single_asset(symbol=a["symbol"], config=config, asset=a)
+        for a in assets
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    screening_results = []
+    for asset, result in zip(assets, results):
+        if isinstance(result, Exception):
+            screening_results.append({
+                "symbol": asset["symbol"],
+                "display_name": asset.get("display_name", asset["symbol"]),
+                "classification": "ERROR",
+                "error": str(result),
+            })
+            continue
+
+        regime = result.get("regime", "NEUTRAL")
+        setup = result.get("setup", {})
+        detection = check_entry_conditions(result)
+
+        if detection.fired and regime == "LONG":
+            classification = "BUY"
+        elif regime in ("SHORT", "BEARISH"):
+            classification = "SELL_IF_HOLDING"
+        else:
+            classification = "HOLD"
+
+        screening_results.append({
+            "symbol": result.get("symbol"),
+            "display_name": result.get("display_name"),
+            "classification": classification,
+            "regime": regime,
+            "quality_score": setup.get("quality_score", 0),
+            "entry_price": setup.get("entry_price"),
+            "stop_loss": setup.get("stop_loss"),
+            "take_profit": setup.get("take_profit"),
+            "risk_reward": setup.get("risk_reward"),
+        })
+
+    # Sort: BUY first (by QS desc), then HOLD, then SELL
+    order = {"BUY": 0, "HOLD": 1, "SELL_IF_HOLDING": 2, "ERROR": 3}
+    screening_results.sort(
+        key=lambda x: (order.get(x["classification"], 9), -x.get("quality_score", 0))
+    )
+
+    return {"screening": screening_results}

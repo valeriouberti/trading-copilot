@@ -21,6 +21,7 @@ from app.api import analytics_api as analytics_router
 from app.api import assets as assets_router
 from app.api import health as health_router
 from app.api import monitor as monitor_router
+from app.api import portfolio as portfolio_router
 from app.api import settings as settings_router
 from app.api import trades as trades_router
 from app.api import websocket as ws_router
@@ -134,6 +135,7 @@ app.include_router(analysis_router.router, prefix="/api", tags=["analysis"])
 app.include_router(analytics_router.router, prefix="/api", tags=["analytics"])
 app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(monitor_router.router, prefix="/api", tags=["monitor"])
+app.include_router(portfolio_router.router, prefix="/api", tags=["portfolio"])
 app.include_router(trades_router.router, prefix="/api", tags=["trades"])
 app.include_router(ws_router.router, tags=["websocket"])
 
@@ -169,6 +171,13 @@ async def asset_detail(request: Request, symbol: str):
         request, f"{asset['display_name']} — Trading Copilot", asset=asset
     )
     return templates.TemplateResponse("asset_detail.html", ctx)
+
+
+@app.get("/portfolio", response_class=HTMLResponse)
+async def portfolio_page(request: Request):
+    """Render the portfolio (open positions) page."""
+    ctx = await _page_ctx(request, "Portfolio — ETF Swing Trader")
+    return templates.TemplateResponse("portfolio.html", ctx)
 
 
 @app.get("/trades", response_class=HTMLResponse)

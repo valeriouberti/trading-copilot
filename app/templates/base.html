@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title | default("Trading Copilot") }}</title>
+    <title>{{ title | default("ETF Swing Trader") }}</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
@@ -13,15 +13,11 @@
     <nav class="navbar">
         <div class="nav-brand">
             <span class="nav-logo">&#9670;</span>
-            <a href="/">Trading Copilot</a>
+            <a href="/">ETF Swing Trader</a>
         </div>
         <div class="nav-links">
-            <a href="/" class="nav-link {% if request.url.path == '/' %}nav-active{% endif %}">Dashboard</a>
-            <span class="nav-sep"></span>
-            {% for a in nav_assets %}
-            <a href="/asset/{{ a.symbol }}" class="nav-link nav-asset {% if request.url.path == '/asset/' + a.symbol %}nav-active{% endif %}">{{ a.display_name }}</a>
-            {% endfor %}
-            <span class="nav-sep"></span>
+            <a href="/" class="nav-link {% if request.url.path == '/' %}nav-active{% endif %}">Overview</a>
+            <a href="/portfolio" class="nav-link {% if request.url.path == '/portfolio' %}nav-active{% endif %}">Portfolio</a>
             <a href="/signals" class="nav-link {% if request.url.path == '/signals' %}nav-active{% endif %}">Signals</a>
             <a href="/trades" class="nav-link {% if request.url.path == '/trades' %}nav-active{% endif %}">Trades</a>
             <a href="/analytics" class="nav-link {% if request.url.path == '/analytics' %}nav-active{% endif %}">Analytics</a>
@@ -38,7 +34,7 @@
     </main>
 
     <footer class="footer">
-        <span>Trading Copilot v5.3.0</span>
+        <span>ETF Swing Trader v6.0.0</span>
         <span class="footer-sep">|</span>
         <span>Not financial advice. Trade at your own risk.</span>
     </footer>
