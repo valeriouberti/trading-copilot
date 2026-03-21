@@ -361,7 +361,7 @@ def _compute_setup(
         stop_loss = price + sl_tp.sl_distance
         take_profit = price - sl_tp.tp_distance
 
-    tradeable = quality_score >= 4 and (mtf_alignment in ("ALIGNED", None))
+    tradeable = quality_score >= 4 and mtf_alignment == "ALIGNED"
 
     return {
         "direction": direction,

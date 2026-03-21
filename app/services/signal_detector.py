@@ -169,7 +169,7 @@ def check_entry_conditions(
 
     # ─── Condition 4: RSI not extreme ─────────────────────────────
     rsi_val, rsi_label = _get_signal_value(signals, "RSI")
-    rsi_ok = True
+    rsi_ok = False
     rsi_detail = "No RSI data"
     if rsi_val is not None:
         # For LONG: RSI should not be overbought (>75)
@@ -197,7 +197,7 @@ def check_entry_conditions(
     # ─── Condition 6: MTF Aligned ─────────────────────────────────
     mtf = technicals.get("mtf", {})
     mtf_align = mtf.get("alignment") if mtf else None
-    mtf_ok = mtf_align in ("ALIGNED", None)
+    mtf_ok = mtf_align == "ALIGNED"
     conditions.append(ConditionResult(
         name="MTF Aligned",
         passed=mtf_ok,

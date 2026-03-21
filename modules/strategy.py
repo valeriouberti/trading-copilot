@@ -86,9 +86,9 @@ def label_rsi(value: float, regime: Regime) -> IndicatorLabel:
         elif value > 70:
             return IndicatorLabel("BEARISH", f"RSI {value:.1f} — overbought", base_weight)
         elif value < 40:
-            return IndicatorLabel("BULLISH", f"RSI {value:.1f} — bearish momentum", base_weight * 0.5)
+            return IndicatorLabel("BULLISH", f"RSI {value:.1f} — approaching oversold", base_weight * 0.5)
         elif value > 60:
-            return IndicatorLabel("BEARISH", f"RSI {value:.1f} — bullish momentum", base_weight * 0.5)
+            return IndicatorLabel("BEARISH", f"RSI {value:.1f} — approaching overbought", base_weight * 0.5)
         else:
             return IndicatorLabel("NEUTRAL", f"RSI {value:.1f} — neutral", 0.0)
 
@@ -267,8 +267,8 @@ def compute_composite(
     bull_pct = bullish_weight / total_weight
     bear_pct = bearish_weight / total_weight
 
-    # ADX directional energy filter
-    if adx_filter is not None and adx_filter <= 20:
+    # ADX directional energy filter — only block on very low ADX
+    if adx_filter is not None and adx_filter < 15:
         return "NEUTRAL", 50.0
 
     if bull_pct >= COMPOSITE_THRESHOLD:
@@ -599,6 +599,9 @@ def compute_sl_tp_series(
 ) -> tuple[pd.Series, pd.Series]:
     """Vectorized SL/TP distance computation for backtesting.
 
+    Uses the same adaptive formula as compute_sl_tp() (ratio-based, 20-bar
+    window, linear interpolation) to ensure live/backtest consistency.
+
     Returns (sl_distance, tp_distance) as Series — always positive values.
     """
     params = _CLASS_SL_TP.get(asset_class, _DEFAULT_SL_TP)
@@ -606,13 +609,18 @@ def compute_sl_tp_series(
     tp_mult = tp_override if tp_override is not None else params["tp_atr_mult"]
 
     if adaptive and len(atr.dropna()) > 20:
-        # ATR percentile: current ATR / rolling 50-bar mean
-        atr_pctile = atr.rolling(50, min_periods=20).apply(
-            lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
-        )
-        # Adaptive: low vol → wider SL, high vol → tighter SL
-        sl_multiplier = sl_mult * (1.0 + (0.5 - atr_pctile).clip(-0.5, 0.5))
-        tp_multiplier = sl_multiplier * (tp_mult / sl_mult)
+        # ATR ratio: current ATR / rolling 20-bar mean (matches compute_sl_tp)
+        atr_mean = atr.rolling(20, min_periods=20).mean()
+        atr_ratio = (atr / atr_mean).clip(0.5, 3.0)
+
+        # Linear interpolation: same formula as compute_sl_tp
+        # atr_ratio < 0.8 → adj = 1.0, > 1.5 → adj = 2.0, between → linear
+        adj = 1.0 + ((atr_ratio - 0.8) / 0.7).clip(0.0, 1.0)
+
+        # Scale multipliers, preserve R:R ratio
+        base_ratio = tp_mult / sl_mult if sl_mult > 0 else 2.0
+        sl_multiplier = (sl_mult * (adj / 1.5)).clip(lower=sl_mult * 0.5)
+        tp_multiplier = sl_multiplier * base_ratio
     else:
         sl_multiplier = pd.Series(sl_mult, index=atr.index)
         tp_multiplier = pd.Series(tp_mult, index=atr.index)

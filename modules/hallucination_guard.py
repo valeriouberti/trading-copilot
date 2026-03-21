@@ -184,7 +184,7 @@ def _keyword_sentiment(news: list[dict[str, Any]]) -> float:
         return 0.0
 
     # Normalize to -3..+3 range
-    ratio = (bullish_count - bearish_count) / len(news)
+    ratio = (bullish_count - bearish_count) / total
     return round(ratio * 3.0, 1)
 
 

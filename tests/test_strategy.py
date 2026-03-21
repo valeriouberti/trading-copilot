@@ -306,8 +306,15 @@ class TestComputeComposite:
 
     def test_adx_filter_blocks(self):
         labels = self._make_labels(bull=5)
-        direction, _ = compute_composite(labels, Regime.NEUTRAL, adx_filter=15)
+        # ADX < 15 should block signals (very low directional energy)
+        direction, _ = compute_composite(labels, Regime.NEUTRAL, adx_filter=12)
         assert direction == "NEUTRAL"
+
+    def test_adx_filter_allows_transition_zone(self):
+        labels = self._make_labels(bull=5)
+        # ADX 15-25 (transition zone) should NOT block signals
+        direction, _ = compute_composite(labels, Regime.NEUTRAL, adx_filter=18)
+        assert direction == "BULLISH"
 
     def test_threshold_60pct(self):
         # Exactly 3 out of 5 = 60% → should pass
