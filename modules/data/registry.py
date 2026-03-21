@@ -1,7 +1,7 @@
 """Data provider registry with fallback chain.
 
-Routes data requests to the best available provider based on asset class,
-with automatic fallback if the primary provider fails.
+Routes data requests to the best available provider. For the ETF system,
+yfinance is the sole provider (free, reliable for UCITS ETFs).
 """
 
 from __future__ import annotations
@@ -16,13 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 # Default provider priority per asset class.
-# First provider that returns data wins.
 _DEFAULT_PRIORITY: dict[AssetClass, list[str]] = {
-    AssetClass.FOREX: ["twelvedata", "yfinance"],
-    AssetClass.COMMODITY: ["twelvedata", "yfinance"],
-    AssetClass.INDEX: ["yfinance", "twelvedata"],
-    AssetClass.STOCK: ["yfinance", "twelvedata"],
-    AssetClass.REFERENCE: ["yfinance", "twelvedata"],
+    AssetClass.ETF: ["yfinance"],
 }
 
 
@@ -32,13 +27,11 @@ class DataRegistry:
     Usage::
 
         from modules.data.yfinance_provider import YFinanceProvider
-        from modules.data.twelvedata_provider import TwelveDataProvider
 
         registry = DataRegistry()
         registry.register(YFinanceProvider())
-        registry.register(TwelveDataProvider())
 
-        data = registry.fetch("EURUSD", interval="1d", bars=250)
+        data = registry.fetch("SWDA.MI", interval="1d", bars=250)
     """
 
     def __init__(self) -> None:
@@ -136,19 +129,10 @@ class DataRegistry:
 
 
 def create_default_registry() -> DataRegistry:
-    """Create a registry with all available providers."""
-    from modules.data.twelvedata_provider import TwelveDataProvider
+    """Create a registry with yfinance provider."""
     from modules.data.yfinance_provider import YFinanceProvider
 
     registry = DataRegistry()
     registry.register(YFinanceProvider())
-
-    td = TwelveDataProvider()
-    if td.available:
-        registry.register(td)
-    else:
-        logger.info(
-            "Twelve Data not configured (set TWELVE_DATA_API_KEY for forex/futures)"
-        )
 
     return registry

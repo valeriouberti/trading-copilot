@@ -1,6 +1,7 @@
 """yfinance data provider.
 
-Good for US stocks and indices. Unreliable for forex and some futures.
+Primary data source for UCITS ETFs on Borsa Italiana (.MI suffix).
+Free, reliable, no API key required.
 """
 
 from __future__ import annotations
@@ -14,35 +15,13 @@ from modules.data.provider import DataProvider, OHLCVData
 
 logger = logging.getLogger(__name__)
 
-# Map canonical symbols → yfinance symbols
-_YF_SYMBOL_MAP: dict[str, str] = {
-    # Forex
-    "EURUSD": "EURUSD=X",
-    "GBPUSD": "GBPUSD=X",
-    "USDJPY": "USDJPY=X",
-    "AUDUSD": "AUDUSD=X",
-    "USDCHF": "USDCHF=X",
-    "USDCAD": "USDCAD=X",
-    # Futures
-    "NQ": "NQ=F",
-    "ES": "ES=F",
-    "YM": "YM=F",
-    "RTY": "RTY=F",
-    "GC": "GC=F",
-    "SI": "SI=F",
-    "CL": "CL=F",
-    "NG": "NG=F",
-    # Indices (reference)
-    "DXY": "DX-Y.NYB",
-    "VIX": "^VIX",
-    "US10Y": "^TNX",
-}
+# UCITS ETFs on Borsa Italiana use their native ticker (e.g. SWDA.MI)
+# directly in yfinance — no symbol mapping needed.
+_YF_SYMBOL_MAP: dict[str, str] = {}
 
 # yfinance period string from approximate bar count + interval
 _PERIOD_MAP: dict[str, dict[int, str]] = {
     "1d": {60: "3mo", 120: "6mo", 250: "1y", 500: "2y"},
-    "1h": {50: "30d", 100: "60d", 200: "2y"},
-    "5m": {100: "5d", 200: "30d"},
     "1wk": {52: "1y", 104: "2y", 260: "5y"},
 }
 
@@ -60,14 +39,14 @@ def _bars_to_period(interval: str, bars: int) -> str:
 
 
 class YFinanceProvider(DataProvider):
-    """yfinance data provider — free, best for US stocks/indices."""
+    """yfinance data provider — free, best for UCITS ETFs and stocks."""
 
     @property
     def name(self) -> str:
         return "yfinance"
 
     def supports(self, symbol: str) -> bool:
-        # yfinance supports almost anything but quality varies
+        # yfinance supports almost anything
         return True
 
     def fetch(

@@ -1,4 +1,4 @@
-# ── Trading Copilot — config.yaml (OPTIONAL) ─────────────────
+# ── ETF Swing Trader — config.yaml (OPTIONAL) ────────────────
 #
 # This file is OPTIONAL. The app works without it using defaults.
 # Values here are used ONLY for initial seeding on first startup.
@@ -10,26 +10,33 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Seed RSS Feeds (first-run only) ──────────────────────────
-# Imported into the database on first startup when the rss_feeds
-# table is empty. After that, defaults are used if this file is
-# absent. Changes here have NO effect once the DB has been seeded.
 rss_feeds:
-  - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^IXIC&region=US&lang=en-US
-    name: Yahoo Finance NASDAQ
+  - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US
+    name: Yahoo Finance S&P 500
   - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
     name: CNBC Top News
-  - url: https://www.investing.com/rss/news_14.rss
-    name: Investing.com
   - url: https://feeds.marketwatch.com/marketwatch/topstories/
     name: MarketWatch Top Stories
+  - url: https://www.investing.com/rss/news_14.rss
+    name: Investing.com
 
 # ── Seed Assets (first-run only) ─────────────────────────────
-# Same as above — imported into DB on first startup only.
+# UCITS ETFs available on Borsa Italiana via Fineco.
 # Manage assets via the web dashboard after initial setup.
 seed_assets:
-  - symbol: "^GSPC"
-    display_name: S&P 500
-  - symbol: GC=F
-    display_name: Gold
-  - symbol: EURUSD=X
-    display_name: EUR/USD
+  - symbol: SWDA.MI
+    display_name: iShares Core MSCI World
+  - symbol: CSSPX.MI
+    display_name: iShares Core S&P 500
+  - symbol: EQQQ.MI
+    display_name: Invesco NASDAQ-100
+  - symbol: MEUD.MI
+    display_name: Amundi STOXX Europe 600
+  - symbol: IEEM.MI
+    display_name: iShares MSCI EM
+  - symbol: SGLD.MI
+    display_name: Invesco Physical Gold
+  - symbol: IEGA.MI
+    display_name: iShares EUR Gov Bond
+  - symbol: AGGH.MI
+    display_name: iShares Global Agg Bond

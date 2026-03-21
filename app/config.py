@@ -5,6 +5,8 @@ Priority chain: env vars > .env file > config.yaml > defaults.
 config.yaml is OPTIONAL. All settings have sensible defaults.
 Secrets come from env vars. Runtime data (assets, feeds, telegram)
 lives in the database.
+
+ETF Swing Trader — designed for UCITS ETFs on Borsa Italiana via Fineco.
 """
 
 from __future__ import annotations
@@ -38,7 +40,6 @@ class Settings(BaseSettings):
 
     # ── Secrets (always from env vars) ────────────────────────────────
     groq_api_key: str = Field(default="", description="Groq LLM API key")
-    twelve_data_api_key: str = Field(default="", description="Twelve Data API key")
     telegram_bot_token: str = Field(default="", description="Telegram bot token")
     telegram_chat_id: str = Field(default="", description="Telegram chat ID")
     telegram_enabled: bool = Field(default=False, description="Enable Telegram notifications")
@@ -47,6 +48,11 @@ class Settings(BaseSettings):
     groq_model: str = Field(default="llama-3.3-70b-versatile")
     lookback_hours: int = Field(default=16, ge=1, le=168)
     report_language: str = Field(default="italian")
+
+    # ── ETF-specific settings ─────────────────────────────────────────
+    timezone: str = Field(default="Europe/Rome", description="User timezone for scheduling")
+    max_positions: int = Field(default=2, ge=1, le=5, description="Max simultaneous open positions")
+    position_size_eur: float = Field(default=1500.0, gt=0, description="Default position size in EUR")
 
     # ── Seed data (from YAML, used only on first startup) ─────────────
     rss_feeds: list[dict[str, str]] = Field(default_factory=list)

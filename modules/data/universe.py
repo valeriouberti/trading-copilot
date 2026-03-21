@@ -1,8 +1,10 @@
-"""Asset universe definitions.
+"""UCITS ETF universe definitions.
 
-Defines the full trading universe: forex, commodities, indices, and
-large-cap stocks, with per-asset metadata for backtesting (spread,
-commission, point value).
+Defines the trading universe of UCITS ETFs available on Borsa Italiana
+and XETRA, with per-asset metadata for backtesting and position sizing.
+
+Designed for a Fineco broker account with €2.95/trade commission for
+EU-listed ETFs.
 """
 
 from __future__ import annotations
@@ -12,88 +14,104 @@ from enum import Enum
 
 
 class AssetClass(str, Enum):
-    FOREX = "forex"
+    ETF = "etf"
+
+
+class ETFCategory(str, Enum):
+    """ETF category for grouping and rotation logic."""
+    EQUITY_GLOBAL = "equity_global"
+    EQUITY_US = "equity_us"
+    EQUITY_EU = "equity_eu"
+    EQUITY_EM = "equity_em"
     COMMODITY = "commodity"
-    INDEX = "index"
-    STOCK = "stock"
-    REFERENCE = "reference"
+    BOND = "bond"
 
 
 @dataclass(frozen=True)
 class AssetSpec:
-    """Specification for a tradeable asset."""
+    """Specification for a tradeable UCITS ETF."""
 
-    symbol: str              # Canonical symbol (e.g. "EURUSD", "NQ", "AAPL")
+    symbol: str              # Yahoo Finance ticker (e.g. "SWDA.MI")
     display_name: str        # Human-readable name
-    asset_class: AssetClass  # Classification
-    spread_points: float     # Typical spread in price units (Fineco CFD)
-    commission: float        # Per-trade commission in USD
-    point_value: float       # USD value per 1.0 price movement per contract
-    min_bars_daily: int = 200  # Minimum daily bars for reliable backtest
+    asset_class: AssetClass  # Always ETF
+    category: ETFCategory    # For grouping and rotation
+    commission_eur: float = 2.95   # Fineco flat fee per trade (EUR)
+    exchange: str = "MI"           # Exchange suffix (MI = Borsa Italiana, DE = XETRA)
+    currency: str = "EUR"          # Trading currency
+    min_bars_daily: int = 200      # Minimum daily bars for reliable backtest
 
 
 # ---------------------------------------------------------------------------
-# Complete asset universe
+# UCITS ETF Universe — Borsa Italiana (.MI)
 # ---------------------------------------------------------------------------
 
-# Forex — 6 major pairs
-_FOREX = [
-    AssetSpec("EURUSD", "EUR/USD", AssetClass.FOREX, 0.00010, 0.0, 100_000, 250),
-    AssetSpec("GBPUSD", "GBP/USD", AssetClass.FOREX, 0.00012, 0.0, 100_000, 250),
-    AssetSpec("USDJPY", "USD/JPY", AssetClass.FOREX, 0.015, 0.0, 1_000, 250),
-    AssetSpec("AUDUSD", "AUD/USD", AssetClass.FOREX, 0.00012, 0.0, 100_000, 250),
-    AssetSpec("USDCHF", "USD/CHF", AssetClass.FOREX, 0.00015, 0.0, 100_000, 250),
-    AssetSpec("USDCAD", "USD/CAD", AssetClass.FOREX, 0.00015, 0.0, 100_000, 250),
+_ETF_UNIVERSE = [
+    # Equity — Global
+    AssetSpec(
+        "SWDA.MI", "iShares Core MSCI World",
+        AssetClass.ETF, ETFCategory.EQUITY_GLOBAL,
+    ),
+    # Equity — US
+    AssetSpec(
+        "CSSPX.MI", "iShares Core S&P 500",
+        AssetClass.ETF, ETFCategory.EQUITY_US,
+    ),
+    AssetSpec(
+        "EQQQ.MI", "Invesco NASDAQ-100",
+        AssetClass.ETF, ETFCategory.EQUITY_US,
+    ),
+    # Equity — Europe
+    AssetSpec(
+        "MEUD.MI", "Amundi STOXX Europe 600",
+        AssetClass.ETF, ETFCategory.EQUITY_EU,
+    ),
+    # Equity — Emerging Markets
+    AssetSpec(
+        "IEEM.MI", "iShares MSCI EM",
+        AssetClass.ETF, ETFCategory.EQUITY_EM,
+    ),
+    # Commodity — Gold
+    AssetSpec(
+        "SGLD.MI", "Invesco Physical Gold",
+        AssetClass.ETF, ETFCategory.COMMODITY,
+    ),
+    # Bonds — EUR Government
+    AssetSpec(
+        "IEGA.MI", "iShares EUR Gov Bond",
+        AssetClass.ETF, ETFCategory.BOND,
+    ),
+    # Bonds — Global Aggregate
+    AssetSpec(
+        "AGGH.MI", "iShares Global Agg Bond",
+        AssetClass.ETF, ETFCategory.BOND,
+    ),
 ]
 
-# Commodities — Gold, Silver, Oil, Natural Gas
-_COMMODITIES = [
-    AssetSpec("GC", "Gold", AssetClass.COMMODITY, 0.30, 0.0, 100, 200),
-    AssetSpec("SI", "Silver", AssetClass.COMMODITY, 0.020, 0.0, 5_000, 200),
-    AssetSpec("CL", "Crude Oil", AssetClass.COMMODITY, 0.03, 0.0, 1_000, 200),
-    AssetSpec("NG", "Natural Gas", AssetClass.COMMODITY, 0.003, 0.0, 10_000, 200),
-]
-
-# Indices — US major indices
-_INDICES = [
-    AssetSpec("NQ", "NASDAQ 100", AssetClass.INDEX, 1.5, 0.0, 20, 200),
-    AssetSpec("ES", "S&P 500", AssetClass.INDEX, 0.50, 0.0, 50, 200),
-    AssetSpec("YM", "Dow Jones", AssetClass.INDEX, 3.0, 0.0, 5, 200),
-    AssetSpec("RTY", "Russell 2000", AssetClass.INDEX, 0.30, 0.0, 50, 200),
-]
-
-# Stocks — 10 largest by market cap (as of March 2026)
-_STOCKS = [
-    AssetSpec("AAPL", "Apple", AssetClass.STOCK, 0.02, 3.95, 1, 250),
-    AssetSpec("MSFT", "Microsoft", AssetClass.STOCK, 0.03, 3.95, 1, 250),
-    AssetSpec("NVDA", "NVIDIA", AssetClass.STOCK, 0.05, 3.95, 1, 250),
-    AssetSpec("GOOG", "Alphabet", AssetClass.STOCK, 0.03, 3.95, 1, 250),
-    AssetSpec("AMZN", "Amazon", AssetClass.STOCK, 0.03, 3.95, 1, 250),
-    AssetSpec("META", "Meta", AssetClass.STOCK, 0.05, 3.95, 1, 250),
-    AssetSpec("BRK-B", "Berkshire Hathaway", AssetClass.STOCK, 0.10, 3.95, 1, 250),
-    AssetSpec("LLY", "Eli Lilly", AssetClass.STOCK, 0.10, 3.95, 1, 250),
-    AssetSpec("AVGO", "Broadcom", AssetClass.STOCK, 0.10, 3.95, 1, 250),
-    AssetSpec("JPM", "JPMorgan Chase", AssetClass.STOCK, 0.03, 3.95, 1, 250),
-]
-
-# Reference assets (not traded, used for intermarket analysis)
-_REFERENCE = [
-    AssetSpec("DXY", "US Dollar Index", AssetClass.REFERENCE, 0, 0, 0),
-    AssetSpec("VIX", "CBOE Volatility", AssetClass.REFERENCE, 0, 0, 0),
-    AssetSpec("US10Y", "US 10Y Yield", AssetClass.REFERENCE, 0, 0, 0),
-]
-
-# Full universe
-ASSET_UNIVERSE: dict[str, AssetSpec] = {
-    a.symbol: a for a in _FOREX + _COMMODITIES + _INDICES + _STOCKS + _REFERENCE
-}
+# Full universe keyed by symbol
+ASSET_UNIVERSE: dict[str, AssetSpec] = {a.symbol: a for a in _ETF_UNIVERSE}
 
 
 def get_tradeable() -> list[AssetSpec]:
-    """Return only tradeable assets (excludes reference)."""
-    return [a for a in ASSET_UNIVERSE.values() if a.asset_class != AssetClass.REFERENCE]
+    """Return all tradeable ETFs."""
+    return list(ASSET_UNIVERSE.values())
 
 
-def get_by_class(cls: AssetClass) -> list[AssetSpec]:
-    """Return assets of a specific class."""
-    return [a for a in ASSET_UNIVERSE.values() if a.asset_class == cls]
+def get_by_category(cat: ETFCategory) -> list[AssetSpec]:
+    """Return ETFs of a specific category."""
+    return [a for a in ASSET_UNIVERSE.values() if a.category == cat]
+
+
+def get_defensive() -> list[AssetSpec]:
+    """Return defensive ETFs (bonds + gold) for risk-off rotation."""
+    return [
+        a for a in ASSET_UNIVERSE.values()
+        if a.category in (ETFCategory.BOND, ETFCategory.COMMODITY)
+    ]
+
+
+def get_offensive() -> list[AssetSpec]:
+    """Return offensive ETFs (equities) for risk-on allocation."""
+    return [
+        a for a in ASSET_UNIVERSE.values()
+        if a.category not in (ETFCategory.BOND, ETFCategory.COMMODITY)
+    ]
