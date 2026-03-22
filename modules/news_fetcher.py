@@ -63,6 +63,141 @@ def fetch_news(
     return deduplicated
 
 
+# ---------------------------------------------------------------------------
+# Per-ETF keyword mapping for news relevance scoring
+# ---------------------------------------------------------------------------
+# Each ETF maps to:
+#   - extra_feeds: category-specific RSS feeds to fetch alongside generic ones
+#   - keywords: terms that indicate an article is relevant to this ETF
+#   - yahoo_proxies: US-listed equivalents for Yahoo Finance RSS (UCITS .MI
+#     tickers have sparse Yahoo coverage; the US equivalents get more news)
+
+_ETF_NEWS_CONFIG: dict[str, dict[str, Any]] = {
+    "SWDA.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=VT,ACWI&region=US&lang=en-US",
+             "name": "Yahoo Global Equity ETFs"},
+        ],
+        "yahoo_proxies": ["VT", "ACWI"],
+        "keywords": [
+            "msci world", "global equit", "world index", "global stock",
+            "global market", "world market", "developed market",
+            "s&p 500", "sp500", "nasdaq", "stoxx", "ftse",
+            "fed", "interest rate", "rate cut", "rate hike",
+            "inflation", "gdp", "recession", "economy",
+            "bull market", "bear market", "correction",
+            "etf", "index fund", "passive invest",
+        ],
+    },
+    "CSSPX.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=SPY,VOO,IVV&region=US&lang=en-US",
+             "name": "Yahoo S&P 500 ETFs"},
+        ],
+        "yahoo_proxies": ["SPY", "VOO", "IVV"],
+        "keywords": [
+            "s&p 500", "sp500", "s&p500", "sp 500",
+            "wall street", "us stock", "us equit", "us market",
+            "dow jones", "dow", "nyse",
+            "fed", "fomc", "powell", "rate cut", "rate hike",
+            "earnings", "big tech", "magnificent seven",
+            "nvidia", "apple", "microsoft", "amazon", "google", "meta", "tesla",
+        ],
+    },
+    "EQQQ.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=QQQ,TQQQ&region=US&lang=en-US",
+             "name": "Yahoo NASDAQ ETFs"},
+        ],
+        "yahoo_proxies": ["QQQ"],
+        "keywords": [
+            "nasdaq", "nasdaq-100", "nasdaq 100", "tech stock",
+            "technology", "semiconductor", "chip", "ai stock",
+            "artificial intelligence", "big tech", "growth stock",
+            "nvidia", "apple", "microsoft", "amazon", "google",
+            "meta", "tesla", "broadcom", "asml",
+            "silicon valley", "tech sector", "software",
+        ],
+    },
+    "MEUD.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=VGK,EZU,FEZ&region=US&lang=en-US",
+             "name": "Yahoo Europe ETFs"},
+            {"url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19794221",
+             "name": "CNBC Europe"},
+        ],
+        "yahoo_proxies": ["VGK", "EZU"],
+        "keywords": [
+            "europe", "european", "eurozone", "euro zone",
+            "stoxx", "euro stoxx", "dax", "cac", "ftse",
+            "ecb", "lagarde", "european central bank",
+            "eu economy", "german", "france", "italy",
+            "uk market", "brexit", "european stock",
+        ],
+    },
+    "IEEM.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=EEM,VWO&region=US&lang=en-US",
+             "name": "Yahoo EM ETFs"},
+        ],
+        "yahoo_proxies": ["EEM", "VWO"],
+        "keywords": [
+            "emerging market", "em stock", "developing countr",
+            "china", "chinese", "india", "indian", "brazil",
+            "south korea", "taiwan", "indonesia", "mexico",
+            "brics", "hang seng", "shanghai",
+            "tariff", "trade war", "sanctions",
+            "commodity", "yuan", "rupee",
+        ],
+    },
+    "SGLD.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GLD,IAU,SGOL&region=US&lang=en-US",
+             "name": "Yahoo Gold ETFs"},
+        ],
+        "yahoo_proxies": ["GLD", "IAU"],
+        "keywords": [
+            "gold", "gold price", "precious metal", "bullion",
+            "safe haven", "safe-haven", "haven asset",
+            "central bank gold", "gold reserve",
+            "geopolit", "war", "conflict", "tension",
+            "inflation hedge", "real rate", "dollar weak",
+            "mining", "gold miner",
+        ],
+    },
+    "SEGA.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AGG,TLT,BND&region=US&lang=en-US",
+             "name": "Yahoo Bond ETFs"},
+        ],
+        "yahoo_proxies": ["AGG", "TLT"],
+        "keywords": [
+            "bond", "treasury", "yield", "bund", "gilt",
+            "sovereign debt", "government bond", "govt bond",
+            "ecb rate", "interest rate", "rate cut", "rate hike",
+            "inflation", "cpi", "deflation",
+            "fixed income", "credit spread",
+            "btp", "oat", "euro bond",
+        ],
+    },
+    "AGGH.MI": {
+        "extra_feeds": [
+            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AGG,BND,BNDX&region=US&lang=en-US",
+             "name": "Yahoo Global Bond ETFs"},
+        ],
+        "yahoo_proxies": ["AGG", "BND", "BNDX"],
+        "keywords": [
+            "bond", "treasury", "yield", "fixed income",
+            "global bond", "aggregate bond", "investment grade",
+            "credit", "spread", "corporate bond",
+            "fed rate", "ecb rate", "boj", "interest rate",
+            "inflation", "cpi", "monetary policy",
+            "quantitative tightening", "quantitative easing",
+        ],
+    },
+}
+
+
 def fetch_news_for_asset(
     feeds: list[dict[str, str]],
     lookback_hours: int = 16,
@@ -71,17 +206,24 @@ def fetch_news_for_asset(
     """Fetch news specifically relevant to a single asset.
 
     1. Fetches from all configured generic RSS feeds
-    2. Adds an asset-specific Yahoo Finance RSS feed
-    3. Filters to keep only articles mentioning the asset
-    4. Falls back to prioritized generic news if filter yields < 3 articles
+    2. Adds per-ETF targeted feeds (Benzinga ETFs, Yahoo proxies, CNBC sectors)
+    3. Scores articles by relevance to the ETF category
+    4. Falls back to all articles if fewer than 3 match
     """
     if asset is None:
         return fetch_news(feeds, lookback_hours)
 
     symbol = asset.get("symbol", "")
+    etf_config = _ETF_NEWS_CONFIG.get(symbol, {})
 
-    # Add asset-specific Yahoo Finance RSS feed
+    # Build feed list: generic + ETF-specific extra feeds
     asset_feeds = list(feeds)
+
+    # Add per-ETF targeted feeds
+    for extra in etf_config.get("extra_feeds", []):
+        asset_feeds.append(extra)
+
+    # Add direct Yahoo Finance feed for the .MI symbol (sparse but occasionally useful)
     clean_symbol = symbol.replace("=", "%3D")
     asset_feeds.append({
         "url": f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={clean_symbol}&region=US&lang=en-US",
@@ -90,44 +232,109 @@ def fetch_news_for_asset(
 
     all_articles = fetch_news(asset_feeds, lookback_hours, assets=[asset])
 
-    # Build filter terms from symbol and display_name
+    # Score and filter articles by ETF relevance
     terms = _build_asset_search_terms(asset)
+    scored = _score_articles_for_asset(all_articles, terms)
 
-    # Filter to asset-relevant articles
-    relevant = [a for a in all_articles if _article_mentions_asset(a, terms)]
+    # Keep articles that score above threshold
+    relevant = [a for score, a in scored if score > 0]
 
-    # If too few results, fall back to the full prioritized list
+    # Sort by relevance score (descending), then by recency
+    relevant.sort(key=lambda a: a.get("_relevance", 0), reverse=True)
+
+    # If too few results, fall back to the full list (generic macro news still useful)
     if len(relevant) < 3:
         return all_articles
 
     return relevant
 
 
-def _build_asset_search_terms(asset: dict[str, str]) -> list[str]:
-    """Build search terms for matching articles to an asset."""
-    terms: list[str] = []
+def _build_asset_search_terms(asset: dict[str, str]) -> dict[str, list[str]]:
+    """Build categorized search terms for matching articles to an asset.
+
+    Returns a dict with:
+      - "exact": high-confidence terms (symbol, ETF name) -> score 3
+      - "category": category keywords from _ETF_NEWS_CONFIG -> score 2
+      - "broad": broad market terms from display name -> score 1
+    """
     symbol = asset.get("symbol", "").upper()
     display_name = asset.get("display_name", "")
+    etf_config = _ETF_NEWS_CONFIG.get(symbol, {})
 
-    # Raw symbol without suffixes (=F, =X)
-    base_symbol = symbol.split("=")[0]
-    terms.append(base_symbol.lower())
+    exact: list[str] = []
+    category: list[str] = []
+    broad: list[str] = []
 
-    # Display name words (skip very short/common ones)
-    skip_words = {"inc", "inc.", "the", "corp", "corp.", "ltd", "ltd."}
+    # Exact: symbol (without .MI suffix), yahoo proxy symbols
+    base = symbol.split(".")[0].lower()
+    exact.append(base)
+    for proxy in etf_config.get("yahoo_proxies", []):
+        exact.append(proxy.lower())
+
+    # Category: per-ETF keywords from config
+    category.extend(etf_config.get("keywords", []))
+
+    # Broad: display name words (skip filler)
+    skip_words = {"inc", "inc.", "the", "corp", "corp.", "ltd", "ltd.",
+                  "core", "ishares", "invesco", "amundi", "physical"}
     if display_name:
         for word in display_name.split():
             w = word.lower().strip(".,()[]")
             if len(w) > 2 and w not in skip_words:
-                terms.append(w)
+                broad.append(w)
 
-    return list(dict.fromkeys(terms))
+    return {"exact": exact, "category": category, "broad": broad}
 
 
-def _article_mentions_asset(article: dict[str, Any], terms: list[str]) -> bool:
-    """Check if an article mentions any of the asset search terms."""
+def _score_articles_for_asset(
+    articles: list[dict[str, Any]],
+    terms: dict[str, list[str]],
+) -> list[tuple[int, dict[str, Any]]]:
+    """Score each article by relevance to an ETF.
+
+    Scoring:
+      - exact match (symbol, proxy ETF): +3
+      - category keyword match: +2
+      - broad term match: +1
+    """
+    scored: list[tuple[int, dict[str, Any]]] = []
+
+    for article in articles:
+        text = f"{article.get('title', '')} {article.get('summary', '')}".lower()
+        score = 0
+
+        for term in terms.get("exact", []):
+            if term in text:
+                score += 3
+                break
+
+        for term in terms.get("category", []):
+            if term in text:
+                score += 2
+                break
+
+        for term in terms.get("broad", []):
+            if term in text:
+                score += 1
+                break
+
+        article["_relevance"] = score
+        scored.append((score, article))
+
+    return scored
+
+
+def _article_mentions_asset(article: dict[str, Any], terms: dict[str, list[str]] | list[str]) -> bool:
+    """Check if an article mentions any of the asset search terms.
+
+    Accepts both the new dict format and legacy list format.
+    """
     text = f"{article.get('title', '')} {article.get('summary', '')}".lower()
-    return any(term in text for term in terms)
+    if isinstance(terms, dict):
+        all_terms = terms.get("exact", []) + terms.get("category", []) + terms.get("broad", [])
+    else:
+        all_terms = terms
+    return any(term in text for term in all_terms)
 
 
 def _fetch_single_feed(
@@ -273,19 +480,26 @@ def _prioritize_by_assets(
     articles: list[dict[str, Any]],
     assets: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
-    """Prioritize articles that mention configured assets."""
-    asset_terms: list[str] = []
+    """Prioritize articles that mention configured assets using ETF keyword config."""
+    # Build a combined set of all category keywords for the given assets
+    all_terms: list[str] = []
     for a in assets:
-        asset_terms.append(a.get("symbol", "").lower())
-        name = a.get("display_name", "").lower()
-        if name:
-            asset_terms.extend(name.split())
-    # Remove empty and very short terms
-    asset_terms = [t for t in asset_terms if len(t) > 2]
+        symbol = a.get("symbol", "")
+        config = _ETF_NEWS_CONFIG.get(symbol, {})
+        all_terms.extend(config.get("keywords", []))
+        # Also add proxy symbols
+        for proxy in config.get("yahoo_proxies", []):
+            all_terms.append(proxy.lower())
+        # And the base symbol
+        base = symbol.split(".")[0].lower()
+        if len(base) > 2:
+            all_terms.append(base)
+    # Deduplicate
+    all_terms = list(dict.fromkeys(all_terms))
 
     def mentions_asset(article: dict[str, Any]) -> bool:
         text = f"{article['title']} {article.get('summary', '')}".lower()
-        return any(term in text for term in asset_terms)
+        return any(term in text for term in all_terms)
 
     prioritized = [a for a in articles if mentions_asset(a)]
     rest = [a for a in articles if not mentions_asset(a)]

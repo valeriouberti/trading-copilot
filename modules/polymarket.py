@@ -49,21 +49,40 @@ MAX_MARKETS = 20  # Final cap on returned markets
 # These map to real Polymarket tag_slugs on the /events endpoint.
 _ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
     # UCITS ETFs traded on Borsa Italiana (.MI suffix)
-    # Equity ETFs — broad developed-world / US / Nasdaq / Europe
-    ("SWDA.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
-    ("CSSPX.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
-    ("EQQQ.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
-    ("MEUD.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs", "stocks", "economy"]),
-    # Emerging Markets ETF
-    ("IEEM.MI", ["tariffs", "geopolitics", "economy"]),
-    # Gold ETC
-    ("SGLD.MI", ["fed", "inflation", "geopolitics", "gold"]),
-    # Bond ETFs — Euro govt & global aggregate
-    ("SEGA.MI", ["fed", "inflation", "economy"]),
-    ("AGGH.MI", ["fed", "inflation", "economy"]),
+    # Global equity — sensitive to everything macro
+    ("SWDA.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs",
+                  "stocks", "economy", "recession", "earnings"]),
+    # US equity — Fed + US-specific macro + corporate earnings
+    ("CSSPX.MI", ["fed", "inflation", "gdp", "unemployment", "tariffs",
+                   "stocks", "economy", "recession", "earnings",
+                   "sp500", "wall-street"]),
+    # US tech / NASDAQ — tech-specific + AI + regulation
+    ("EQQQ.MI", ["fed", "inflation", "tariffs", "stocks", "economy",
+                  "technology", "ai", "semiconductors", "big-tech",
+                  "earnings", "nasdaq"]),
+    # European equity — ECB + EU-specific macro + trade
+    ("MEUD.MI", ["fed", "inflation", "gdp", "economy", "tariffs",
+                  "europe", "ecb", "eurozone", "germany",
+                  "energy", "natural-gas"]),
+    # Emerging Markets — geopolitics + trade + China-specific
+    ("IEEM.MI", ["tariffs", "geopolitics", "economy", "china",
+                  "emerging-markets", "sanctions", "trade-war",
+                  "brics", "commodities"]),
+    # Gold ETC — safe haven, geopolitics, inflation
+    ("SGLD.MI", ["fed", "inflation", "geopolitics", "gold",
+                  "war", "dollar", "central-banks", "safe-haven"]),
+    # Euro govt bonds — ECB, rates, fiscal policy
+    ("SEGA.MI", ["fed", "inflation", "economy", "ecb",
+                  "interest-rates", "bonds", "fiscal",
+                  "debt", "eurozone"]),
+    # Global aggregate bonds — global rates, credit, monetary policy
+    ("AGGH.MI", ["fed", "inflation", "economy", "ecb",
+                  "interest-rates", "bonds", "credit",
+                  "monetary-policy", "quantitative-tightening"]),
 ]
 
-_DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics", "tariffs"]
+_DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics",
+                      "tariffs", "recession", "interest-rates"]
 
 # ---------------------------------------------------------------------------
 # Category classification keywords
@@ -72,78 +91,70 @@ _CATEGORY_RULES: list[tuple[str, list[str]]] = [
     (
         "FED",
         [
-            "fed",
-            "federal reserve",
-            "rate hike",
-            "rate cut",
-            "fomc",
-            "interest rate",
-            "inflation",
-            "cpi",
-            "monetary policy",
-            "powell",
+            "fed", "federal reserve", "rate hike", "rate cut",
+            "fomc", "interest rate", "inflation", "cpi",
+            "monetary policy", "powell", "quantitative",
+        ],
+    ),
+    (
+        "ECB",
+        [
+            "ecb", "european central bank", "lagarde",
+            "eurozone", "euro zone", "bund", "btp",
+            "european rate", "euro inflation",
         ],
     ),
     (
         "MACRO",
         [
-            "recession",
-            "gdp",
-            "unemployment",
-            "jobs",
-            "nonfarm",
-            "economy",
-            "growth",
-            "debt",
-            "default",
-            "fiscal",
-            "treasury",
-            "s&p",
-            "sp500",
-            "nasdaq",
-            "stock market",
-            "bear market",
-            "bull market",
-            "negative gdp",
-            "company",
-            "nvidia",
-            "tesla",
-            "apple",
-            "google",
-            "amazon",
-            "microsoft",
+            "recession", "gdp", "unemployment", "jobs", "nonfarm",
+            "economy", "growth", "debt", "default", "fiscal",
+            "treasury", "s&p", "sp500", "nasdaq", "dow",
+            "stock market", "bear market", "bull market",
+            "negative gdp", "soft landing", "hard landing",
+            "earnings", "corporate profit",
+        ],
+    ),
+    (
+        "TECH",
+        [
+            "nvidia", "tesla", "apple", "google", "amazon",
+            "microsoft", "meta", "broadcom", "asml",
+            "semiconductor", "ai chip", "artificial intelligence",
+            "big tech", "tech stock", "software",
+        ],
+    ),
+    (
+        "EMERGING",
+        [
+            "china", "chinese", "india", "brazil", "emerging market",
+            "brics", "developing", "yuan", "renminbi",
+            "hang seng", "shanghai",
         ],
     ),
     (
         "COMMODITY",
         [
-            "gold",
-            "silver",
-            "crude oil",
-            "oil",
-            "commodity",
-            "commodities",
-            "natural gas",
+            "gold", "silver", "crude oil", "oil", "commodity",
+            "commodities", "natural gas", "copper", "mining",
+            "precious metal", "bullion",
         ],
     ),
     (
         "GEOPOLITICAL",
         [
-            "war",
-            "russia",
-            "china",
-            "ukraine",
-            "iran",
-            "israel",
-            "nato",
-            "conflict",
-            "tariff",
-            "sanctions",
-            "trade war",
-            "invasion",
-            "military",
-            "ceasefire",
-            "hormuz",
+            "war", "russia", "ukraine", "iran", "israel",
+            "nato", "conflict", "tariff", "sanctions",
+            "trade war", "invasion", "military", "ceasefire",
+            "hormuz", "strait", "nuclear",
+        ],
+    ),
+    (
+        "BONDS",
+        [
+            "bond", "yield", "treasury", "sovereign debt",
+            "credit spread", "fixed income", "investment grade",
+            "high yield", "junk bond", "duration",
         ],
     ),
     ("CRYPTO", ["bitcoin", "btc", "eth", "crypto", "coinbase"]),

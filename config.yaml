@@ -10,15 +10,41 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Seed RSS Feeds (first-run only) ──────────────────────────
+# Generic macro/financial news feeds. Per-ETF category feeds
+# (Yahoo SPY/QQQ/GLD/EEM proxies, CNBC Europe, etc.) are added
+# automatically by the news_fetcher module.
 rss_feeds:
-  - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US
-    name: Yahoo Finance S&P 500
+  # -- Benzinga (ETF-focused + markets) --
+  - url: https://www.benzinga.com/etfs/feed
+    name: Benzinga ETFs
+  - url: https://www.benzinga.com/markets/feed
+    name: Benzinga Markets
+
+  # -- CNBC --
   - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114
     name: CNBC Top News
+  - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258
+    name: CNBC Economy
+  - url: https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362
+    name: CNBC World Markets
+
+  # -- Yahoo Finance --
+  - url: https://feeds.finance.yahoo.com/rss/2.0/headline?s=^GSPC&region=US&lang=en-US
+    name: Yahoo Finance S&P 500
+
+  # -- MarketWatch --
   - url: https://feeds.marketwatch.com/marketwatch/topstories/
     name: MarketWatch Top Stories
-  - url: https://www.investing.com/rss/news_14.rss
-    name: Investing.com
+  - url: https://feeds.marketwatch.com/marketwatch/marketpulse/
+    name: MarketWatch Market Pulse
+
+  # -- Google News (economy/business) --
+  - url: https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx6TVdZU0FtVnVHZ0pWVXlnQVAB?hl=en-US&gl=US&ceid=US:en
+    name: Google News Economy
+
+  # -- ECB (for euro bond/rate context) --
+  - url: https://www.ecb.europa.eu/rss/press.html
+    name: ECB Press Releases
 
 # ── Seed Assets (first-run only) ─────────────────────────────
 # UCITS ETFs available on Borsa Italiana via Fineco.
