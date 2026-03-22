@@ -592,4 +592,13 @@ async def analyze_single_asset(
         "trade_thesis": trade_thesis,
         "news_summary": news_summary,
         "news_count": len(news_result),
+        "news_articles": [
+            {
+                "title": a.get("title", ""),
+                "link": a.get("link", ""),
+                "source": a.get("source", ""),
+            }
+            for a in (news_result or [])
+            if a.get("title")
+        ],
     }

@@ -388,6 +388,7 @@ def _fetch_single_feed(
         articles.append({
             "title": title,
             "summary": summary[:500] if summary else "",
+            "link": entry.get("link", ""),
             "source": source_name,
             "published_at": published_at,
         })

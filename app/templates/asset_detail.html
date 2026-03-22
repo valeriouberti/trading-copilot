@@ -15,6 +15,37 @@
     margin-bottom: 6px;
     line-height: 1.4;
 }
+.poly-question a {
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: color 0.15s;
+}
+.poly-question a:hover {
+    color: var(--accent-blue);
+    text-decoration: underline;
+}
+.news-article {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+.news-article:last-child { border-bottom: none; }
+.news-article a {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    line-height: 1.4;
+    transition: color 0.15s;
+}
+.news-article a:hover {
+    color: var(--accent-blue);
+    text-decoration: underline;
+}
+.news-source {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
 .poly-meta {
     display: flex;
     gap: 10px;
@@ -1011,9 +1042,13 @@ function renderPolymarket(data) {
             const vol = m.volume_usd ? '$' + fmtVol(m.volume_usd) : '';
             const endStr = m.end_date ? new Date(m.end_date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : '';
 
+            const questionHtml = m.url
+                ? `<a href="${m.url}" target="_blank" rel="noopener noreferrer">${m.question}</a>`
+                : m.question;
+
             html += `
                 <div class="poly-market">
-                    <div class="poly-question">${m.question}</div>
+                    <div class="poly-question">${questionHtml}</div>
                     <div class="poly-meta">
                         <span class="poly-prob poly-prob-yes">${probYes.toFixed(0)}%</span>
                         <div class="poly-bar"><div class="poly-bar-fill" style="width:${probYes}%"></div></div>
@@ -1100,10 +1135,31 @@ function renderNews(data) {
     if (!data.news_summary || !data.news_summary.length) { card.style.display = "none"; return; }
     card.style.display = "block";
 
+    // LLM summary bullets
     let html = `<p style="color:var(--text-muted);font-size:12px;margin-bottom:8px;">${data.news_count || 0} articles analyzed</p>`;
     data.news_summary.forEach(item => {
         html += `<div class="driver-item">${item}</div>`;
     });
+
+    // Clickable article list
+    const articles = data.news_articles || [];
+    if (articles.length > 0) {
+        html += '<div style="border-top:1px solid var(--border); margin-top:12px; padding-top:8px;">';
+        html += '<div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Sources</div>';
+        for (const a of articles) {
+            const titleHtml = a.link
+                ? `<a href="${a.link}" target="_blank" rel="noopener noreferrer">${a.title}</a>`
+                : `<span>${a.title}</span>`;
+            html += `
+                <div class="news-article">
+                    ${titleHtml}
+                    ${a.source ? `<div class="news-source">${a.source}</div>` : ''}
+                </div>
+            `;
+        }
+        html += '</div>';
+    }
+
     content.innerHTML = html;
 }
 
