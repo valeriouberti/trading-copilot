@@ -4,6 +4,49 @@ All notable changes to this project are documented here.
 
 ---
 
+## v7.1.0 — 22 March 2026
+
+### News & Polymarket Improvements
+
+#### Clickable Links in Asset Detail Page
+- Polymarket market questions are now clickable links to their Polymarket event pages
+- News articles are now clickable links to original sources (CNBC, Bloomberg, Motley Fool, etc.)
+- New "Sources" section in news card shows all analyzed articles with source labels
+- **Files**: `app/templates/asset_detail.html`, `app/services/analyzer.py`, `modules/news_fetcher.py`
+
+#### Per-ETF News Relevance
+- Added `_ETF_NEWS_CONFIG` with per-ETF targeted RSS feeds, Yahoo proxy symbols, and category keywords
+- Benzinga ETFs and Markets feeds added to default RSS configuration
+- 3-tier relevance scoring: exact symbol match (+3) → category keywords (+2) → broad terms (+1)
+- Per-ETF Yahoo Finance proxies (SPY for CSSPX.MI, QQQ for EQQQ.MI, GLD for SGLD.MI, etc.)
+- **Files**: `modules/news_fetcher.py`, `config.yaml`
+
+#### Polymarket Per-ETF Filtering
+- Added `_ETF_MARKET_RELEVANCE` mapping with per-ETF categories and keywords
+- Markets filtered by category (FED, TECH, GEOPOLITICAL, EMERGING, etc.) and word-boundary keyword matching
+- Gold ETF (SGLD.MI) gets geopolitical markets, NASDAQ (EQQQ.MI) gets tech + Fed, bonds get rate decisions
+- Prevents identical Polymarket data across all ETFs
+- **Files**: `modules/polymarket.py`
+
+#### Rule-Based Polymarket Classifier
+- Added `_QUESTION_RULES` with 40+ ordered pattern rules for common Polymarket question structures
+- Correctly classifies Fed rate decisions (decrease → BULLISH, increase → BEARISH, no change → mildly BEARISH)
+- Handles inflation, recession, geopolitical, trade, commodity, and market questions
+- Magnitude (1-5) set from rules instead of default 3
+- LLM classification only called for truly ambiguous questions (not matched by any rule)
+- **Files**: `modules/polymarket.py`
+
+#### Test Suite Updates
+- Removed all FinBERT-related tests (FinBERT was removed in v7.0.0)
+- Updated sentiment tests to mock at `llm_client.llm_call` level (replaces `get_groq_client` mocking)
+- Updated Polymarket tests for rule-based classifier behavior and ETF symbols
+- Removed `AssetMonitor` tests (replaced by `ETFScheduler` in v7.0.0)
+- Added tests for rule-based magnitude assignment and default fallback
+- All 396 tests passing
+- **Files**: `tests/test_sentiment.py`, `tests/test_polymarket.py`, `tests/test_integration.py`, `tests/test_monitor_budget.py`
+
+---
+
 ## v7.0.0 — 21 March 2026
 
 ### UCITS ETF Conversion

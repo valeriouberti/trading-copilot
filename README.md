@@ -84,7 +84,7 @@ Full configuration reference: [docs/configuration.md](docs/configuration.md)
 | Page | URL | Description |
 |------|-----|-------------|
 | **Dashboard** | `/` | 8-ETF overview with regime badges and verdict per asset |
-| **Asset Detail** | `/asset/{symbol}` | Interactive chart, technicals, sentiment, Polymarket, Action Plan |
+| **Asset Detail** | `/asset/{symbol}` | Interactive chart, technicals, sentiment, Polymarket (clickable), news (clickable), Action Plan |
 | **Portfolio** | `/portfolio` | Open positions, unrealized P&L, max 2 positions |
 | **Trade Journal** | `/trades` | Record, close, and delete trades |
 | **Analytics** | `/analytics` | Win rate, profit factor, equity curve, insights |
@@ -183,9 +183,22 @@ The Polymarket card shows:
 - Aggregate signal (BULLISH / BEARISH / NEUTRAL) with confidence %
 - Bull vs Bear probability breakdown
 - Total volume across analyzed markets
-- **Top 5 markets** with: question, YES/NO probability bar, impact direction, magnitude (1-5), volume, expiry date
+- **Top 5 markets** with: clickable question linking to Polymarket, YES/NO probability bar, impact direction, magnitude (1-5), volume, expiry date
 
-Markets are fetched from the public Gamma API, classified by LLM (or keyword fallback), and scored with volume + temporal decay weighting. Tag slugs are mapped per ETF category (equity, bond, gold, emerging markets).
+Markets are fetched from the public Gamma API and processed through a 3-stage pipeline:
+
+1. **Rule-based classifier**: 40+ ordered patterns for common questions (Fed rates, inflation, recession, geopolitical events) with per-rule magnitude
+2. **LLM classification**: only called for ambiguous markets not matched by any rule
+3. **Per-ETF relevance filter**: each ETF has allowed categories and word-boundary keywords — gold ETF sees geopolitical markets, NASDAQ sees tech + Fed, bonds see rate decisions
+
+### News Sources
+
+The News card shows:
+
+- LLM-generated summary bullets of the most impactful news
+- **Clickable article links** to original sources (CNBC, Bloomberg, Motley Fool, Yahoo Finance, etc.)
+- Per-ETF targeted RSS feeds with Yahoo Finance proxy symbols (SPY for CSSPX.MI, QQQ for EQQQ.MI, GLD for SGLD.MI)
+- 3-tier relevance scoring: exact symbol match, category keywords, broad market terms
 
 ---
 
@@ -291,9 +304,9 @@ trading-assistant/
 |   +-- groq_client.py           # Groq API singleton
 |   +-- strategy.py              # Shared strategy (regime, labeling, QS, SL/TP, commission)
 |   +-- price_data.py            # Price fetch + indicators + chart data
-|   +-- polymarket.py            # Prediction market signal from Gamma API
+|   +-- polymarket.py            # Prediction market signal (rule-based + LLM, per-ETF filtering)
 |   +-- sentiment.py             # Two-pass LLM sentiment analysis
-|   +-- news_fetcher.py          # RSS aggregation + LLM summarization
+|   +-- news_fetcher.py          # RSS aggregation + per-ETF feeds + LLM summarization
 |   +-- economic_calendar.py     # Forex Factory calendar
 |   +-- hallucination_guard.py   # Cross-signal validation
 |   +-- exceptions.py            # Typed exception hierarchy

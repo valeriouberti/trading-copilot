@@ -88,7 +88,7 @@ The market regime (LONG / NEUTRAL / BEARISH) is determined by combining:
 
 1. **Technical composite** direction
 2. **LLM sentiment** bias
-3. **Polymarket** signal (when available)
+3. **Polymarket** signal (when available) — filtered per-ETF by category and keywords, classified using 40+ rule-based patterns with LLM fallback for ambiguous markets
 
 If these sources conflict, regime defaults to NEUTRAL (no trade).
 

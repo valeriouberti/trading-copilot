@@ -105,7 +105,7 @@ Chart data from the analysis pipeline (OHLC + EMA from daily data).
 
 Full analysis pipeline. Query params: `skip_llm` (bool), `skip_polymarket` (bool).
 
-Response includes: `analysis` (technicals, chart, price), `sentiment`, `polymarket`, `calendar`, `regime`, `setup` (entry/SL/TP/tradeable), `trade_thesis`, `news_summary`, `validation_flags`.
+Response includes: `analysis` (technicals, chart, price), `sentiment`, `polymarket` (with clickable market URLs), `calendar`, `regime`, `setup` (entry/SL/TP/tradeable), `trade_thesis`, `news_summary`, `news_articles` (with source links), `validation_flags`.
 
 ```json
 {
@@ -114,7 +114,13 @@ Response includes: `analysis` (technicals, chart, price), `sentiment`, `polymark
   "timestamp": "2026-03-21T16:00:00Z",
   "analysis": {"technicals": {...}, "price": {"current": 509.16, "change_pct": -0.5}},
   "sentiment": {"score": 1.5, "label": "Bullish", "bias": "BULLISH", "source": "groq-2pass"},
-  "polymarket": {"signal": "BULLISH", "confidence": 65, "market_count": 12},
+  "polymarket": {
+    "signal": "BULLISH", "confidence": 65, "market_count": 12,
+    "top_markets": [
+      {"question": "Will the Fed decrease rates?", "prob_yes": 15, "impact": "BULLISH_IF_YES",
+       "url": "https://polymarket.com/event/..."}
+    ]
+  },
   "calendar": {"events_today": [...]},
   "regime": "LONG",
   "setup": {
@@ -127,7 +133,10 @@ Response includes: `analysis` (technicals, chart, price), `sentiment`, `polymark
     "commission_viable": true,
     "tradeable": true
   },
-  "news_summary": ["Fed holds rates steady...", "Tech sector shows resilience..."]
+  "news_summary": ["Fed holds rates steady...", "Tech sector shows resilience..."],
+  "news_articles": [
+    {"title": "Fed holds rates steady", "link": "https://cnbc.com/...", "source": "CNBC Top News"}
+  ]
 }
 ```
 

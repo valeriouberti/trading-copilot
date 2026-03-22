@@ -77,13 +77,16 @@ POST /api/analyze/{symbol}
   |     |     +-- Score: composite direction, quality score (5 checks), MTF alignment
   |     |
   |     +-- _run_news()
-  |     |     +-- Fetch RSS feeds + asset-specific Yahoo Finance feed
-  |     |     +-- Filter and deduplicate
+  |     |     +-- Fetch RSS feeds + per-ETF targeted feeds (Yahoo proxies, Benzinga)
+  |     |     +-- 3-tier relevance scoring (exact match → category → broad)
+  |     |     +-- Filter, deduplicate, return articles with source links
   |     |
   |     +-- _run_polymarket()
   |     |     +-- Fetch events from Gamma API (tag_slugs per ETF category)
-  |     |     +-- LLM classification (or keyword fallback)
-  |     |     +-- Signal: BULLISH/BEARISH/NEUTRAL, confidence, top markets
+  |     |     +-- Rule-based pattern classifier (40+ ordered rules)
+  |     |     +-- LLM classification for ambiguous markets (keyword fallback)
+  |     |     +-- Per-ETF relevance filter (category + word-boundary keywords)
+  |     |     +-- Signal: BULLISH/BEARISH/NEUTRAL, confidence, top markets with URLs
   |     |
   |     +-- _run_calendar()       (cached globally, not per-symbol)
   |           +-- Forex Factory high-impact events
