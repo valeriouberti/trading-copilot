@@ -104,10 +104,20 @@ class TestFullPipelineSuccess:
         assert len(asset_analyses) == 1
         assert asset_analyses[0].error is None
 
-        # Step 3: Sentiment
-        with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.get_groq_client", return_value=mock_groq_client):
-                sentiment = analyze_sentiment(news, assets_config)
+        # Step 3: Sentiment — mock at llm_call level (Groq/Ollama unified)
+        call_count = 0
+
+        def mock_llm_call(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Pass 1: reasoning
+                return "Bullish outlook due to tech rally and low rates."
+            # Pass 2: JSON extraction
+            return json.dumps(mock_llm_response)
+
+        with patch("modules.sentiment._llm_call", side_effect=mock_llm_call):
+            sentiment = analyze_sentiment(news, assets_config)
 
         assert sentiment.source in ("groq", "groq-2pass")
 
@@ -152,34 +162,26 @@ class TestPipelineWithNoNews:
 
 class TestPipelineWithLLMFailure:
     def test_groq_failure_still_generates_report(self, mock_news_items) -> None:
-        """Verify that the pipeline completes with fallback if Groq fails."""
+        """Verify that the pipeline completes with neutral fallback if Groq fails."""
         mock_ticker = MagicMock()
         mock_ticker.history = MagicMock(
             side_effect=lambda **kw: _mock_yf_daily() if kw.get("interval") == "1d" else _mock_yf_5m()
         )
 
-        assets_config = [{"symbol": "NQ=F", "display_name": "NASDAQ 100 Futures"}]
+        assets_config = [{"symbol": "EQQQ.MI", "display_name": "Invesco NASDAQ-100"}]
 
         with patch("modules.price_data.yf.Ticker", return_value=mock_ticker):
             asset_analyses = analyze_assets(assets_config)
 
-        # Groq fails, FinBERT also mocked
+        # Groq fails → neutral fallback (no FinBERT)
         mock_failing_client = MagicMock()
         mock_failing_client.chat.completions.create.side_effect = Exception("API down")
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
             with patch("modules.sentiment.get_groq_client", return_value=mock_failing_client):
-                with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
-                    mock_finbert.return_value = SentimentResult(
-                        sentiment_score=0.0,
-                        sentiment_label="Neutral (fallback)",
-                        key_drivers=["Groq not available"],
-                        directional_bias="NEUTRAL",
-                        confidence=0.0,
-                        source="finbert",
-                    )
-                    sentiment = analyze_sentiment(mock_news_items, assets_config)
+                sentiment = analyze_sentiment(mock_news_items, assets_config)
 
-        assert sentiment.source == "finbert"
+        assert sentiment.source == "none"
+        assert sentiment.directional_bias == "NEUTRAL"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             report_path = generate_report(sentiment, asset_analyses, mock_news_items, tmpdir)
@@ -187,7 +189,7 @@ class TestPipelineWithLLMFailure:
 
             with open(report_path, encoding="utf-8") as f:
                 html = f.read()
-            assert "FINBERT" in html.upper()
+            assert "NEUTRAL" in html.upper()
 
 
 class TestPipelineNoLLMFlag:

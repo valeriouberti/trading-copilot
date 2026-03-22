@@ -218,10 +218,9 @@ class TestGetTagSlugsForAssets:
         assert "tariffs" in slugs
 
     def test_returns_slugs_for_gold(self) -> None:
-        assets = [{"symbol": "GC=F", "display_name": "Gold Futures"}]
+        assets = [{"symbol": "SGLD.MI", "display_name": "Invesco Physical Gold"}]
         slugs = _get_tag_slugs_for_assets(assets)
         assert "gold" in slugs
-        assert "commodities" in slugs
         assert "geopolitics" in slugs
 
     def test_returns_default_for_unknown(self) -> None:
@@ -253,7 +252,7 @@ class TestGetKeywordsForAssets:
         assert "recession" in kw
 
     def test_returns_keywords_for_gold(self) -> None:
-        assets = [{"symbol": "GC=F", "display_name": "Gold Futures"}]
+        assets = [{"symbol": "SGLD.MI", "display_name": "Invesco Physical Gold"}]
         kw = _get_keywords_for_assets(assets)
         assert "gold" in kw
         assert "war" in kw
@@ -273,7 +272,7 @@ class TestCategoryClassification:
         ("Will unemployment rise?", "MACRO"),
         ("Will Russia invade another country?", "GEOPOLITICAL"),
         ("Will new tariffs be imposed?", "GEOPOLITICAL"),
-        ("Will China retaliate on trade?", "GEOPOLITICAL"),
+        ("Will China retaliate on trade?", "EMERGING"),
         ("Will Gold hit $3000?", "COMMODITY"),
         ("Will crude oil prices rise?", "COMMODITY"),
         ("Will Bitcoin hit 100k?", "CRYPTO"),
@@ -304,10 +303,11 @@ class TestKeywordClassification:
         assert impact == "BEARISH_IF_YES"
         assert ambiguous is True
 
-    def test_both_keywords_is_ambiguous(self) -> None:
-        """Both bullish and bearish keywords → ambiguous."""
+    def test_both_keywords_resolved_by_rules(self) -> None:
+        """Rule-based classifier resolves 'recession' unambiguously."""
         impact, ambiguous = _keyword_classify_single("Will growth slow into recession?")
-        assert ambiguous is True
+        assert impact == "BEARISH_IF_YES"
+        assert ambiguous is False
 
     def test_classify_markets_with_keywords_adds_impact(self) -> None:
         markets = [
@@ -320,7 +320,7 @@ class TestKeywordClassification:
 
     def test_classify_markets_flags_ambiguous(self) -> None:
         markets = [
-            _make_signal_market("Will the Fed meeting affect markets?", 50, 100_000),
+            _make_signal_market("Will something unexpected happen tomorrow?", 50, 100_000),
         ]
         result = _classify_markets_with_keywords(markets)
         assert result[0]["_ambiguous"] is True
@@ -358,7 +358,7 @@ class TestLLMClassification:
     def test_llm_called_only_for_ambiguous(self) -> None:
         """LLM is only called for ambiguous markets."""
         markets = [
-            _make_signal_market("Will the Fed meeting affect markets?", 70, 100_000),
+            _make_signal_market("Will aliens arrive on Earth next month?", 70, 100_000),
             _make_signal_market("Will recession hit?", 80, 200_000),
         ]
 
@@ -377,13 +377,13 @@ class TestLLMClassification:
         # Ambiguous market gets LLM classification
         assert result[0]["impact"] == "BULLISH_IF_YES"
         assert result[0]["impact_magnitude"] == 4
-        # Non-ambiguous market keeps keyword classification
+        # Non-ambiguous market keeps rule-based classification
         assert result[1]["impact"] == "BEARISH_IF_YES"
 
     def test_llm_failure_falls_back(self) -> None:
         """If LLM fails, uses keyword fallback for ambiguous markets."""
         markets = [
-            _make_signal_market("Will the Fed meeting affect markets?", 70, 100_000),
+            _make_signal_market("Will something unexpected happen tomorrow?", 70, 100_000),
         ]
 
         mock_client = MagicMock()
@@ -573,9 +573,15 @@ class TestTemporalDecay:
 # ---------------------------------------------------------------------------
 
 class TestImpactMagnitude:
-    def test_keyword_fallback_sets_default_magnitude(self) -> None:
-        """Keyword classification sets default magnitude = 3."""
+    def test_rule_based_sets_magnitude(self) -> None:
+        """Rule-based classifier sets magnitude from rules (recession = 5)."""
         markets = [_make_signal_market("Will recession hit?", 70, 100_000)]
+        _classify_markets_with_keywords(markets)
+        assert markets[0]["impact_magnitude"] == 5
+
+    def test_keyword_fallback_sets_default_magnitude(self) -> None:
+        """Unknown questions fall back to default magnitude = 3."""
+        markets = [_make_signal_market("Will aliens arrive?", 70, 100_000)]
         _classify_markets_with_keywords(markets)
         assert markets[0]["impact_magnitude"] == 3
 

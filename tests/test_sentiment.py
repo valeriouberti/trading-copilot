@@ -13,7 +13,6 @@ from modules.sentiment import (
     SentimentResult,
     analyze_sentiment,
     _analyze_with_groq,
-    _analyze_with_finbert,
     _build_prompt,
 )
 
@@ -127,24 +126,16 @@ class TestMalformedResponse:
                 _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
 
     def test_malformed_json_full_pipeline_fallback(self, mock_news_items: list) -> None:
-        """Verify that the full pipeline falls back if Groq returns text."""
+        """Verify that the full pipeline returns neutral if Groq returns text."""
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = _make_groq_response("not json")
 
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
             with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-                with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
-                    mock_finbert.return_value = SentimentResult(
-                        sentiment_score=0.0,
-                        sentiment_label="Neutral",
-                        key_drivers=["Fallback"],
-                        directional_bias="NEUTRAL",
-                        confidence=0.0,
-                        source="finbert",
-                    )
-                    result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+                result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
-        assert result.source == "finbert"
+        assert result.source == "none"
+        assert result.directional_bias == "NEUTRAL"
 
 
 class TestGroqRateLimit:
@@ -175,46 +166,29 @@ class TestGroqRateLimit:
 
 class TestGroqTotalFailure:
     def test_fallback_on_total_groq_failure(self, mock_news_items: list) -> None:
-        """Verify that fallback to FinBERT works if Groq fails completely."""
+        """Verify that neutral fallback works if Groq fails completely."""
         mock_failing_client = MagicMock()
         mock_failing_client.chat.completions.create.side_effect = Exception("Service down")
         with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
             with patch("modules.sentiment.get_groq_client", return_value=mock_failing_client):
-                with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
-                    mock_finbert.return_value = SentimentResult(
-                        sentiment_score=0.0,
-                        sentiment_label="Neutral",
-                        key_drivers=["Fallback active"],
-                        directional_bias="NEUTRAL",
-                        confidence=0.0,
-                        source="finbert",
-                    )
-                    result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+                result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
-        assert result.source == "finbert"
-        assert result.error is None
+        assert result.source == "none"
+        assert result.directional_bias == "NEUTRAL"
 
 
 class TestNoApiKey:
-    def test_no_api_key_uses_finbert(self, mock_news_items: list) -> None:
-        """Verify that without GROQ_API_KEY the FinBERT fallback is used."""
+    def test_no_api_key_returns_neutral(self, mock_news_items: list) -> None:
+        """Verify that without any LLM provider the result is neutral."""
         with patch.dict(os.environ, {}, clear=True):
-            # Remove GROQ_API_KEY entirely
             env = os.environ.copy()
             env.pop("GROQ_API_KEY", None)
             with patch.dict(os.environ, env, clear=True):
-                with patch("modules.sentiment._analyze_with_finbert") as mock_finbert:
-                    mock_finbert.return_value = SentimentResult(
-                        sentiment_score=0.0,
-                        sentiment_label="Neutral",
-                        key_drivers=["No API key"],
-                        directional_bias="NEUTRAL",
-                        confidence=0.0,
-                        source="finbert",
-                    )
+                with patch("modules.sentiment.get_active_provider", return_value="none"):
                     result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
-        assert result.source == "finbert"
+        assert result.source == "none"
+        assert result.directional_bias == "NEUTRAL"
 
 
 class TestEmptyNews:
@@ -242,70 +216,15 @@ class TestBuildPrompt:
         assert "JSON" in prompt
 
 
-class TestFinBERTFallback:
-    def test_finbert_with_positive_news(self, mock_news_items: list) -> None:
-        """Verify that FinBERT produces a result with positive news."""
-        mock_classifier = MagicMock()
-        mock_classifier.return_value = [
-            {"label": "positive", "score": 0.85},
-            {"label": "positive", "score": 0.72},
-            {"label": "negative", "score": 0.60},
-            {"label": "neutral", "score": 0.55},
-            {"label": "positive", "score": 0.90},
-        ]
-
-        with patch("modules.sentiment.pipeline", create=True) as mock_pipeline:
-            mock_pipeline.return_value = mock_classifier
-            # We need to mock the import inside the function
-            import modules.sentiment as sent_mod
-            with patch.object(sent_mod, "_analyze_with_finbert", wraps=sent_mod._analyze_with_finbert):
-                with patch("modules.sentiment.pipeline", mock_pipeline):
-                    result = _analyze_with_finbert(mock_news_items)
-
-        assert isinstance(result.sentiment_score, float)
-        assert -3 <= result.sentiment_score <= 3
-        assert result.source == "finbert"
-        assert len(result.key_drivers) <= 3
-
-    def test_finbert_with_negative_news(self) -> None:
-        """Verify that FinBERT handles negative news."""
-        news = [
-            {"title": "Markets crash", "summary": "", "source": "A", "published_at": "now"},
-            {"title": "Stocks plunge", "summary": "", "source": "B", "published_at": "now"},
-        ]
-        mock_classifier = MagicMock()
-        mock_classifier.return_value = [
-            {"label": "negative", "score": 0.90},
-            {"label": "negative", "score": 0.85},
-        ]
-
-        with patch("transformers.pipeline", return_value=mock_classifier):
-            result = _analyze_with_finbert(news)
-
-        assert result.sentiment_score <= 0
-        assert result.source == "finbert"
-
-    def test_finbert_import_error(self) -> None:
-        """Verify error handling if transformers is not installed."""
+class TestLLMFallbackReturnsNeutral:
+    def test_neutral_fallback_on_no_provider(self) -> None:
+        """Verify that when no LLM is available, neutral result is returned."""
         news = [{"title": "Test", "summary": "", "source": "A", "published_at": "now"}]
-
-        with patch.dict("sys.modules", {"transformers": None}):
-            with patch("builtins.__import__", side_effect=ImportError("no transformers")):
-                # Directly test the function behavior when import fails
-                result = _analyze_with_finbert(news)
-                # If transformers IS available in the test env, it won't fail
-                # So we just verify we get a valid result
-                assert result.source == "finbert"
-
-    def test_finbert_model_load_error(self) -> None:
-        """Verify error handling on FinBERT model loading."""
-        news = [{"title": "Test", "summary": "", "source": "A", "published_at": "now"}]
-
-        with patch("transformers.pipeline", side_effect=Exception("Model download failed")):
-            result = _analyze_with_finbert(news)
-
-        assert result.source == "finbert"
-        assert result.error is not None
+        with patch("modules.sentiment.get_active_provider", return_value="none"):
+            result = analyze_sentiment(news, SAMPLE_ASSETS)
+        assert result.source == "none"
+        assert result.sentiment_score == 0.0
+        assert result.directional_bias == "NEUTRAL"
 
 
 class TestSentimentResultSerialization:
@@ -427,53 +346,19 @@ class TestTemporalTagging:
         assert tagged[0]["_time_tag"] == ""
 
 
-class TestFinBERTEnsemble:
-    """Test FinBERT cross-validation ensemble."""
-
-    def test_agree_boosts_confidence(self) -> None:
-        """Scores within 1.0 → AGREE, boost +5%."""
-        from modules.sentiment import _compute_finbert_agreement
-
-        label, mod = _compute_finbert_agreement(1.0, 1.5)
-        assert label == "AGREE"
-        assert mod == 5.0
-
-    def test_disagree_reduces_confidence(self) -> None:
-        """Divergence > 2.0 → DISAGREE, -15%."""
-        from modules.sentiment import _compute_finbert_agreement
-
-        label, mod = _compute_finbert_agreement(2.0, -1.0)
-        assert label == "DISAGREE"
-        assert mod == -15.0
-
-    def test_partial_no_change(self) -> None:
-        """Divergence 1-2 → PARTIAL, no change."""
-        from modules.sentiment import _compute_finbert_agreement
-
-        label, mod = _compute_finbert_agreement(1.0, -0.5)
-        assert label == "PARTIAL"
-        assert mod == 0.0
-
-    def test_none_finbert_returns_empty(self) -> None:
-        """FinBERT None → empty label."""
-        from modules.sentiment import _compute_finbert_agreement
-
-        label, mod = _compute_finbert_agreement(1.0, None)
-        assert label == ""
-        assert mod == 0.0
-
+class TestSentimentResultV2Fields:
     def test_to_dict_includes_v2_fields(self) -> None:
         """Verify that to_dict includes v2 fields."""
         result = SentimentResult(
             sentiment_score=1.0,
             sentiment_label="Bullish",
-            asset_scores={"NQ=F": 1.5},
-            asset_biases={"NQ=F": "BULLISH"},
+            asset_scores={"EQQQ.MI": 1.5},
+            asset_biases={"EQQQ.MI": "BULLISH"},
             finbert_score=1.2,
             finbert_agreement="AGREE",
         )
         d = result.to_dict()
-        assert d["asset_scores"] == {"NQ=F": 1.5}
-        assert d["asset_biases"] == {"NQ=F": "BULLISH"}
+        assert d["asset_scores"] == {"EQQQ.MI": 1.5}
+        assert d["asset_biases"] == {"EQQQ.MI": "BULLISH"}
         assert d["finbert_score"] == 1.2
         assert d["finbert_agreement"] == "AGREE"

@@ -90,61 +90,7 @@ class TestFetchQuote:
         assert provider.fetch_quote("EURUSD") is None
 
 
-# ─── Merge Price ──────────────────────────────────────────────────────
-
-class TestMergePrice:
-    def _make_monitor(self):
-        """Create an AssetMonitor with a mock app."""
-        from unittest.mock import MagicMock
-        from app.services.monitor import AssetMonitor
-
-        app = MagicMock()
-        monitor = AssetMonitor(app)
-        return monitor
-
-    def test_merge_updates_current_price(self):
-        monitor = self._make_monitor()
-        cached = {
-            "analysis": {"price": {"current": 100.0}, "technicals": {}},
-            "setup": {"entry_price": 100.0, "stop_loss": 98.0, "take_profit": 104.0},
-            "regime": "LONG",
-        }
-        # Cache SL/TP distances
-        monitor._cache.set("ES", "sl_distance", 2.0, ttl=1800)
-        monitor._cache.set("ES", "tp_distance", 4.0, ttl=1800)
-
-        merged = monitor._merge_price(cached, "ES", 101.5)
-
-        assert merged["analysis"]["price"]["current"] == 101.5
-        assert merged["setup"]["entry_price"] == 101.5
-        assert merged["setup"]["stop_loss"] == pytest.approx(99.5)   # 101.5 - 2.0
-        assert merged["setup"]["take_profit"] == pytest.approx(105.5) # 101.5 + 4.0
-
-    def test_merge_short_direction(self):
-        monitor = self._make_monitor()
-        cached = {
-            "analysis": {"price": {"current": 50.0}, "technicals": {}},
-            "setup": {"entry_price": 50.0, "stop_loss": 51.5, "take_profit": 46.5},
-            "regime": "SHORT",
-        }
-        monitor._cache.set("CL", "sl_distance", 1.5, ttl=1800)
-        monitor._cache.set("CL", "tp_distance", 3.5, ttl=1800)
-
-        merged = monitor._merge_price(cached, "CL", 49.0)
-
-        assert merged["setup"]["entry_price"] == 49.0
-        assert merged["setup"]["stop_loss"] == pytest.approx(50.5)   # 49.0 + 1.5
-        assert merged["setup"]["take_profit"] == pytest.approx(45.5) # 49.0 - 3.5
-
-    def test_merge_does_not_mutate_original(self):
-        monitor = self._make_monitor()
-        cached = {
-            "analysis": {"price": {"current": 100.0}},
-            "setup": {"entry_price": 100.0},
-            "regime": "LONG",
-        }
-        monitor._merge_price(cached, "ES", 105.0)
-        assert cached["analysis"]["price"]["current"] == 100.0  # unchanged
+# ─── Merge Price (removed — AssetMonitor replaced by ETFScheduler) ────
 
 
 # ─── Cache TTL ────────────────────────────────────────────────────────
