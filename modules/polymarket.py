@@ -442,13 +442,82 @@ def _compute_time_weight(end_date_str: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _keyword_classify_single(question: str) -> tuple[str, bool]:
-    """Classify a single market question using keywords.
+# Rule-based pattern classifier for common Polymarket question structures.
+# Each rule: (pattern_keywords, impact_if_yes, magnitude).
+# Patterns are checked in order; first match wins.
+_QUESTION_RULES: list[tuple[list[str], str, int]] = [
+    # --- FED / RATES ---
+    # Rate cuts → bullish for equities/bonds
+    (["fed", "decrease", "rate"], "BULLISH_IF_YES", 5),
+    (["fed", "cut", "rate"], "BULLISH_IF_YES", 5),
+    (["fed", "lower", "rate"], "BULLISH_IF_YES", 5),
+    # Rate hikes → bearish for equities/bonds
+    (["fed", "increase", "rate"], "BEARISH_IF_YES", 5),
+    (["fed", "raise", "rate"], "BEARISH_IF_YES", 5),
+    (["fed", "hike"], "BEARISH_IF_YES", 5),
+    # No change → mildly bearish (markets pricing in cuts)
+    (["no change", "fed", "rate"], "BEARISH_IF_YES", 2),
+    (["no change", "interest rate"], "BEARISH_IF_YES", 2),
+    # --- INFLATION ---
+    (["inflation", "increase"], "BEARISH_IF_YES", 4),
+    (["inflation", "above"], "BEARISH_IF_YES", 4),
+    (["inflation", "decrease"], "BULLISH_IF_YES", 4),
+    (["inflation", "below"], "BULLISH_IF_YES", 4),
+    (["cpi", "above"], "BEARISH_IF_YES", 4),
+    # --- RECESSION ---
+    (["recession"], "BEARISH_IF_YES", 5),
+    (["negative gdp"], "BEARISH_IF_YES", 5),
+    (["soft landing"], "BULLISH_IF_YES", 4),
+    # --- GEOPOLITICAL ---
+    (["ceasefire"], "BULLISH_IF_YES", 4),
+    (["peace deal"], "BULLISH_IF_YES", 4),
+    (["peace agreement"], "BULLISH_IF_YES", 4),
+    (["invade"], "BEARISH_IF_YES", 5),
+    (["invasion"], "BEARISH_IF_YES", 5),
+    (["forces enter"], "BEARISH_IF_YES", 5),
+    (["regime fall"], "BEARISH_IF_YES", 4),
+    (["regime change"], "BEARISH_IF_YES", 4),
+    (["nuclear"], "BEARISH_IF_YES", 5),
+    # --- TRADE ---
+    (["trade deal"], "BULLISH_IF_YES", 4),
+    (["trade war"], "BEARISH_IF_YES", 4),
+    (["tariff"], "BEARISH_IF_YES", 3),
+    (["sanctions"], "BEARISH_IF_YES", 3),
+    # --- COMMODITY ---
+    (["oil", "hit", "high"], "BEARISH_IF_YES", 3),
+    (["oil", "above"], "BEARISH_IF_YES", 3),
+    (["gold", "above"], "BULLISH_IF_YES", 3),
+    (["gold", "hit", "high"], "BULLISH_IF_YES", 3),
+    # --- MARKET ---
+    (["crash"], "BEARISH_IF_YES", 5),
+    (["bear market"], "BEARISH_IF_YES", 5),
+    (["bull market"], "BULLISH_IF_YES", 4),
+    (["all-time high"], "BULLISH_IF_YES", 3),
+    (["record high"], "BULLISH_IF_YES", 3),
+    # --- DEBT ---
+    (["default"], "BEARISH_IF_YES", 5),
+    (["government shutdown"], "BEARISH_IF_YES", 3),
+    (["debt ceiling"], "BEARISH_IF_YES", 4),
+]
 
-    Returns (impact, is_ambiguous) where is_ambiguous=True when both
-    bullish and bearish keywords match, or neither matches.
+
+def _keyword_classify_single(question: str) -> tuple[str, bool]:
+    """Classify a single market question using rule-based patterns.
+
+    Uses ordered pattern matching for common Polymarket question structures.
+    Falls back to legacy keyword matching if no pattern matches.
+
+    Returns (impact, is_ambiguous) where is_ambiguous=True when
+    classification is uncertain.
     """
     q_lower = question.lower()
+
+    # Phase 1: Rule-based pattern matching (ordered, first match wins)
+    for pattern_words, impact, magnitude in _QUESTION_RULES:
+        if all(word in q_lower for word in pattern_words):
+            return impact, False
+
+    # Phase 2: Legacy keyword matching
     is_bearish = any(kw in q_lower for kw in BEARISH_EVENT_KEYWORDS)
     is_bullish = any(kw in q_lower for kw in BULLISH_EVENT_KEYWORDS)
 
@@ -466,7 +535,17 @@ def _classify_markets_with_keywords(
         impact, ambiguous = _keyword_classify_single(market["question"])
         market["impact"] = impact
         market["_ambiguous"] = ambiguous
-        market.setdefault("impact_magnitude", 3)  # Default magnitude
+
+        # Set magnitude from rule-based classifier if matched
+        q_lower = market["question"].lower()
+        mag_set = False
+        for pattern_words, _, magnitude in _QUESTION_RULES:
+            if all(word in q_lower for word in pattern_words):
+                market["impact_magnitude"] = magnitude
+                mag_set = True
+                break
+        if not mag_set:
+            market.setdefault("impact_magnitude", 3)
     return markets
 
 
@@ -702,6 +781,101 @@ def compute_signal(markets: list[dict[str, Any]]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Per-ETF relevance filter — keeps only markets relevant to the specific ETF
+# ---------------------------------------------------------------------------
+
+# Maps each ETF to the Polymarket categories + keywords that are relevant to it.
+# Markets not matching any of these are filtered out.
+_ETF_MARKET_RELEVANCE: dict[str, dict[str, Any]] = {
+    "SWDA.MI": {
+        "categories": {"FED", "MACRO", "GEOPOLITICAL", "ECB"},
+        "keywords": ["stock", "equit", "market", "s&p", "recession", "gdp",
+                      "fed", "rate", "inflation", "economy", "tariff", "trade"],
+    },
+    "CSSPX.MI": {
+        "categories": {"FED", "MACRO", "TECH"},
+        "keywords": ["s&p", "sp500", "stock", "wall street", "us market",
+                      "fed", "rate", "recession", "gdp", "earnings",
+                      "nvidia", "apple", "microsoft", "amazon", "tesla"],
+    },
+    "EQQQ.MI": {
+        "categories": {"FED", "MACRO", "TECH"},
+        "keywords": ["nasdaq", "tech", "ai", "semiconductor", "chip",
+                      "nvidia", "apple", "microsoft", "amazon", "google",
+                      "meta", "tesla", "software", "big tech"],
+    },
+    "MEUD.MI": {
+        "categories": {"FED", "ECB", "MACRO", "GEOPOLITICAL"},
+        "keywords": ["europe", "european", "ecb", "eurozone", "eu ",
+                      "german", "france", "energy", "gas", "tariff"],
+    },
+    "IEEM.MI": {
+        "categories": {"GEOPOLITICAL", "MACRO", "EMERGING"},
+        "keywords": ["china", "india", "brazil", "emerging", "tariff",
+                      "sanctions", "trade war", "brics", "yuan"],
+    },
+    "SGLD.MI": {
+        "categories": {"FED", "GEOPOLITICAL", "COMMODITY"},
+        "keywords": ["gold", "precious", "safe haven", "war", "conflict",
+                      "iran", "russia", "inflation", "dollar", "central bank"],
+    },
+    "SEGA.MI": {
+        "categories": {"FED", "ECB", "BONDS"},
+        "keywords": ["bond", "yield", "treasury", "rate", "ecb", "bund",
+                      "inflation", "cpi", "monetary", "debt", "fiscal"],
+    },
+    "AGGH.MI": {
+        "categories": {"FED", "ECB", "BONDS"},
+        "keywords": ["bond", "yield", "treasury", "rate", "credit",
+                      "inflation", "cpi", "monetary", "fixed income"],
+    },
+}
+
+
+def _filter_markets_for_asset(
+    markets: list[dict[str, Any]],
+    asset: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Filter markets to keep only those relevant to a specific ETF.
+
+    Uses category matching (from _classify_category) and word-boundary
+    keyword matching against the ETF's relevance profile.
+    """
+    import re as _re
+
+    symbol = asset.get("symbol", "").upper()
+    relevance = _ETF_MARKET_RELEVANCE.get(symbol)
+    if not relevance:
+        return markets  # Unknown ETF, return all
+
+    allowed_categories = relevance["categories"]
+    relevance_keywords = relevance["keywords"]
+
+    # Pre-compile word-boundary patterns to avoid substring false positives
+    # e.g. "rate" matching "microstrategy"
+    kw_patterns = [_re.compile(r"\b" + _re.escape(kw) + r"\b", _re.IGNORECASE)
+                   for kw in relevance_keywords]
+
+    filtered: list[dict[str, Any]] = []
+    for market in markets:
+        # Check if the market's category matches
+        if market.get("category", "OTHER") in allowed_categories:
+            filtered.append(market)
+            continue
+
+        # Fallback: check if the question contains ETF-relevant keywords (word boundary)
+        question = market.get("question", "")
+        if any(pat.search(question) for pat in kw_patterns):
+            filtered.append(market)
+
+    logger.info(
+        "Polymarket ETF filter (%s): %d -> %d markets",
+        symbol, len(markets), len(filtered),
+    )
+    return filtered
+
+
 def get_polymarket_context(
     assets: list[dict[str, str]],
     groq_model: str = "qwen/qwen3-32b",
@@ -711,7 +885,8 @@ def get_polymarket_context(
 
     Builds tag_slugs based on configured assets, fetches Polymarket
     events via /events endpoint, extracts markets, classifies with
-    LLM (or keywords), and computes the aggregate signal.
+    LLM (or keywords), filters by ETF relevance, and computes the
+    aggregate signal.
     """
     tag_slugs = _get_tag_slugs_for_assets(assets)
 
@@ -724,6 +899,10 @@ def get_polymarket_context(
         groq_model=groq_model,
         api_key=groq_api_key,
     )
+
+    # Filter markets to keep only those relevant to the specific ETF
+    if len(assets) == 1:
+        markets = _filter_markets_for_asset(markets, assets[0])
 
     signal_data = compute_signal(markets)
 
