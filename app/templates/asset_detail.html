@@ -971,18 +971,37 @@ function renderKeyLevels(data) {
     const kl = data.analysis.technicals.key_levels;
     const price = data.analysis.price.current;
 
+    const LEVEL_DESC = {
+        "PDH": "Previous Day High",
+        "PDL": "Previous Day Low",
+        "PDC": "Previous Day Close",
+        "R2":  "Resistance 2",
+        "R1":  "Resistance 1",
+        "PP":  "Pivot Point",
+        "S1":  "Support 1",
+        "S2":  "Support 2",
+        "PWH": "Previous Week High",
+        "PWL": "Previous Week Low",
+    };
+
     const levelRow = (name, value) => {
         if (!value) return "";
         const dist = price ? (((value - price) / price) * 100).toFixed(2) : "?";
         const distClass = parseFloat(dist) >= 0 ? "price-up" : "price-down";
-        return `<div class="info-row"><span>${name}</span><span>${fmt(value)} <small class="${distClass}">(${dist}%)</small></span></div>`;
+        const desc = LEVEL_DESC[name] || "";
+        return `<div class="info-row">
+            <span><strong>${name}</strong> <small style="color:var(--text-muted);">${desc}</small></span>
+            <span>${fmt(value)} <small class="${distClass}">(${dist}%)</small></span>
+        </div>`;
     };
 
     content.innerHTML = `
         <div class="kl-section"><h4>Previous Day</h4>
             ${levelRow("PDH", kl.pdh)}${levelRow("PDL", kl.pdl)}${levelRow("PDC", kl.pdc)}
         </div>
-        <div class="kl-section"><h4>Pivot Points</h4>
+        <div class="kl-section">
+            <h4>Pivot Points</h4>
+            <p style="font-size:11px;color:var(--text-muted);margin:0 0 6px;">PP = (High + Low + Close) / 3</p>
             ${levelRow("R2", kl.r2)}${levelRow("R1", kl.r1)}${levelRow("PP", kl.pp)}${levelRow("S1", kl.s1)}${levelRow("S2", kl.s2)}
         </div>
         ${kl.pwh ? `<div class="kl-section"><h4>Previous Week</h4>${levelRow("PWH", kl.pwh)}${levelRow("PWL", kl.pwl)}</div>` : ""}
