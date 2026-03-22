@@ -349,9 +349,9 @@ class TestLLMClassification:
             _make_signal_market("Will recession hit?", 70, 100_000),
             _make_signal_market("Will rate cut happen?", 60, 100_000),
         ]
-        with patch("modules.polymarket.get_groq_client") as mock_client:
+        with patch("modules.llm_client.llm_call") as mock_call:
             result = classify_markets_with_llm(markets, api_key="test-key")
-            mock_client.assert_not_called()  # No LLM call needed
+            mock_call.assert_not_called()  # No LLM call needed
         assert result[0]["impact"] == "BEARISH_IF_YES"
         assert result[1]["impact"] == "BULLISH_IF_YES"
 
@@ -362,17 +362,12 @@ class TestLLMClassification:
             _make_signal_market("Will recession hit?", 80, 200_000),
         ]
 
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = (
-            '[{"index": 1, "impact": "BULLISH_IF_YES", "magnitude": 4}]'
-        )
+        def mock_llm_call(**kwargs):
+            return '[{"index": 1, "impact": "BULLISH_IF_YES", "magnitude": 4}]'
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
-
-        with patch("modules.polymarket.get_groq_client", return_value=mock_client):
-            result = classify_markets_with_llm(markets, api_key="test-key")
+        with patch("modules.llm_client.get_active_provider", return_value="groq"):
+            with patch("modules.llm_client.llm_call", side_effect=mock_llm_call):
+                result = classify_markets_with_llm(markets, api_key="test-key")
 
         # Ambiguous market gets LLM classification
         assert result[0]["impact"] == "BULLISH_IF_YES"
@@ -386,11 +381,9 @@ class TestLLMClassification:
             _make_signal_market("Will something unexpected happen tomorrow?", 70, 100_000),
         ]
 
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = RuntimeError("LLM down")
-
-        with patch("modules.polymarket.get_groq_client", return_value=mock_client):
-            result = classify_markets_with_llm(markets, api_key="test-key")
+        with patch("modules.llm_client.get_active_provider", return_value="groq"):
+            with patch("modules.llm_client.llm_call", side_effect=RuntimeError("LLM down")):
+                result = classify_markets_with_llm(markets, api_key="test-key")
 
         # Falls back to keyword default (BEARISH_IF_YES for ambiguous)
         assert result[0]["impact"] == "BEARISH_IF_YES"

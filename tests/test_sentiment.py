@@ -17,28 +17,30 @@ from modules.sentiment import (
 )
 
 
-SAMPLE_ASSETS = [{"symbol": "NQ=F", "display_name": "NASDAQ 100 Futures"}]
+SAMPLE_ASSETS = [{"symbol": "EQQQ.MI", "display_name": "Invesco NASDAQ-100"}]
 
 
-def _make_groq_response(content: str) -> MagicMock:
-    """Create a mock Groq response."""
-    choice = MagicMock()
-    choice.message.content = content
-    response = MagicMock()
-    response.choices = [choice]
-    return response
+def _mock_llm_call_for(response_data: dict) -> callable:
+    """Create a mock _llm_call that returns reasoning then JSON."""
+    call_count = 0
+
+    def mock_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count % 2 == 1:
+            # Pass 1: reasoning
+            return "Bullish outlook due to tech rally and supportive macro environment."
+        # Pass 2: JSON extraction
+        return json.dumps(response_data)
+
+    return mock_call
 
 
 class TestValidGroqResponse:
     def test_valid_response_parsed(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verify that a valid Groq response is parsed correctly."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps(mock_llm_response)
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        """Verify that a valid LLM response is parsed correctly."""
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(mock_llm_response)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert result.sentiment_score == 1.0
         assert result.sentiment_label == "moderately bullish"
@@ -46,13 +48,8 @@ class TestValidGroqResponse:
 
     def test_response_has_all_keys(self, mock_news_items: list, mock_llm_response: dict) -> None:
         """Verify that the output contains all required keys."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps(mock_llm_response)
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(mock_llm_response)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         result_dict = result.to_dict()
         required_keys = {"sentiment_score", "sentiment_label", "key_drivers", "directional_bias", "risk_events", "confidence"}
@@ -62,25 +59,19 @@ class TestValidGroqResponse:
 class TestSentimentScoreRange:
     def test_score_within_range(self, mock_news_items: list) -> None:
         """Verify that the sentiment score is between -3 and +3."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps({"sentiment_score": 2.5, "sentiment_label": "bullish", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        data = {"sentiment_score": 2.5, "sentiment_label": "bullish", "key_drivers": ["a", "b", "c"],
+                "directional_bias": "BULLISH", "risk_events": [], "confidence": 80}
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(data)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert -3 <= result.sentiment_score <= 3
 
     def test_out_of_range_score_accepted_as_float(self, mock_news_items: list) -> None:
         """Verify that an out-of-range score is still parsed as float."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps({"sentiment_score": 5, "sentiment_label": "test", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 80})
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        data = {"sentiment_score": 5, "sentiment_label": "test", "key_drivers": ["a", "b", "c"],
+                "directional_bias": "BULLISH", "risk_events": [], "confidence": 80}
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(data)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert isinstance(result.sentiment_score, float)
 
@@ -88,51 +79,42 @@ class TestSentimentScoreRange:
 class TestKeyDriversCount:
     def test_exactly_three_drivers(self, mock_news_items: list) -> None:
         """Verify that key_drivers contains exactly 3 elements."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        data = {"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c"],
+                "directional_bias": "BULLISH", "risk_events": [], "confidence": 70}
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(data)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert len(result.key_drivers) == 3
 
     def test_five_drivers_truncated_to_three(self, mock_news_items: list) -> None:
         """Verify that 5 drivers are truncated to 3."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps({"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c", "d", "e"], "directional_bias": "BULLISH", "risk_events": [], "confidence": 70})
-        )
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        data = {"sentiment_score": 1, "sentiment_label": "ok", "key_drivers": ["a", "b", "c", "d", "e"],
+                "directional_bias": "BULLISH", "risk_events": [], "confidence": 70}
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(data)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert len(result.key_drivers) <= 3
 
 
 class TestMalformedResponse:
     def test_plain_text_response_raises(self, mock_news_items: list) -> None:
-        """Verify that a non-JSON response causes fallback after retries."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            "This is not JSON at all, just plain text analysis."
-        )
-
+        """Verify that a non-JSON response raises LLMResponseInvalid."""
         from modules.exceptions import LLMResponseInvalid
 
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
+        def mock_call(**kwargs):
+            return "This is not JSON at all, just plain text analysis."
+
+        with patch("modules.sentiment._llm_call", side_effect=mock_call):
             with pytest.raises(LLMResponseInvalid):
-                _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+                _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
     def test_malformed_json_full_pipeline_fallback(self, mock_news_items: list) -> None:
-        """Verify that the full pipeline returns neutral if Groq returns text."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response("not json")
+        """Verify that the full pipeline returns neutral if LLM returns text."""
+        def mock_call(**kwargs):
+            return "not json"
 
-        with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-                result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+        with patch("modules.sentiment._llm_call", side_effect=mock_call):
+            result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
         assert result.source == "none"
         assert result.directional_bias == "NEUTRAL"
@@ -140,38 +122,35 @@ class TestMalformedResponse:
 
 class TestGroqRateLimit:
     def test_retry_on_rate_limit(self, mock_news_items: list, mock_llm_response: dict) -> None:
-        """Verify retry with exponential backoff on rate limit (via tenacity)."""
-        from modules.exceptions import LLMRateLimited
+        """Verify retry with exponential backoff on rate limit."""
+        from modules.exceptions import LLMUnavailable
 
-        mock_client = MagicMock()
         call_count = 0
 
-        def side_effect(**kwargs):
+        def mock_inner_call(**kwargs):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise Exception("Error code: 429 rate_limit exceeded")
-            return _make_groq_response(json.dumps(mock_llm_response))
+                raise LLMUnavailable("[all] LLM error: rate limited")
+            if call_count % 2 == 1:
+                return "Bullish outlook."
+            return json.dumps(mock_llm_response)
 
-        mock_client.chat.completions.create.side_effect = side_effect
-
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            # Tenacity handles sleep internally — patch it to avoid actual waits
+        with patch("modules.llm_client.llm_call", side_effect=mock_inner_call):
             with patch("tenacity.nap.time.sleep"):
-                result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+                result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert result.sentiment_score == 1.0
-        assert call_count >= 3  # retried at least twice before success
+        assert call_count >= 3
 
 
 class TestGroqTotalFailure:
     def test_fallback_on_total_groq_failure(self, mock_news_items: list) -> None:
-        """Verify that neutral fallback works if Groq fails completely."""
-        mock_failing_client = MagicMock()
-        mock_failing_client.chat.completions.create.side_effect = Exception("Service down")
-        with patch.dict(os.environ, {"GROQ_API_KEY": "fake-key"}):
-            with patch("modules.sentiment.get_groq_client", return_value=mock_failing_client):
-                result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+        """Verify that neutral fallback works if LLM fails completely."""
+        from modules.exceptions import LLMUnavailable
+
+        with patch("modules.sentiment._llm_call", side_effect=LLMUnavailable("down")):
+            result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
         assert result.source == "none"
         assert result.directional_bias == "NEUTRAL"
@@ -180,12 +159,8 @@ class TestGroqTotalFailure:
 class TestNoApiKey:
     def test_no_api_key_returns_neutral(self, mock_news_items: list) -> None:
         """Verify that without any LLM provider the result is neutral."""
-        with patch.dict(os.environ, {}, clear=True):
-            env = os.environ.copy()
-            env.pop("GROQ_API_KEY", None)
-            with patch.dict(os.environ, env, clear=True):
-                with patch("modules.sentiment.get_active_provider", return_value="none"):
-                    result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
+        with patch("modules.llm_client.get_active_provider", return_value="none"):
+            result = analyze_sentiment(mock_news_items, SAMPLE_ASSETS)
 
         assert result.source == "none"
         assert result.directional_bias == "NEUTRAL"
@@ -203,7 +178,7 @@ class TestBuildPrompt:
     def test_prompt_contains_asset_names(self, mock_news_items: list) -> None:
         """Verify that the prompt contains the asset names."""
         prompt = _build_prompt(mock_news_items, SAMPLE_ASSETS)
-        assert "NASDAQ 100 Futures" in prompt
+        assert "Invesco NASDAQ-100" in prompt
 
     def test_prompt_contains_news(self, mock_news_items: list) -> None:
         """Verify that the prompt contains the news titles."""
@@ -220,7 +195,7 @@ class TestLLMFallbackReturnsNeutral:
     def test_neutral_fallback_on_no_provider(self) -> None:
         """Verify that when no LLM is available, neutral result is returned."""
         news = [{"title": "Test", "summary": "", "source": "A", "published_at": "now"}]
-        with patch("modules.sentiment.get_active_provider", return_value="none"):
+        with patch("modules.llm_client.get_active_provider", return_value="none"):
             result = analyze_sentiment(news, SAMPLE_ASSETS)
         assert result.source == "none"
         assert result.sentiment_score == 0.0
@@ -259,12 +234,17 @@ class TestSentimentResultSerialization:
 class TestGroqMarkdownCleanup:
     def test_markdown_fenced_json_cleaned(self, mock_news_items: list, mock_llm_response: dict) -> None:
         """Verify that JSON wrapped in markdown fences is cleaned."""
-        mock_client = MagicMock()
-        fenced_json = f"```json\n{json.dumps(mock_llm_response)}\n```"
-        mock_client.chat.completions.create.return_value = _make_groq_response(fenced_json)
+        call_count = 0
 
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        def mock_call(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 1:
+                return "Bullish outlook."
+            return f"```json\n{json.dumps(mock_llm_response)}\n```"
+
+        with patch("modules.sentiment._llm_call", side_effect=mock_call):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         assert result.sentiment_score == 1.0
         assert result.source in ("groq", "groq-2pass")
@@ -282,24 +262,20 @@ class TestPerAssetScoring:
             "directional_bias": "BULLISH",
             "risk_events": [],
             "confidence": 70,
-            "asset_scores": {"NQ=F": 1.5, "GC=F": -0.8},
+            "asset_scores": {"EQQQ.MI": 1.5, "SGLD.MI": -0.8},
         }
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps(response_data)
-        )
         assets = [
-            {"symbol": "NQ=F", "display_name": "NASDAQ 100"},
-            {"symbol": "GC=F", "display_name": "Gold"},
+            {"symbol": "EQQQ.MI", "display_name": "Invesco NASDAQ-100"},
+            {"symbol": "SGLD.MI", "display_name": "Invesco Physical Gold"},
         ]
 
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, assets, "llama-3.3-70b-versatile", "fake-key")
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(response_data)):
+            result = _analyze_with_groq(mock_news_items, assets, "qwen/qwen3-32b", "fake-key")
 
-        assert result.asset_scores["NQ=F"] == 1.5
-        assert result.asset_scores["GC=F"] == -0.8
-        assert result.asset_biases["NQ=F"] == "BULLISH"
-        assert result.asset_biases["GC=F"] == "BEARISH"
+        assert result.asset_scores["EQQQ.MI"] == 1.5
+        assert result.asset_scores["SGLD.MI"] == -0.8
+        assert result.asset_biases["EQQQ.MI"] == "BULLISH"
+        assert result.asset_biases["SGLD.MI"] == "BEARISH"
 
     def test_asset_scores_fallback_to_global(self, mock_news_items: list) -> None:
         """If an asset has no specific score, use the global one."""
@@ -312,17 +288,13 @@ class TestPerAssetScoring:
             "confidence": 70,
             "asset_scores": {},  # Empty
         }
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = _make_groq_response(
-            json.dumps(response_data)
-        )
 
-        with patch("modules.sentiment.get_groq_client", return_value=mock_client):
-            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "llama-3.3-70b-versatile", "fake-key")
+        with patch("modules.sentiment._llm_call", side_effect=_mock_llm_call_for(response_data)):
+            result = _analyze_with_groq(mock_news_items, SAMPLE_ASSETS, "qwen/qwen3-32b", "fake-key")
 
         # Falls back to global sentiment_score of 1.0
-        assert result.asset_scores["NQ=F"] == 1.0
-        assert result.asset_biases["NQ=F"] == "BULLISH"
+        assert result.asset_scores["EQQQ.MI"] == 1.0
+        assert result.asset_biases["EQQQ.MI"] == "BULLISH"
 
 
 class TestTemporalTagging:

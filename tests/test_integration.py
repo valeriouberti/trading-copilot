@@ -104,20 +104,19 @@ class TestFullPipelineSuccess:
         assert len(asset_analyses) == 1
         assert asset_analyses[0].error is None
 
-        # Step 3: Sentiment — mock at llm_call level (Groq/Ollama unified)
+        # Step 3: Sentiment — mock LLM at llm_client level
         call_count = 0
 
         def mock_llm_call(**kwargs):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
-                # Pass 1: reasoning
+            if call_count % 2 == 1:
                 return "Bullish outlook due to tech rally and low rates."
-            # Pass 2: JSON extraction
             return json.dumps(mock_llm_response)
 
-        with patch("modules.sentiment._llm_call", side_effect=mock_llm_call):
-            sentiment = analyze_sentiment(news, assets_config)
+        with patch("modules.llm_client.get_active_provider", return_value="groq"):
+            with patch("modules.llm_client.llm_call", side_effect=mock_llm_call):
+                sentiment = analyze_sentiment(news, assets_config)
 
         assert sentiment.source in ("groq", "groq-2pass")
 
