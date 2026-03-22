@@ -2,15 +2,15 @@
 
 Backtests the UCITS ETF swing trading strategy with:
 - LONG-only signals (BEARISH → no trade, not short)
-- Realistic Fineco costs (€2.95 commission per trade, no spread)
+- Multi-broker support: Revolut (€0, fractional shares) or Fineco (€2.95, whole)
 - Max 10-day hold period forced exit
-- Position sizing in EUR with shares calculation
+- Position sizing in EUR with shares calculation (fractional or whole)
 - Portfolio-level metrics (Sharpe, Sortino, Calmar, etc.)
 
 Usage::
 
-    python -m modules.vbt_backtester --symbols SWDA.MI CSSPX.MI EQQQ.MI
-    python -m modules.vbt_backtester --all --bars 500
+    python -m modules.vbt_backtester --all --bars 500                    # Revolut (default)
+    python -m modules.vbt_backtester --all --bars 500 --broker fineco    # Fineco
     python -m modules.vbt_backtester --symbols EQQQ.MI --bars 250
 """
 
@@ -26,7 +26,7 @@ import pandas as pd
 import pandas_ta as ta
 import vectorbt as vbt
 
-from modules.data import ASSET_UNIVERSE, AssetClass, AssetSpec
+from modules.data import ASSET_UNIVERSE, BROKER_PROFILES, AssetClass, AssetSpec, Broker, BrokerProfile
 from modules.data.registry import DataRegistry, create_default_registry
 from modules.strategy import (
     _CLASS_SL_TP as _STRATEGY_SL_TP,
@@ -176,19 +176,28 @@ class CostModel:
     """Realistic trading costs for ETF backtesting."""
 
     spread: float = 0.0            # ETFs have no spread (exchange-traded)
-    commission: float = 2.95       # Fineco per-trade commission in EUR
+    commission: float = 0.0        # Per-trade commission in EUR (broker-dependent)
     slippage_pct: float = 0.0005   # Slippage as fraction of price (5 bps for ETFs)
+    fractional_shares: bool = True  # Whether fractional shares are supported
+    min_fraction: float = 0.01     # Minimum share increment
 
 
 MAX_HOLD_BARS = 10  # Force exit after 10 bars (days)
 
+# Default broker
+_active_broker: Broker = Broker.REVOLUT
 
-def get_cost_model(spec: AssetSpec) -> CostModel:
-    """Build a cost model from ETF asset specification."""
+
+def get_cost_model(spec: AssetSpec, broker: Broker | None = None) -> CostModel:
+    """Build a cost model from ETF asset specification and broker profile."""
+    b = broker or _active_broker
+    profile = BROKER_PROFILES[b]
     return CostModel(
         spread=0.0,
-        commission=spec.commission_eur,
+        commission=profile.commission_eur,
         slippage_pct=0.0005,
+        fractional_shares=profile.fractional_shares,
+        min_fraction=profile.min_fraction,
     )
 
 
@@ -448,9 +457,13 @@ class VBTBacktester:
             sl = entry_price - sl_d
             tp = entry_price + tp_d
 
-            # Compute shares
-            shares = math.floor(position_size_eur / entry_price)
-            if shares < 1:
+            # Compute shares (fractional for Revolut, whole for Fineco)
+            if costs.fractional_shares:
+                factor = 1.0 / costs.min_fraction
+                shares = math.floor((position_size_eur / entry_price) * factor) / factor
+            else:
+                shares = float(math.floor(position_size_eur / entry_price))
+            if shares < costs.min_fraction:
                 continue
 
             # Walk forward to find exit
@@ -624,12 +637,20 @@ def print_results(results: list[VBTBacktestResult]) -> None:
         if not r.trades:
             continue
         print(f"\n  {r.symbol} (position size: EUR{r.position_size_eur:,.0f}):")
-        print(f"  {'#':>3}  {'Entry':>10} {'Exit':>10} {'Shares':>6} {'PnL EUR':>10} {'Status':<10} {'Days':>4} {'Date'}")
-        print(f"  {'---':>3}  {'--------':>10} {'--------':>10} {'------':>6} {'-------':>10} {'------':<10} {'----':>4} {'----------'}")
+        print(f"  {'#':>3}  {'Entry':>10} {'Exit':>10} {'Shares':>8} {'PnL EUR':>10} {'Status':<10} {'Days':>4} {'Date'}")
+        print(f"  {'---':>3}  {'--------':>10} {'--------':>10} {'--------':>8} {'-------':>10} {'------':<10} {'----':>4} {'----------'}")
         for i, t in enumerate(r.trades, 1):
+            shares_val = t.get('shares', '-')
+            # Format fractional shares with decimals, whole shares as int
+            if isinstance(shares_val, float) and shares_val == int(shares_val):
+                shares_str = f"{int(shares_val):>8}"
+            elif isinstance(shares_val, (int, float)):
+                shares_str = f"{shares_val:>8.2f}"
+            else:
+                shares_str = f"{shares_val:>8}"
             print(
                 f"  {i:>3}  {t['entry_price']:>10.2f} "
-                f"{t['exit_price']:>10.2f} {t.get('shares', '-'):>6} "
+                f"{t['exit_price']:>10.2f} {shares_str} "
                 f"{t['pnl_eur']:>+10.2f} "
                 f"{t['status']:<10} {t['bars_held']:>4} {t['entry_date'][:10]}"
             )
@@ -661,8 +682,9 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  python -m modules.vbt_backtester --all --bars 500                    # Revolut (default, €0 commission)
+  python -m modules.vbt_backtester --all --bars 500 --broker fineco    # Fineco (€2.95/trade)
   python -m modules.vbt_backtester --symbols SWDA.MI CSSPX.MI EQQQ.MI
-  python -m modules.vbt_backtester --all --bars 500
   python -m modules.vbt_backtester --symbols EQQQ.MI --bars 250
   python -m modules.vbt_backtester --all --equity 5000
         """,
@@ -670,6 +692,8 @@ Examples:
     parser.add_argument("--symbols", nargs="+", help="ETF symbols to backtest (e.g. SWDA.MI EQQQ.MI)")
     parser.add_argument("--all", action="store_true", help="Backtest all 8 UCITS ETFs")
     parser.add_argument("--bars", type=int, default=500, help="Number of daily bars (default: 500)")
+    parser.add_argument("--broker", choices=["revolut", "fineco"], default="revolut",
+                        help="Broker profile: revolut (€0, fractional) or fineco (€2.95, whole shares)")
     parser.add_argument("--sl-mult", type=float, default=None,
                         help="Override SL ATR multiplier (default: 1.5)")
     parser.add_argument("--tp-mult", type=float, default=None,
@@ -689,6 +713,13 @@ Examples:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
+
+    # Set active broker
+    global _active_broker
+    _active_broker = Broker(args.broker)
+    broker_profile = BROKER_PROFILES[_active_broker]
+    print(f"Broker: {broker_profile.name} (commission: €{broker_profile.commission_eur:.2f}/trade, "
+          f"fractional shares: {'yes' if broker_profile.fractional_shares else 'no'})\n")
 
     bt = VBTBacktester()
 

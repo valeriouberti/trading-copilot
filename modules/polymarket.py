@@ -64,21 +64,9 @@ _ASSET_TAG_SLUGS: list[tuple[str, list[str]]] = [
     ("MEUD.MI", ["fed", "inflation", "gdp", "economy", "tariffs",
                   "europe", "ecb", "eurozone", "germany",
                   "energy", "natural-gas"]),
-    # Emerging Markets — geopolitics + trade + China-specific
-    ("IEEM.MI", ["tariffs", "geopolitics", "economy", "china",
-                  "emerging-markets", "sanctions", "trade-war",
-                  "brics", "commodities"]),
     # Gold ETC — safe haven, geopolitics, inflation
     ("SGLD.MI", ["fed", "inflation", "geopolitics", "gold",
                   "war", "dollar", "central-banks", "safe-haven"]),
-    # Euro govt bonds — ECB, rates, fiscal policy
-    ("SEGA.MI", ["fed", "inflation", "economy", "ecb",
-                  "interest-rates", "bonds", "fiscal",
-                  "debt", "eurozone"]),
-    # Global aggregate bonds — global rates, credit, monetary policy
-    ("AGGH.MI", ["fed", "inflation", "economy", "ecb",
-                  "interest-rates", "bonds", "credit",
-                  "monetary-policy", "quantitative-tightening"]),
 ]
 
 _DEFAULT_TAG_SLUGS = ["fed", "inflation", "gdp", "economy", "geopolitics",
@@ -810,25 +798,10 @@ _ETF_MARKET_RELEVANCE: dict[str, dict[str, Any]] = {
         "keywords": ["europe", "european", "ecb", "eurozone", "eu ",
                       "german", "france", "energy", "gas", "tariff"],
     },
-    "IEEM.MI": {
-        "categories": {"GEOPOLITICAL", "MACRO", "EMERGING"},
-        "keywords": ["china", "india", "brazil", "emerging", "tariff",
-                      "sanctions", "trade war", "brics", "yuan"],
-    },
     "SGLD.MI": {
         "categories": {"FED", "GEOPOLITICAL", "COMMODITY"},
         "keywords": ["gold", "precious", "safe haven", "war", "conflict",
                       "iran", "russia", "inflation", "dollar", "central bank"],
-    },
-    "SEGA.MI": {
-        "categories": {"FED", "ECB", "BONDS"},
-        "keywords": ["bond", "yield", "treasury", "rate", "ecb", "bund",
-                      "inflation", "cpi", "monetary", "debt", "fiscal"],
-    },
-    "AGGH.MI": {
-        "categories": {"FED", "ECB", "BONDS"},
-        "keywords": ["bond", "yield", "treasury", "rate", "credit",
-                      "inflation", "cpi", "monetary", "fixed income"],
     },
 }
 

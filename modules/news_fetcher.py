@@ -135,21 +135,6 @@ _ETF_NEWS_CONFIG: dict[str, dict[str, Any]] = {
             "uk market", "brexit", "european stock",
         ],
     },
-    "IEEM.MI": {
-        "extra_feeds": [
-            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=EEM,VWO&region=US&lang=en-US",
-             "name": "Yahoo EM ETFs"},
-        ],
-        "yahoo_proxies": ["EEM", "VWO"],
-        "keywords": [
-            "emerging market", "em stock", "developing countr",
-            "china", "chinese", "india", "indian", "brazil",
-            "south korea", "taiwan", "indonesia", "mexico",
-            "brics", "hang seng", "shanghai",
-            "tariff", "trade war", "sanctions",
-            "commodity", "yuan", "rupee",
-        ],
-    },
     "SGLD.MI": {
         "extra_feeds": [
             {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=GLD,IAU,SGOL&region=US&lang=en-US",
@@ -163,36 +148,6 @@ _ETF_NEWS_CONFIG: dict[str, dict[str, Any]] = {
             "geopolit", "war", "conflict", "tension",
             "inflation hedge", "real rate", "dollar weak",
             "mining", "gold miner",
-        ],
-    },
-    "SEGA.MI": {
-        "extra_feeds": [
-            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AGG,TLT,BND&region=US&lang=en-US",
-             "name": "Yahoo Bond ETFs"},
-        ],
-        "yahoo_proxies": ["AGG", "TLT"],
-        "keywords": [
-            "bond", "treasury", "yield", "bund", "gilt",
-            "sovereign debt", "government bond", "govt bond",
-            "ecb rate", "interest rate", "rate cut", "rate hike",
-            "inflation", "cpi", "deflation",
-            "fixed income", "credit spread",
-            "btp", "oat", "euro bond",
-        ],
-    },
-    "AGGH.MI": {
-        "extra_feeds": [
-            {"url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AGG,BND,BNDX&region=US&lang=en-US",
-             "name": "Yahoo Global Bond ETFs"},
-        ],
-        "yahoo_proxies": ["AGG", "BND", "BNDX"],
-        "keywords": [
-            "bond", "treasury", "yield", "fixed income",
-            "global bond", "aggregate bond", "investment grade",
-            "credit", "spread", "corporate bond",
-            "fed rate", "ecb rate", "boj", "interest rate",
-            "inflation", "cpi", "monetary policy",
-            "quantitative tightening", "quantitative easing",
         ],
     },
 }

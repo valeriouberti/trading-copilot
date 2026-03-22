@@ -3,8 +3,9 @@
 Defines the trading universe of UCITS ETFs available on Borsa Italiana
 and XETRA, with per-asset metadata for backtesting and position sizing.
 
-Designed for a Fineco broker account with €2.95/trade commission for
-EU-listed ETFs.
+Supports multiple brokers:
+- Fineco: €2.95/trade, whole shares only
+- Revolut: €0/trade, fractional shares (0.01 precision)
 """
 
 from __future__ import annotations
@@ -27,6 +28,51 @@ class ETFCategory(str, Enum):
     BOND = "bond"
 
 
+class Broker(str, Enum):
+    """Supported brokers with different cost/feature profiles."""
+    FINECO = "fineco"
+    REVOLUT = "revolut"
+
+
+@dataclass(frozen=True)
+class BrokerProfile:
+    """Broker-specific trading parameters."""
+    name: str
+    commission_eur: float       # Per-trade commission in EUR
+    fractional_shares: bool     # Whether fractional shares are supported
+    min_fraction: float = 1.0   # Minimum share increment (1.0 = whole, 0.01 = fractional)
+
+    def compute_shares(self, position_size_eur: float, price: float) -> float:
+        """Compute number of shares for a given position size and price.
+
+        Returns fractional shares for Revolut, floor'd whole shares for Fineco.
+        """
+        import math
+        raw = position_size_eur / price
+        if self.fractional_shares:
+            # Round down to min_fraction precision
+            factor = 1.0 / self.min_fraction
+            return math.floor(raw * factor) / factor
+        return float(math.floor(raw))
+
+
+# Broker profiles
+BROKER_PROFILES: dict[Broker, BrokerProfile] = {
+    Broker.FINECO: BrokerProfile(
+        name="Fineco",
+        commission_eur=2.95,
+        fractional_shares=False,
+        min_fraction=1.0,
+    ),
+    Broker.REVOLUT: BrokerProfile(
+        name="Revolut",
+        commission_eur=0.0,
+        fractional_shares=True,
+        min_fraction=0.01,
+    ),
+}
+
+
 @dataclass(frozen=True)
 class AssetSpec:
     """Specification for a tradeable UCITS ETF."""
@@ -35,7 +81,7 @@ class AssetSpec:
     display_name: str        # Human-readable name
     asset_class: AssetClass  # Always ETF
     category: ETFCategory    # For grouping and rotation
-    commission_eur: float = 2.95   # Fineco flat fee per trade (EUR)
+    commission_eur: float = 2.95   # Default (Fineco); overridden by broker profile
     exchange: str = "MI"           # Exchange suffix (MI = Borsa Italiana, DE = XETRA)
     currency: str = "EUR"          # Trading currency
     min_bars_daily: int = 200      # Minimum daily bars for reliable backtest
@@ -65,25 +111,10 @@ _ETF_UNIVERSE = [
         "MEUD.MI", "Amundi STOXX Europe 600",
         AssetClass.ETF, ETFCategory.EQUITY_EU,
     ),
-    # Equity — Emerging Markets
-    AssetSpec(
-        "IEEM.MI", "iShares MSCI EM",
-        AssetClass.ETF, ETFCategory.EQUITY_EM,
-    ),
     # Commodity — Gold
     AssetSpec(
         "SGLD.MI", "Invesco Physical Gold",
         AssetClass.ETF, ETFCategory.COMMODITY,
-    ),
-    # Bonds — EUR Government
-    AssetSpec(
-        "SEGA.MI", "iShares Core EU Govt Bond",
-        AssetClass.ETF, ETFCategory.BOND,
-    ),
-    # Bonds — Global Aggregate
-    AssetSpec(
-        "AGGH.MI", "iShares Global Agg Bond",
-        AssetClass.ETF, ETFCategory.BOND,
     ),
 ]
 
@@ -102,7 +133,7 @@ def get_by_category(cat: ETFCategory) -> list[AssetSpec]:
 
 
 def get_defensive() -> list[AssetSpec]:
-    """Return defensive ETFs (bonds + gold) for risk-off rotation."""
+    """Return defensive ETFs (gold) for risk-off rotation."""
     return [
         a for a in ASSET_UNIVERSE.values()
         if a.category in (ETFCategory.BOND, ETFCategory.COMMODITY)

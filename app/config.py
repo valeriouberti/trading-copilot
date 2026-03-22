@@ -6,7 +6,8 @@ config.yaml is OPTIONAL. All settings have sensible defaults.
 Secrets come from env vars. Runtime data (assets, feeds, telegram)
 lives in the database.
 
-ETF Swing Trader — designed for UCITS ETFs on Borsa Italiana via Fineco.
+ETF Swing Trader — designed for UCITS ETFs on Borsa Italiana.
+Supports Revolut (€0 commission, fractional shares) and Fineco (€2.95/trade).
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
     timezone: str = Field(default="Europe/Rome", description="User timezone for scheduling")
     max_positions: int = Field(default=2, ge=1, le=5, description="Max simultaneous open positions")
     position_size_eur: float = Field(default=1500.0, gt=0, description="Default position size in EUR")
+    broker: str = Field(default="revolut", description="Broker: 'revolut' (zero commission, fractional) or 'fineco' (€2.95, whole shares)")
 
     # ── Seed data (from YAML, used only on first startup) ─────────────
     rss_feeds: list[dict[str, str]] = Field(default_factory=list)
